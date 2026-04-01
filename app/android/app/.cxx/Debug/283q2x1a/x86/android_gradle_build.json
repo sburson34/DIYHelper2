@@ -1,0 +1,98 @@
+{
+  "buildFiles": [
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\@react-native-async-storage\\async-storage\\android\\build\\generated\\source\\codegen\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native-gesture-handler\\android\\build\\generated\\source\\codegen\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native-image-picker\\android\\build\\generated\\source\\codegen\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native-reanimated\\android\\build\\generated\\source\\codegen\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native-safe-area-context\\android\\src\\main\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native-screens\\android\\src\\main\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native-worklets\\android\\build\\generated\\source\\codegen\\jni\\CMakeLists.txt",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\node_modules\\react-native\\ReactAndroid\\cmake-utils\\default-app-setup\\CMakeLists.txt"
+  ],
+  "cleanCommandsComponents": [
+    [
+      "C:\\Users\\sburs\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+      "-C",
+      "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\.cxx\\Debug\\283q2x1a\\x86",
+      "clean"
+    ]
+  ],
+  "buildTargetsCommandComponents": [
+    "C:\\Users\\sburs\\AppData\\Local\\Android\\Sdk\\cmake\\3.22.1\\bin\\ninja.exe",
+    "-C",
+    "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\.cxx\\Debug\\283q2x1a\\x86",
+    "{LIST_OF_TARGETS_TO_BUILD}"
+  ],
+  "libraries": {
+    "appmodules::@6890427a1f51a3e7e1df": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "appmodules",
+      "output": "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\build\\intermediates\\cxx\\Debug\\283q2x1a\\obj\\x86\\libappmodules.so",
+      "runtimeFiles": [
+        "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\build\\intermediates\\cxx\\Debug\\283q2x1a\\obj\\x86\\libreact_codegen_safeareacontext.so",
+        "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\build\\intermediates\\cxx\\Debug\\283q2x1a\\obj\\x86\\libreact_codegen_rnscreens.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\c41959517449ccc03fcd83d84f892578\\transformed\\jetified-fbjni-0.7.0\\prefab\\modules\\fbjni\\libs\\android.x86\\libfbjni.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\0286ff91c43ed9a18a990b905af3815e\\transformed\\jetified-react-android-0.83.0-debug\\prefab\\modules\\jsi\\libs\\android.x86\\libjsi.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\0286ff91c43ed9a18a990b905af3815e\\transformed\\jetified-react-android-0.83.0-debug\\prefab\\modules\\reactnative\\libs\\android.x86\\libreactnative.so"
+      ]
+    },
+    "react_codegen_RNImagePickerSpec::@f66ee9a2efecfb28bee4": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_RNImagePickerSpec"
+    },
+    "react_codegen_rnasyncstorage::@1596841e19ec5b9eeffe": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_rnasyncstorage"
+    },
+    "react_codegen_rngesturehandler_codegen::@39f233abcd2c728bc6ec": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_rngesturehandler_codegen"
+    },
+    "react_codegen_rnreanimated::@8afabad14bfffa3f8b9a": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_rnreanimated"
+    },
+    "react_codegen_rnscreens::@25bcbd507e98d3a854ad": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_rnscreens",
+      "output": "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\build\\intermediates\\cxx\\Debug\\283q2x1a\\obj\\x86\\libreact_codegen_rnscreens.so",
+      "runtimeFiles": [
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\0286ff91c43ed9a18a990b905af3815e\\transformed\\jetified-react-android-0.83.0-debug\\prefab\\modules\\reactnative\\libs\\android.x86\\libreactnative.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\0286ff91c43ed9a18a990b905af3815e\\transformed\\jetified-react-android-0.83.0-debug\\prefab\\modules\\jsi\\libs\\android.x86\\libjsi.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\c41959517449ccc03fcd83d84f892578\\transformed\\jetified-fbjni-0.7.0\\prefab\\modules\\fbjni\\libs\\android.x86\\libfbjni.so"
+      ]
+    },
+    "react_codegen_rnworklets::@68f58d84d4754f193387": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_rnworklets"
+    },
+    "react_codegen_safeareacontext::@7984cd80db47aa7b952a": {
+      "toolchain": "toolchain",
+      "abi": "x86",
+      "artifactName": "react_codegen_safeareacontext",
+      "output": "C:\\Users\\sburs\\WebstormProjects\\DIYHelper2\\app\\android\\app\\build\\intermediates\\cxx\\Debug\\283q2x1a\\obj\\x86\\libreact_codegen_safeareacontext.so",
+      "runtimeFiles": [
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\c41959517449ccc03fcd83d84f892578\\transformed\\jetified-fbjni-0.7.0\\prefab\\modules\\fbjni\\libs\\android.x86\\libfbjni.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\0286ff91c43ed9a18a990b905af3815e\\transformed\\jetified-react-android-0.83.0-debug\\prefab\\modules\\jsi\\libs\\android.x86\\libjsi.so",
+        "C:\\Users\\sburs\\.gradle\\caches\\8.13\\transforms\\0286ff91c43ed9a18a990b905af3815e\\transformed\\jetified-react-android-0.83.0-debug\\prefab\\modules\\reactnative\\libs\\android.x86\\libreactnative.so"
+      ]
+    }
+  },
+  "toolchains": {
+    "toolchain": {
+      "cCompilerExecutable": "C:\\Users\\sburs\\AppData\\Local\\Android\\Sdk\\ndk\\27.1.12297006\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\clang.exe",
+      "cppCompilerExecutable": "C:\\Users\\sburs\\AppData\\Local\\Android\\Sdk\\ndk\\27.1.12297006\\toolchains\\llvm\\prebuilt\\windows-x86_64\\bin\\clang++.exe"
+    }
+  },
+  "cFileExtensions": [],
+  "cppFileExtensions": [
+    "cpp"
+  ]
+}

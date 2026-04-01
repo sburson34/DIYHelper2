@@ -1,0 +1,6 @@
+@DIYHelper2.Api_HostAddress = http://localhost:5037
+
+GET {{DIYHelper2.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
