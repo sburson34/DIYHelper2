@@ -1,0 +1,86 @@
+buildscript {
+    ext {
+        buildToolsVersion = "36.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 36
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.1.20"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle:8.2.1")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.1.20")
+        classpath("com.facebook.react:react-native-gradle-plugin:0.83.0")
+    }
+}
+subprojects {
+    project.configurations.all {
+        resolutionStrategy {
+            // Let dependencies resolve naturally based on libs.versions.toml or default versions
+        }
+    }
+    // Handle old 'compile' method in legacy modules
+    project.dependencies.ext.compile = { dependency ->
+        project.dependencies.add('implementation', dependency)
+    }
+    afterEvaluate { project ->
+        if (project.hasProperty('android')) {
+            project.android {
+                // Add shim for std::format
+                if (project.hasProperty('externalNativeBuild')) {
+                    defaultConfig {
+                        externalNativeBuild {
+                            cmake {
+                                cppFlags "-include ${rootProject.projectDir}/std_format_shim.h"
+                            }
+                        }
+                    }
+                }
+                if (project.name == 'react-native-reanimated') {
+                    defaultConfig {
+                        externalNativeBuild {
+                            cmake {
+                                arguments "-DCMAKE_RELATIVE_PATHS=ON"
+                            }
+                        }
+                    }
+                    if (it.hasProperty('externalNativeBuild')) {
+                        externalNativeBuild {
+                            cmake {
+                                buildStagingDirectory = "C:/B/${rootProject.name}/reanimated-native"
+                            }
+                        }
+                    }
+                }
+                if (it.hasProperty('compileSdkVersion')) {
+                    compileSdkVersion 36
+                }
+                if (it.hasProperty('buildToolsVersion')) {
+                    buildToolsVersion "36.0.0"
+                }
+                if (it.hasProperty('defaultConfig')) {
+                    defaultConfig {
+                        if (it.hasProperty('minSdkVersion')) {
+                            minSdkVersion 24
+                        }
+                        if (it.hasProperty('targetSdkVersion')) {
+                            targetSdkVersion 36
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+apply plugin: "com.facebook.react.rootproject"
+apply plugin: "expo-root-project"
