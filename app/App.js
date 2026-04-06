@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { NavigationContainer, DefaultTheme, DrawerActions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { Ionicons as Icon } from '@expo/vector-icons';
@@ -11,6 +12,7 @@ import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
 import HoneyDo from './src/screens/HoneyDo';
 import Contractors from './src/screens/Contractors';
+import Settings from './src/screens/Settings';
 import theme from './src/theme';
 
 const LogoHeader = ({ onPress, title = "DIY Helper", subtitle = "AI Home Repair Assistant" }) => (
@@ -88,13 +90,13 @@ function CaptureStack() {
           headerTitle: () => <LogoHeader onPress={() => {}} />,
           headerTitleAlign: 'left',
           headerRight: () => (
-            <Icon
-              name="menu"
-              size={30}
-              color="#FFFFFF"
-              style={{ marginRight: 15 }}
-              onPress={() => navigation.openDrawer()}
-            />
+            <TouchableOpacity
+              onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
+              hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+              style={{ marginRight: 15, padding: 10 }}
+            >
+              <Icon name="menu" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
           ),
           headerLeft: () => null,
         })}
@@ -125,6 +127,7 @@ function CaptureStack() {
 
 export default function App() {
   return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <NavigationContainer theme={MyTheme}>
       <Drawer.Navigator
         initialRouteName="NewProject"
@@ -179,13 +182,9 @@ export default function App() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <Icon
-                name="menu"
-                size={30}
-                color="#FFFFFF"
-                style={{ marginRight: 15 }}
-                onPress={() => navigation.openDrawer()}
-              />
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
             ),
             headerLeft: () => null,
             drawerIcon: ({ color, size }) => (
@@ -208,13 +207,9 @@ export default function App() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <Icon
-                name="menu"
-                size={30}
-                color="#FFFFFF"
-                style={{ marginRight: 15 }}
-                onPress={() => navigation.openDrawer()}
-              />
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
             ),
             headerLeft: () => null,
             drawerIcon: ({ color, size }) => (
@@ -222,7 +217,33 @@ export default function App() {
             ),
           })}
         />
+        <Drawer.Screen
+          name="Settings"
+          component={Settings}
+          options={({ navigation }) => ({
+            title: 'Settings',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader
+                onPress={() => navigation.navigate('NewProject')}
+                title="Settings"
+                subtitle="DIY Helper"
+              />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => (
+              <Icon name="settings-outline" size={size} color={color} />
+            ),
+          })}
+        />
       </Drawer.Navigator>
     </NavigationContainer>
+    </GestureHandlerRootView>
   );
 }

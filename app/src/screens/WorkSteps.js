@@ -15,6 +15,8 @@ import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-spe
 import theme from '../theme';
 import { askHelper } from '../api/backendClient';
 
+const getStepText = (step) => typeof step === 'string' ? step : step.text;
+
 export default function WorkSteps({ navigation, route }) {
   const { project } = route.params;
   const [checkedSteps, setCheckedSteps] = useState(new Array(project.steps.length).fill(false));
@@ -55,7 +57,7 @@ export default function WorkSteps({ navigation, route }) {
 
   const readCurrentStep = () => {
     if (currentStepIndex < project.steps.length) {
-      const stepText = `Step ${currentStepIndex + 1}: ${project.steps[currentStepIndex]}`;
+      const stepText = `Step ${currentStepIndex + 1}: ${getStepText(project.steps[currentStepIndex])}`;
       Tts.stop();
       Tts.speak(stepText);
     } else {
@@ -231,7 +233,7 @@ export default function WorkSteps({ navigation, route }) {
                 styles.stepText,
                 checkedSteps[index] && styles.stepTextChecked
               ]}>
-                {step}
+                {getStepText(step)}
               </Text>
               <View style={[
                 styles.checkbox,

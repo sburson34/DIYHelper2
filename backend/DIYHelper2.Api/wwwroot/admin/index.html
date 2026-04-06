@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DIY Helper - Admin Dashboard</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header>
+    <h1>DIY Helper Admin</h1>
+    <p class="subtitle">Professional Help Requests</p>
+  </header>
+
+  <main>
+    <div class="filters">
+      <button class="filter-btn active" data-status="">All</button>
+      <button class="filter-btn" data-status="new">New</button>
+      <button class="filter-btn" data-status="in_progress">In Progress</button>
+      <button class="filter-btn" data-status="completed">Completed</button>
+      <button class="filter-btn" data-status="cancelled">Cancelled</button>
+    </div>
+
+    <div id="request-list" class="request-list"></div>
+
+    <!-- Detail Panel (hidden by default) -->
+    <div id="detail-panel" class="detail-panel hidden">
+      <div class="detail-header">
+        <button id="back-btn" class="back-btn">&larr; Back to List</button>
+        <button id="delete-btn" class="delete-btn">Delete</button>
+      </div>
+      <div id="detail-content"></div>
+    </div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

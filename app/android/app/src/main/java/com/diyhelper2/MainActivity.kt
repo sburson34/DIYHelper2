@@ -1,6 +1,7 @@
 package com.diyhelper2
 import expo.modules.ReactActivityDelegateWrapper
 
+import android.os.Bundle
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.fabricEnabled
@@ -13,6 +14,13 @@ class MainActivity : ReactActivity() {
    * rendering of the component.
    */
   override fun getMainComponentName(): String = "DIYHelper2"
+
+  // Pass null to prevent react-native-screens fragment restoration crash.
+  // expo-image-picker uses onActivityResult (not savedInstanceState) to
+  // deliver camera results, so this is safe.
+  override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(null)
+  }
 
   /**
    * Returns the instance of the [ReactActivityDelegate]. We use [DefaultReactActivityDelegate]

@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, ActivityIndicator, Alert, RefreshControl, KeyboardAvoidingView, Platform } from 'react-native';
-import { launchCamera, launchImageLibrary } from 'react-native-image-picker';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, ActivityIndicator, Alert, RefreshControl, KeyboardAvoidingView, Platform, Modal } from 'react-native';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { analyzeProject } from '../api/backendClient';
@@ -12,6 +12,11 @@ export default function CaptureScreen({ navigation, route }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [transcript, setTranscript] = useState('');
+  const [showCamera, setShowCamera] = useState(false);
+  const [cameraMode, setCameraMode] = useState('photo');
+  const [isRecordingVideo, setIsRecordingVideo] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const cameraRef = useRef(null);
 
   useSpeechRecognitionEvent('result', (event) => {
     // Safely check for results. transcript is usually results[0].transcript
@@ -38,29 +43,67 @@ export default function CaptureScreen({ navigation, route }) {
     }
   }, [route.params?.existingProject]);
 
-  const takePhoto = () => {
-    launchCamera({ mediaType: 'photo', quality: 0.5, maxWidth: 1024, maxHeight: 1024, includeBase64: true }, (response) => {
-      if (response.assets) {
-        setMedia([...media, ...response.assets.map(a => ({
-          uri: a.uri,
-          type: 'photo',
-          base64: a.base64,
-          mimeType: a.type
-        }))]);
+  const takePhoto = async () => {
+    if (!cameraPermission?.granted) {
+      const { granted } = await requestCameraPermission();
+      if (!granted) {
+        Alert.alert('Permission Denied', 'Camera permission is required to take photos.');
+        return;
       }
-    });
+    }
+    setShowCamera(true);
   };
 
-  const recordVideo = () => {
-    launchCamera({ mediaType: 'video', videoQuality: 'low' }, (response) => {
-      if (response.assets) {
-        setMedia([...media, ...response.assets.map(a => ({
-          uri: a.uri,
-          type: 'video',
-          mimeType: a.type
-        }))]);
+  const capturePhoto = async () => {
+    if (!cameraRef.current) return;
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.5, base64: true });
+      setMedia((prev) => [...prev, {
+        uri: photo.uri,
+        type: 'photo',
+        base64: photo.base64,
+        mimeType: 'image/jpeg',
+      }]);
+      setShowCamera(false);
+    } catch (err) {
+      Alert.alert('Camera Error', err.message);
+    }
+  };
+
+  const recordVideo = async () => {
+    if (!cameraPermission?.granted) {
+      const { granted } = await requestCameraPermission();
+      if (!granted) {
+        Alert.alert('Permission Denied', 'Camera permission is required to record video.');
+        return;
       }
-    });
+    }
+    setCameraMode('video');
+    setShowCamera(true);
+  };
+
+  const toggleVideoRecording = async () => {
+    if (!cameraRef.current) return;
+    if (isRecordingVideo) {
+      cameraRef.current.stopRecording();
+      setIsRecordingVideo(false);
+    } else {
+      setIsRecordingVideo(true);
+      try {
+        const video = await cameraRef.current.recordAsync({ maxDuration: 30 });
+        setMedia((prev) => [...prev, {
+          uri: video.uri,
+          type: 'video',
+          mimeType: 'video/mp4',
+        }]);
+        setShowCamera(false);
+        setCameraMode('photo');
+      } catch (err) {
+        Alert.alert('Video Error', err.message);
+      } finally {
+        setIsRecordingVideo(false);
+      }
+    }
   };
 
   const startRecording = async () => {
@@ -269,6 +312,34 @@ export default function CaptureScreen({ navigation, route }) {
         <Text style={styles.footerText}>AI Home Repair Assistant</Text>
       </View>
       </ScrollView>
+
+      <Modal visible={showCamera} animationType="slide">
+        <View style={styles.cameraContainer}>
+          <CameraView ref={cameraRef} style={styles.camera} facing="back">
+            <View style={styles.cameraControls}>
+              <TouchableOpacity style={styles.cameraCancelButton} onPress={() => {
+                if (isRecordingVideo) cameraRef.current?.stopRecording();
+                setShowCamera(false);
+                setCameraMode('photo');
+                setIsRecordingVideo(false);
+              }}>
+                <Icon name="close" size={28} color="#fff" />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.cameraShutterButton, cameraMode === 'video' && styles.videoShutterButton]}
+                onPress={cameraMode === 'photo' ? capturePhoto : toggleVideoRecording}
+              >
+                {cameraMode === 'video' && isRecordingVideo ? (
+                  <View style={styles.videoStopInner} />
+                ) : (
+                  <View style={[styles.cameraShutterInner, cameraMode === 'video' && styles.videoShutterInner]} />
+                )}
+              </TouchableOpacity>
+              <View style={{ width: 50 }} />
+            </View>
+          </CameraView>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -468,5 +539,55 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#94A3B8',
     fontWeight: '500',
+  },
+  cameraContainer: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  camera: {
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  cameraControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 30,
+    paddingBottom: 40,
+  },
+  cameraCancelButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraShutterButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    borderWidth: 4,
+    borderColor: '#fff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  cameraShutterInner: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    backgroundColor: '#fff',
+  },
+  videoShutterButton: {
+    borderColor: '#FF3B30',
+  },
+  videoShutterInner: {
+    backgroundColor: '#FF3B30',
+  },
+  videoStopInner: {
+    width: 28,
+    height: 28,
+    borderRadius: 4,
+    backgroundColor: '#FF3B30',
   },
 });

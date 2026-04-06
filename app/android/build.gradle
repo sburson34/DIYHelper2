@@ -29,6 +29,11 @@ subprojects {
     }
     afterEvaluate { project ->
         if (project.hasProperty('android')) {
+            if (project.name == 'expo') {
+                project.plugins.withId("expo-autolinking") {
+                    project.extensions.findByName("expoAutolinking")?.generatePackageList = false
+                }
+            }
             project.android {
                 // Add shim for std::format
                 if (project.hasProperty('externalNativeBuild')) {
@@ -36,6 +41,7 @@ subprojects {
                         externalNativeBuild {
                             cmake {
                                 cppFlags "-include ${rootProject.projectDir}/std_format_shim.h"
+                                arguments "-DCMAKE_RC_COMPILER=OFF"
                             }
                         }
                     }

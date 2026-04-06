@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const HONEY_DO_KEY = '@honey_do_list';
 const CONTRACTOR_KEY = '@contractor_list';
+const USER_PROFILE_KEY = '@user_profile';
 
 const generateId = () => Date.now().toString();
 
@@ -98,5 +99,25 @@ export const removeFromContractorList = async (id) => {
   } catch (e) {
     console.error('Failed to remove from contractor list', e);
     return false;
+  }
+};
+
+export const saveUserProfile = async (profile) => {
+  try {
+    await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
+    return true;
+  } catch (e) {
+    console.error('Failed to save user profile', e);
+    return false;
+  }
+};
+
+export const getUserProfile = async () => {
+  try {
+    const value = await AsyncStorage.getItem(USER_PROFILE_KEY);
+    return value != null ? JSON.parse(value) : null;
+  } catch (e) {
+    console.error('Failed to fetch user profile', e);
+    return null;
   }
 };

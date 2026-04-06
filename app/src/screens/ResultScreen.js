@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Linking, TouchableOpacity, Modal, Alert, Animated } from 'react-native';
-import * as MailComposer from 'expo-mail-composer';
+import { View, Text, StyleSheet, ScrollView, SafeAreaView, Linking, TouchableOpacity, Modal, Alert, Animated, Image } from 'react-native';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { saveToHoneyDoList, saveToContractorList } from '../utils/storage';
+import { saveToHoneyDoList, saveToContractorList, getUserProfile } from '../utils/storage';
+import { API_BASE_URL } from '../config/api';
 import theme from '../theme';
 
 const TABS = [
@@ -45,15 +45,39 @@ export default function ResultScreen({ navigation, route }) {
   };
 
   const contactProfessional = async () => {
-    const body = `DIY Project Support Request: ${project.title}\n\nUser Description: ${originalRequest?.description || 'N/A'}\n\nAI Analysis:\n${JSON.stringify(project, null, 2)}`;
+    const profile = await getUserProfile();
+    if (!profile) {
+      Alert.alert(
+        'Contact Info Needed',
+        'Please set up your contact info in Settings so a professional can reach you.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Go to Settings', onPress: () => navigation.navigate('Settings') },
+        ]
+      );
+      return;
+    }
     try {
-      await MailComposer.composeAsync({
-        recipients: ['stephe1101@yahoo.com'],
-        subject: `DIY Project Support: ${project.title}`,
-        body: body,
+      const response = await fetch(`${API_BASE_URL}/api/help-requests`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerName: profile.name,
+          customerEmail: profile.email,
+          customerPhone: profile.phone,
+          projectTitle: project.title || 'Untitled Project',
+          userDescription: originalRequest?.description || '',
+          projectData: JSON.stringify(project),
+          imageBase64: originalRequest?.mediaItems?.[0]?.base64 || null,
+        }),
       });
+      if (response.ok) {
+        Alert.alert('Request Submitted', 'Your request has been submitted! A professional will review it shortly.');
+      } else {
+        Alert.alert('Error', 'Failed to submit request. Please try again.');
+      }
     } catch (e) {
-      Alert.alert("Email Error", "Could not open email client.");
+      Alert.alert('Connection Error', 'Could not reach the server. Please check your connection and try again.');
     }
   };
 
@@ -108,32 +132,95 @@ export default function ResultScreen({ navigation, route }) {
     </View>
   );
 
+  const mediaUrls = originalRequest?.mediaUrls || [];
+
+  const getStepText = (step) => typeof step === 'string' ? step : step.text;
+  const getStepAnnotations = (step) => typeof step === 'string' ? [] : (step.image_annotations || []);
+  const getStepRefSearch = (step) => typeof step === 'string' ? null : step.reference_image_search;
+
   const renderStepsTab = () => (
     <View style={styles.card}>
-      <Text style={styles.sectionTitle}>Project Blueprint 📋</Text>
-      {project.steps?.map((step, index) => (
-        <TouchableOpacity 
-          key={index} 
-          style={styles.stepContainer} 
-          onPress={() => toggleStep(index)}
-          activeOpacity={0.7}
-        >
-          <View style={[
-            styles.stepBadge, 
-            checkedSteps[index] && { backgroundColor: theme.colors.success }
-          ]}>
-            {checkedSteps[index] ? (
-              <Icon name="checkmark" size={18} color="#fff" />
-            ) : (
-              <Text style={styles.stepNumber}>{index + 1}</Text>
+      <Text style={styles.sectionTitle}>Project Blueprint</Text>
+
+      {/* Photo overview annotations */}
+      {project.image_annotations?.length > 0 && mediaUrls.length > 0 && (
+        <View style={styles.photoOverviewSection}>
+          <Text style={styles.photoOverviewTitle}>Photo Analysis</Text>
+          {project.image_annotations.map((ann, i) => {
+            const photoUri = mediaUrls[(ann.photo_number || 1) - 1];
+            if (!photoUri) return null;
+            return (
+              <View key={i} style={styles.photoAnnotationCard}>
+                <Image source={{ uri: photoUri }} style={styles.annotatedPhoto} />
+                <Text style={styles.annotationText}>{ann.overview}</Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
+      {project.steps?.map((step, index) => {
+        const stepText = getStepText(step);
+        const annotations = getStepAnnotations(step);
+        const refSearch = getStepRefSearch(step);
+
+        return (
+          <View key={index}>
+            <TouchableOpacity
+              style={styles.stepContainer}
+              onPress={() => toggleStep(index)}
+              activeOpacity={0.7}
+            >
+              <View style={[
+                styles.stepBadge,
+                checkedSteps[index] && { backgroundColor: theme.colors.success }
+              ]}>
+                {checkedSteps[index] ? (
+                  <Icon name="checkmark" size={18} color="#fff" />
+                ) : (
+                  <Text style={styles.stepNumber}>{index + 1}</Text>
+                )}
+              </View>
+              <Text style={[
+                styles.stepText,
+                checkedSteps[index] && styles.stepTextCompleted
+              ]}>{stepText}</Text>
+            </TouchableOpacity>
+
+            {/* User photo annotations for this step */}
+            {annotations.length > 0 && (
+              <View style={styles.stepImagesSection}>
+                {annotations.map((ann, i) => {
+                  const photoUri = mediaUrls[(ann.photo_number || 1) - 1];
+                  if (!photoUri) return null;
+                  return (
+                    <View key={i} style={styles.stepImageCard}>
+                      <Image source={{ uri: photoUri }} style={styles.stepPhoto} />
+                      <View style={styles.stepImageOverlay}>
+                        <Icon name="camera" size={14} color={theme.colors.primary} />
+                        <Text style={styles.stepImageLabel}>Photo {ann.photo_number}</Text>
+                      </View>
+                      <Text style={styles.stepImageCaption}>{ann.description}</Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+
+            {/* Reference image search link */}
+            {refSearch && (
+              <TouchableOpacity
+                style={styles.refImageLink}
+                onPress={() => openLink(`https://www.google.com/search?tbm=isch&q=${encodeURIComponent(refSearch)}`)}
+              >
+                <Icon name="image-outline" size={16} color={theme.colors.primary} />
+                <Text style={styles.refImageText}>View reference images</Text>
+                <Icon name="open-outline" size={14} color={theme.colors.primary} />
+              </TouchableOpacity>
             )}
           </View>
-          <Text style={[
-            styles.stepText,
-            checkedSteps[index] && styles.stepTextCompleted
-          ]}>{step}</Text>
-        </TouchableOpacity>
-      ))}
+        );
+      })}
     </View>
   );
 
@@ -475,6 +562,84 @@ const styles = StyleSheet.create({
   stepTextCompleted: {
     textDecorationLine: 'line-through',
     color: theme.colors.textSecondary,
+  },
+  photoOverviewSection: {
+    marginBottom: 16,
+  },
+  photoOverviewTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: theme.colors.text,
+    marginBottom: 10,
+  },
+  photoAnnotationCard: {
+    backgroundColor: theme.colors.background,
+    borderRadius: theme.roundness.medium,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  annotatedPhoto: {
+    width: '100%',
+    height: 200,
+    resizeMode: 'cover',
+  },
+  annotationText: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+    padding: 10,
+    lineHeight: 18,
+  },
+  stepImagesSection: {
+    marginLeft: 40,
+    marginBottom: 12,
+  },
+  stepImageCard: {
+    backgroundColor: theme.colors.background,
+    borderRadius: theme.roundness.medium,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  stepPhoto: {
+    width: '100%',
+    height: 160,
+    resizeMode: 'cover',
+  },
+  stepImageOverlay: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingTop: 8,
+  },
+  stepImageLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: theme.colors.primary,
+  },
+  stepImageCaption: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+    paddingTop: 4,
+    lineHeight: 18,
+  },
+  refImageLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginLeft: 40,
+    marginBottom: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: theme.colors.primary + '10',
+    borderRadius: theme.roundness.medium,
+    alignSelf: 'flex-start',
+  },
+  refImageText: {
+    fontSize: 13,
+    color: theme.colors.primary,
+    fontWeight: '600',
   },
   emptyText: {
     textAlign: 'center',

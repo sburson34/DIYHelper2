@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using OpenAI.Chat;
 using OpenAI;
 using System.Text.Json;
@@ -6,6 +7,10 @@ using System.Text.Json.Serialization;
 using System.Linq;
 using System.ClientModel;
 using System.ClientModel.Primitives;
+using Amazon.SecretsManager;
+using Amazon.SecretsManager.Model;
+using DIYHelper2.Api.Data;
+using DIYHelper2.Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -26,6 +31,10 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(optio
     options.MultipartBodyLengthLimit = 50 * 1024 * 1024;
 });
 
+// Add SQLite database
+builder.Services.AddDbContext<AppDbContext>(options =>
+    options.UseSqlite("Data Source=helpRequests.db"));
+
 // Add CORS
 builder.Services.AddCors(options =>
 {
@@ -40,29 +49,69 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
+// Fetch OpenAI API key from AWS Secrets Manager (or fall back to env var for local dev)
+string? openAiKey = null;
+{
+    var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    string? secretArn = Environment.GetEnvironmentVariable("SECRET_ARN");
+    if (!string.IsNullOrEmpty(secretArn))
+    {
+        try
+        {
+            using var smClient = new AmazonSecretsManagerClient(Amazon.RegionEndpoint.USEast1);
+            var response = await smClient.GetSecretValueAsync(new GetSecretValueRequest { SecretId = secretArn });
+            var secretString = response.SecretString;
+            // Handle JSON-wrapped secret: {"OPENAI_API_KEY":"sk-..."}
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<JsonElement>(secretString);
+                if (parsed.TryGetProperty("OPENAI_API_KEY", out var keyProp))
+                    openAiKey = keyProp.GetString();
+            }
+            catch (JsonException) { }
+            openAiKey ??= secretString;
+            startupLogger.LogInformation("OpenAI API key loaded from Secrets Manager.");
+        }
+        catch (Exception ex)
+        {
+            startupLogger.LogError(ex, "Failed to fetch secret from Secrets Manager (ARN: {Arn}).", secretArn);
+        }
+    }
+    openAiKey ??= Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+    if (string.IsNullOrEmpty(openAiKey))
+        startupLogger.LogWarning("OPENAI_API_KEY is not configured. Set SECRET_ARN or OPENAI_API_KEY env var.");
+    else
+        startupLogger.LogInformation("Backend starting up. Listening for requests...");
+}
+
+// Ensure SQLite database is created
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    db.Database.EnsureCreated();
+}
+
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
 }
 
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseCors("MobilePolicy");
 
 app.MapControllers();
 
-var logger = app.Services.GetRequiredService<ILogger<Program>>();
-logger.LogInformation("Backend starting up. Listening for requests...");
-
 app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
 
-app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, IConfiguration config, ILogger<Program> logger) =>
+app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, ILogger<Program> logger) =>
 {
     try
     {
         string requestSizeStr = request.Media != null ? $"{request.Media.Length} media items, total base64 chars: {request.Media.Sum(m => (long)(m.Base64?.Length ?? 0))}" : "no media";
         logger.LogInformation("Analysis request received. Description: {DescLength} chars, {RequestSize}", request.Description?.Length ?? 0, requestSizeStr);
-
-        string? openAiKey = config["OPENAI_API_KEY"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
 
         if (string.IsNullOrEmpty(openAiKey))
         {
@@ -85,11 +134,66 @@ app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, ICo
         // but we can try to set it via OpenAIClient if we used that,
         // however ChatClient is what we have here.
 
-        string textContent = $"I want to do a DIY project. {(string.IsNullOrEmpty(request.Description) ? "Please analyze the media." : $"Description: \"{request.Description}\"")}\n\nReturn a JSON object with exactly these fields:\n{{\n  \"title\": \"Project Title\",\n  \"steps\": [\"Step 1\", \"Step 2\"],\n  \"tools_and_materials\": [\"item 1\", \"item 2\"],\n  \"difficulty\": \"easy/medium/hard\",\n  \"estimated_time\": \"e.g. 2 hours\",\n  \"estimated_cost\": \"e.g. $50-$100\",\n  \"youtube_links\": [\"https://youtube.com/watch?v=...\", \"https://youtube.com/watch?v=...\"],\n  \"shopping_links\": [\n    {{ \"item\": \"item name\", \"url\": \"https://...\" }},\n    {{ \"item\": \"item name\", \"url\": \"https://...\" }}\n  ],\n  \"safety_tips\": [\"Tip 1\", \"Tip 2\"],\n  \"when_to_call_pro\": [\"Warning 1\", \"Warning 2\"]\n}}";
+        // Count images so GPT-4o can reference them by number
+        int imageCount = 0;
+        if (request.Media != null)
+        {
+            foreach (var m in request.Media)
+            {
+                if (m.Type != "video" && (!string.IsNullOrEmpty(m.Base64) || !string.IsNullOrEmpty(m.Url)))
+                    imageCount++;
+            }
+        }
+
+        string imageRef = imageCount > 0
+            ? $"I have attached {imageCount} photo(s) numbered 1 through {imageCount}. Reference them by number in your annotations."
+            : "No photos were provided.";
+
+        string textContent = $@"I want to do a DIY project. {(string.IsNullOrEmpty(request.Description) ? "Please analyze the media." : $"Description: \"{request.Description}\"")}
+
+{imageRef}
+
+Return a JSON object with exactly these fields:
+{{
+  ""title"": ""Project Title"",
+  ""steps"": [
+    {{
+      ""text"": ""Step description"",
+      ""image_annotations"": [
+        {{
+          ""photo_number"": 1,
+          ""description"": ""Describe what to look at or mark up in this user photo for this step""
+        }}
+      ],
+      ""reference_image_search"": ""A Google Images search query for a helpful reference image for this step, or null if not needed""
+    }}
+  ],
+  ""image_annotations"": [
+    {{
+      ""photo_number"": 1,
+      ""overview"": ""Overall description of what this photo shows and key areas of concern""
+    }}
+  ],
+  ""tools_and_materials"": [""item 1"", ""item 2""],
+  ""difficulty"": ""easy/medium/hard"",
+  ""estimated_time"": ""e.g. 2 hours"",
+  ""estimated_cost"": ""e.g. $50-$100"",
+  ""youtube_links"": [""https://youtube.com/watch?v=...""],
+  ""shopping_links"": [
+    {{ ""item"": ""item name"", ""url"": ""https://..."" }}
+  ],
+  ""safety_tips"": [""Tip 1"", ""Tip 2""],
+  ""when_to_call_pro"": [""Warning 1"", ""Warning 2""]
+}}
+
+IMPORTANT for steps:
+- Each step's image_annotations should reference user photos by photo_number (1-indexed) when the photo is relevant to that step. Include a description of what to look at in the photo.
+- reference_image_search should be a useful Google Images search query that would find a helpful diagram or reference photo for that step. Set to null if the user's photos are sufficient.
+- The top-level image_annotations should provide an overview analysis of each user photo.";
 
         var messages = new List<ChatMessage>
         {
-            new SystemChatMessage("You are a helpful DIY project assistant. Provide a detailed step-by-step guide with relevant links in valid JSON format.")
+            new SystemChatMessage("You are a helpful DIY project assistant. Analyze any provided photos carefully. Provide a detailed step-by-step guide with image annotations referencing the user's photos and suggest reference image searches. Return valid JSON only.")
         };
 
         var userMessageParts = new List<ChatMessageContentPart>
@@ -185,11 +289,10 @@ app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, ICo
     }
 });
 
-app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, IConfiguration config, ILogger<Program> logger) =>
+app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, ILogger<Program> logger) =>
 {
     try
     {
-        string? openAiKey = config["OPENAI_API_KEY"] ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY");
         if (string.IsNullOrEmpty(openAiKey))
         {
             return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
@@ -219,7 +322,101 @@ app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, IConf
     }
 });
 
+// ── Help Request endpoints ──────────────────────────────────────────
+
+app.MapPost("/api/help-requests", async ([FromBody] CreateHelpRequestDto dto, AppDbContext db) =>
+{
+    var helpRequest = new HelpRequest
+    {
+        CustomerName = dto.CustomerName,
+        CustomerEmail = dto.CustomerEmail,
+        CustomerPhone = dto.CustomerPhone,
+        ProjectTitle = dto.ProjectTitle,
+        UserDescription = dto.UserDescription,
+        ProjectData = dto.ProjectData,
+        ImageBase64 = dto.ImageBase64,
+        Status = "new",
+        CreatedAt = DateTime.UtcNow,
+        UpdatedAt = DateTime.UtcNow
+    };
+    db.HelpRequests.Add(helpRequest);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/help-requests/{helpRequest.Id}", new { id = helpRequest.Id });
+});
+
+app.MapGet("/api/help-requests", async ([FromQuery] string? status, AppDbContext db) =>
+{
+    var query = db.HelpRequests.AsQueryable();
+    if (!string.IsNullOrEmpty(status))
+        query = query.Where(r => r.Status == status);
+
+    var results = await query
+        .OrderByDescending(r => r.CreatedAt)
+        .Select(r => new
+        {
+            r.Id,
+            r.CustomerName,
+            r.CustomerEmail,
+            r.CustomerPhone,
+            r.ProjectTitle,
+            r.UserDescription,
+            r.Status,
+            r.Notes,
+            r.FollowUpDate,
+            r.CreatedAt,
+            r.UpdatedAt
+        })
+        .ToListAsync();
+    return Results.Ok(results);
+});
+
+app.MapGet("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
+{
+    var request = await db.HelpRequests.FindAsync(id);
+    return request is not null ? Results.Ok(request) : Results.NotFound();
+});
+
+app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, AppDbContext db) =>
+{
+    var request = await db.HelpRequests.FindAsync(id);
+    if (request is null) return Results.NotFound();
+
+    if (dto.Status is not null) request.Status = dto.Status;
+    if (dto.Notes is not null) request.Notes = dto.Notes;
+    if (dto.FollowUpDate.HasValue) request.FollowUpDate = dto.FollowUpDate;
+    request.UpdatedAt = DateTime.UtcNow;
+
+    await db.SaveChangesAsync();
+    return Results.Ok(request);
+});
+
+app.MapDelete("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
+{
+    var request = await db.HelpRequests.FindAsync(id);
+    if (request is null) return Results.NotFound();
+
+    db.HelpRequests.Remove(request);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
+
 app.Run();
+
+public record CreateHelpRequestDto(
+    [property: JsonPropertyName("customerName")] string CustomerName,
+    [property: JsonPropertyName("customerEmail")] string CustomerEmail,
+    [property: JsonPropertyName("customerPhone")] string CustomerPhone,
+    [property: JsonPropertyName("projectTitle")] string ProjectTitle,
+    [property: JsonPropertyName("userDescription")] string UserDescription,
+    [property: JsonPropertyName("projectData")] string ProjectData,
+    [property: JsonPropertyName("imageBase64")] string? ImageBase64
+);
+
+public record UpdateHelpRequestDto(
+    [property: JsonPropertyName("status")] string? Status,
+    [property: JsonPropertyName("notes")] string? Notes,
+    [property: JsonPropertyName("followUpDate")] DateTime? FollowUpDate
+);
 
 public record AskHelperRequest(
     [property: JsonPropertyName("question")] string Question,
