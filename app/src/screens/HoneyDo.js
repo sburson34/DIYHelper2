@@ -1,12 +1,40 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, FlatList, SafeAreaView, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect, useMemo } from 'react';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { getHoneyDoList, removeFromHoneyDoList } from '../utils/storage';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function HoneyDo({ navigation }) {
+  const { t } = useTranslation();
   const [items, setItems] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return items;
+    const q = search.toLowerCase();
+    return items.filter(p =>
+      (p.title || '').toLowerCase().includes(q) ||
+      (p.description || '').toLowerCase().includes(q) ||
+      (Array.isArray(p.tools_and_materials) && p.tools_and_materials.some(t => (t || '').toLowerCase().includes(q)))
+    );
+  }, [items, search]);
+
+  // Sum estimated costs (#7). Cost strings like "$50-$100" — extract numbers and average.
+  const totalCost = useMemo(() => {
+    let total = 0;
+    for (const p of items) {
+      const matches = (p.estimated_cost || '').match(/\d+/g);
+      if (matches && matches.length > 0) {
+        const nums = matches.map(Number);
+        const avg = nums.length === 1 ? nums[0] : (nums[0] + nums[nums.length - 1]) / 2;
+        total += avg;
+      }
+    }
+    return total;
+  }, [items]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => {
@@ -24,12 +52,12 @@ export default function HoneyDo({ navigation }) {
 
   const handleDelete = (id) => {
     Alert.alert(
-      "Remove Project",
-      "Are you sure you want to remove this project?",
+      t('remove_project'),
+      t('remove_project_msg'),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t('cancel'), style: "cancel" },
         {
-          text: "Remove",
+          text: t('remove'),
           style: "destructive",
           onPress: async () => {
             const success = await removeFromHoneyDoList(id);
@@ -44,15 +72,37 @@ export default function HoneyDo({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
+      {items.length > 0 && (
+        <View style={styles.headerBar}>
+          <View style={styles.searchRow}>
+            <Icon name="search" size={16} color={theme.colors.textSecondary} />
+            <TextInput
+              style={styles.searchInput}
+              placeholder="Search projects..."
+              placeholderTextColor={theme.colors.textSecondary}
+              value={search}
+              onChangeText={setSearch}
+            />
+            {search ? (
+              <TouchableOpacity onPress={() => setSearch('')}>
+                <Icon name="close-circle" size={18} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {totalCost > 0 && (
+            <Text style={styles.totalCost}>Estimated total: ~${totalCost.toFixed(0)}</Text>
+          )}
+        </View>
+      )}
       <FlatList
-        data={items}
+        data={filtered}
         keyExtractor={(item) => item.id || Math.random().toString()}
         onRefresh={loadItems}
         refreshing={refreshing}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Icon name="happy-outline" size={80} color={theme.colors.border} />
-            <Text style={styles.emptyText}>All projects completed! Time to stock the workshop? 🛠️</Text>
+            <Text style={styles.emptyText}>{t('honey_do_empty')}</Text>
           </View>
         }
         renderItem={({ item }) => (
@@ -74,7 +124,7 @@ export default function HoneyDo({ navigation }) {
                 </View>
                 {Array.isArray(item.checkedSteps) && item.checkedSteps.length > 0 && item.checkedSteps.every(s => s) && (
                   <View style={[styles.badge, { backgroundColor: theme.colors.success + '20' }]}>
-                    <Text style={[styles.badgeText, { color: theme.colors.success }]}>Completed ✅</Text>
+                    <Text style={[styles.badgeText, { color: theme.colors.success }]}>{t('completed')}</Text>
                   </View>
                 )}
               </View>
@@ -165,4 +215,12 @@ const styles = StyleSheet.create({
     color: theme.colors.textSecondary,
     lineHeight: 26,
   },
+  headerBar: { paddingHorizontal: 16, paddingTop: 12 },
+  searchRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: 12, paddingHorizontal: 12,
+  },
+  searchInput: { flex: 1, padding: 10, color: theme.colors.text },
+  totalCost: { color: theme.colors.textSecondary, fontSize: 12, marginTop: 6, textAlign: 'right' },
 });

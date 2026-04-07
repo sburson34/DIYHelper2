@@ -1,0 +1,181 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: DIYHelper2 API - Elastic Beanstalk with HTTPS, Route 53, and Secrets Manager
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: diyhelper2-api-prod
+    Description: Name for the EB environment
+  SecretArn:
+    Type: String
+    Default: arn:aws:secretsmanager:us-east-1:514994861622:secret:OpenAI_APIKEY-yVJyyp
+    Description: ARN of the OpenAI API key secret in Secrets Manager
+  SolutionStackName:
+    Type: String
+    Default: 64bit Amazon Linux 2023 v3.10.0 running .NET 10
+    Description: >-
+      EB solution stack. Use "aws elasticbeanstalk list-available-solution-stacks"
+      to find the latest .NET stack.
+  InstanceType:
+    Type: String
+    Default: t3.small
+    Description: EC2 instance type
+  CertificateArn:
+    Type: String
+    Default: arn:aws:acm:us-east-1:514994861622:certificate/0f0f1df1-bc1e-4659-b9c2-99f5e5d6032d
+    Description: ACM certificate ARN for api.diyhelper.org
+  HostedZoneId:
+    Type: String
+    Default: Z067931522S04P9BEZAUK
+    Description: Route 53 hosted zone ID for diyhelper.org
+
+Resources:
+
+  # --- IAM Role for EC2 instances ---
+  EBInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-ec2-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWebTier
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkMulticontainerDocker
+        - arn:aws:iam::aws:policy/AWSElasticBeanstalkWorkerTier
+      Policies:
+        - PolicyName: SecretsManagerReadAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref SecretArn
+
+  EBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${EnvironmentName}-instance-profile'
+      Roles:
+        - !Ref EBInstanceRole
+
+  # --- EB Application ---
+  EBApplication:
+    Type: AWS::ElasticBeanstalk::Application
+    Properties:
+      ApplicationName: DIYHelper2-Api
+      Description: DIYHelper2 backend API
+
+  # --- EB Environment (ALB with HTTPS) ---
+  EBEnvironment:
+    Type: AWS::ElasticBeanstalk::Environment
+    Properties:
+      EnvironmentName: !Ref EnvironmentName
+      ApplicationName: !Ref EBApplication
+      SolutionStackName: !Ref SolutionStackName
+      Tier:
+        Name: WebServer
+        Type: Standard
+      OptionSettings:
+        # Instance profile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: IamInstanceProfile
+          Value: !Ref EBInstanceProfile
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: InstanceType
+          Value: !Ref InstanceType
+        - Namespace: aws:autoscaling:launchconfiguration
+          OptionName: DisableIMDSv1
+          Value: 'true'
+
+        # Use Application Load Balancer
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: EnvironmentType
+          Value: LoadBalanced
+        - Namespace: aws:elasticbeanstalk:environment
+          OptionName: LoadBalancerType
+          Value: application
+
+        # HTTPS listener on port 443
+        - Namespace: aws:elbv2:listener:443
+          OptionName: Protocol
+          Value: HTTPS
+        - Namespace: aws:elbv2:listener:443
+          OptionName: SSLCertificateArns
+          Value: !Ref CertificateArn
+        - Namespace: aws:elbv2:listener:443
+          OptionName: DefaultProcess
+          Value: default
+
+        # Redirect HTTP to HTTPS
+        - Namespace: aws:elbv2:listener:default
+          OptionName: DefaultProcess
+          Value: default
+
+        # Environment variables
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: ASPNETCORE_ENVIRONMENT
+          Value: Production
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: ASPNETCORE_URLS
+          Value: http://+:5000
+        - Namespace: aws:elasticbeanstalk:application:environment
+          OptionName: SECRET_ARN
+          Value: !Ref SecretArn
+
+        # Proxy - route traffic to app port
+        - Namespace: aws:elasticbeanstalk:environment:proxy
+          OptionName: ProxyServer
+          Value: nginx
+
+        # Health check
+        - Namespace: aws:elasticbeanstalk:environment:process:default
+          OptionName: HealthCheckPath
+          Value: /api/health
+        - Namespace: aws:elasticbeanstalk:environment:process:default
+          OptionName: Port
+          Value: '5000'
+
+        # Enhanced health reporting
+        - Namespace: aws:elasticbeanstalk:healthreporting:system
+          OptionName: SystemType
+          Value: enhanced
+
+        # Auto Scaling
+        - Namespace: aws:autoscaling:asg
+          OptionName: MinSize
+          Value: '1'
+        - Namespace: aws:autoscaling:asg
+          OptionName: MaxSize
+          Value: '2'
+
+  # --- Route 53 alias record: api.diyhelper.org → ALB ---
+  DNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: api.diyhelper.org.
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt EBEnvironment.EndpointURL
+        HostedZoneId: Z35SXDOTRQ7X7K  # ALB hosted zone for us-east-1
+        EvaluateTargetHealth: true
+
+Outputs:
+  EnvironmentURL:
+    Description: EB environment URL
+    Value: !GetAtt EBEnvironment.EndpointURL
+  ApiUrl:
+    Description: Public API URL
+    Value: https://api.diyhelper.org
+  ApplicationName:
+    Description: EB application name
+    Value: !Ref EBApplication
+  EnvironmentName:
+    Description: EB environment name
+    Value: !Ref EnvironmentName

@@ -3,8 +3,3 @@
 .elasticbeanstalk/*
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
-
-# SQLite runtime data — created at startup by EnsureCreated()
-*.db
-*.db-shm
-*.db-wal

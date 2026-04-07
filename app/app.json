@@ -16,9 +16,9 @@
       "package": "com.diyhelper2"
     },
     "plugins": [
-      "expo-mail-composer",
       "expo-audio",
-      "expo-speech-recognition"
+      "expo-speech-recognition",
+      "expo-sharing"
     ]
   }
 }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { NavigationContainer, DefaultTheme, DrawerActions } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { Ionicons as Icon } from '@expo/vector-icons';
@@ -11,9 +12,27 @@ import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
 import HoneyDo from './src/screens/HoneyDo';
 import Contractors from './src/screens/Contractors';
+import Settings from './src/screens/Settings';
+import Inventory from './src/screens/Inventory';
+import ShoppingList from './src/screens/ShoppingList';
+import Emergency from './src/screens/Emergency';
+import Diagnose from './src/screens/Diagnose';
+import Quotes from './src/screens/Quotes';
+import Community from './src/screens/Community';
 import theme from './src/theme';
+import { I18nProvider, useTranslation } from './src/i18n/I18nContext';
+import { ThemeProvider } from './src/ThemeContext';
+import { requestCaptureReset } from './src/utils/captureBus';
 
-const LogoHeader = ({ onPress, title = "DIY Helper", subtitle = "AI Home Repair Assistant" }) => (
+// Helper used by both the logo header and the "New Project" drawer item.
+// Asks the Capture screen to reset (it decides whether to prompt) and pops
+// the capture stack back to the root so we always land on the main screen.
+const goToFreshCapture = (navigation) => {
+  requestCaptureReset();
+  navigation.navigate('NewProject', { screen: 'Capture' });
+};
+
+const LogoHeader = ({ onPress, title, subtitle }) => (
   <TouchableOpacity
     onPress={onPress}
     activeOpacity={onPress ? 0.7 : 1}
@@ -62,6 +81,7 @@ const MyTheme = {
 };
 
 function CaptureStack() {
+  const { t } = useTranslation();
   return (
     <Stack.Navigator
       initialRouteName="Capture"
@@ -85,16 +105,16 @@ function CaptureStack() {
         name="Capture"
         component={CaptureScreen}
         options={({ navigation }) => ({
-          headerTitle: () => <LogoHeader onPress={() => {}} />,
+          headerTitle: () => <LogoHeader onPress={() => goToFreshCapture(navigation)} title={t('app_title')} subtitle={t('app_subtitle')} />,
           headerTitleAlign: 'left',
           headerRight: () => (
-            <Icon
-              name="menu"
-              size={30}
-              color="#FFFFFF"
-              style={{ marginRight: 15 }}
-              onPress={() => navigation.openDrawer()}
-            />
+            <TouchableOpacity
+              onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
+              hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+              style={{ marginRight: 15, padding: 10 }}
+            >
+              <Icon name="menu" size={30} color="#FFFFFF" />
+            </TouchableOpacity>
           ),
           headerLeft: () => null,
         })}
@@ -102,28 +122,29 @@ function CaptureStack() {
       <Stack.Screen
         name="Result"
         component={ResultScreen}
-        options={{ title: 'Project Steps' }}
+        options={{ title: t('nav_project_steps') }}
       />
       <Stack.Screen
         name="Safety"
         component={SafetyScreen}
-        options={{ title: 'Safety First' }}
+        options={{ title: t('nav_safety_first') }}
       />
       <Stack.Screen
         name="ProjectDetail"
         component={ProjDet}
-        options={{ title: 'Project Detail' }}
+        options={{ title: t('nav_project_detail') }}
       />
       <Stack.Screen
         name="WorkshopSteps"
         component={WorkSteps}
-        options={{ title: 'Workshop Mode' }}
+        options={{ title: t('nav_workshop_mode') }}
       />
     </Stack.Navigator>
   );
 }
 
-export default function App() {
+function AppContent() {
+  const { t } = useTranslation();
   return (
     <NavigationContainer theme={MyTheme}>
       <Drawer.Navigator
@@ -156,8 +177,19 @@ export default function App() {
         <Drawer.Screen
           name="NewProject"
           component={CaptureStack}
+          listeners={({ navigation }) => ({
+            drawerItemPress: (e) => {
+              // Always fire a reset request when "New Project" is tapped from the drawer.
+              // CaptureScreen decides whether to prompt (focused + dirty) or just clear.
+              requestCaptureReset();
+              // Then ensure we land on the Capture screen at the root of its stack.
+              e.preventDefault();
+              navigation.navigate('NewProject', { screen: 'Capture' });
+              navigation.closeDrawer();
+            },
+          })}
           options={{
-            title: 'New Project',
+            title: t('nav_new_project'),
             headerShown: false, // Stack has its own header
             drawerIcon: ({ color, size }) => (
               <Icon name="add-circle-outline" size={size} color={color} />
@@ -168,24 +200,20 @@ export default function App() {
           name="HoneyDoList"
           component={HoneyDo}
           options={({ navigation }) => ({
-            title: 'Honey Do List',
+            title: t('nav_honey_do_list'),
             headerShown: true,
             headerTitle: () => (
               <LogoHeader
-                onPress={() => navigation.navigate('NewProject')}
-                title="Honey Do List"
-                subtitle="DIY Helper"
+                onPress={() => goToFreshCapture(navigation)}
+                title={t('nav_honey_do_list')}
+                subtitle={t('app_title')}
               />
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <Icon
-                name="menu"
-                size={30}
-                color="#FFFFFF"
-                style={{ marginRight: 15 }}
-                onPress={() => navigation.openDrawer()}
-              />
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
             ),
             headerLeft: () => null,
             drawerIcon: ({ color, size }) => (
@@ -197,24 +225,20 @@ export default function App() {
           name="ContractorList"
           component={Contractors}
           options={({ navigation }) => ({
-            title: 'Contractor List',
+            title: t('nav_contractor_list'),
             headerShown: true,
             headerTitle: () => (
               <LogoHeader
-                onPress={() => navigation.navigate('NewProject')}
-                title="Contractor List"
-                subtitle="DIY Helper"
+                onPress={() => goToFreshCapture(navigation)}
+                title={t('nav_contractor_list')}
+                subtitle={t('app_title')}
               />
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <Icon
-                name="menu"
-                size={30}
-                color="#FFFFFF"
-                style={{ marginRight: 15 }}
-                onPress={() => navigation.openDrawer()}
-              />
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
             ),
             headerLeft: () => null,
             drawerIcon: ({ color, size }) => (
@@ -222,7 +246,158 @@ export default function App() {
             ),
           })}
         />
+        <Drawer.Screen
+          name="Inventory"
+          component={Inventory}
+          options={({ navigation }) => ({
+            title: t('nav_inventory') || 'My Tools',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_inventory') || 'My Tools'} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="construct-outline" size={size} color={color} />,
+          })}
+        />
+        <Drawer.Screen
+          name="ShoppingList"
+          component={ShoppingList}
+          options={({ navigation }) => ({
+            title: t('nav_shopping') || 'Shopping List',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_shopping') || 'Shopping List'} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="cart-outline" size={size} color={color} />,
+          })}
+        />
+        <Drawer.Screen
+          name="Diagnose"
+          component={Diagnose}
+          options={({ navigation }) => ({
+            title: t('nav_diagnose') || "What's Wrong?",
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_diagnose') || "What's Wrong?"} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="search-outline" size={size} color={color} />,
+          })}
+        />
+        <Drawer.Screen
+          name="Quotes"
+          component={Quotes}
+          options={({ navigation }) => ({
+            title: t('nav_quotes') || 'Quote Tracker',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_quotes') || 'Quote Tracker'} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="chatbox-ellipses-outline" size={size} color={color} />,
+          })}
+        />
+        <Drawer.Screen
+          name="Community"
+          component={Community}
+          options={({ navigation }) => ({
+            title: t('nav_community') || 'Community',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_community') || 'Community'} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="people-outline" size={size} color={color} />,
+          })}
+        />
+        <Drawer.Screen
+          name="Emergency"
+          component={Emergency}
+          options={({ navigation }) => ({
+            title: t('nav_emergency') || 'Emergency',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_emergency') || 'Emergency'} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="warning-outline" size={size} color="#DC2626" />,
+          })}
+        />
+        <Drawer.Screen
+          name="Settings"
+          component={Settings}
+          options={({ navigation }) => ({
+            title: t('nav_settings'),
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader
+                onPress={() => goToFreshCapture(navigation)}
+                title={t('nav_settings')}
+                subtitle={t('app_title')}
+              />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => (
+              <Icon name="settings-outline" size={size} color={color} />
+            ),
+          })}
+        />
       </Drawer.Navigator>
     </NavigationContainer>
+  );
+}
+
+export default function App() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider>
+        <I18nProvider>
+          <AppContent />
+        </I18nProvider>
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }
