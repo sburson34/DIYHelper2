@@ -1,12 +1,21 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function SafetyScreen({ navigation, route }) {
+  const { t, language } = useTranslation();
   const { project } = route.params || {};
 
-  const defaultSafetyTips = [
+  const defaultSafetyTips = language === 'es' ? [
+    'Usa equipo de protección personal apropiado (EPP).',
+    'Asegura ventilación adecuada.',
+    'Ten un botiquín de primeros auxilios cerca.',
+    'Desconecta la electricidad/agua en la fuente si trabajas con servicios públicos.',
+    'Mantén a niños y mascotas lejos del área de trabajo.'
+  ] : [
     "Wear appropriate safety gear (PPE).",
     "Ensure proper ventilation.",
     "Keep a first-aid kit nearby.",
@@ -14,7 +23,12 @@ export default function SafetyScreen({ navigation, route }) {
     "Keep children and pets away from the workspace."
   ];
 
-  const defaultWhenToCallPro = [
+  const defaultWhenToCallPro = language === 'es' ? [
+    'Si el proyecto involucra cambios estructurales mayores.',
+    'Si encuentras problemas eléctricos o de plomería inesperados.',
+    'Si no estás seguro de algún paso técnico.',
+    'Si no tienes las herramientas pesadas necesarias.'
+  ] : [
     "If the project involves major structural changes.",
     "If you encounter unexpected electrical or plumbing issues.",
     "If you feel unsure about any technical step.",
@@ -31,8 +45,8 @@ export default function SafetyScreen({ navigation, route }) {
           <View style={styles.iconCircle}>
             <Icon name="shield-checkmark" size={60} color="#fff" />
           </View>
-          <Text style={styles.title}>Safety First! 🛡️</Text>
-          <Text style={styles.subtitle}>Before you start your workshop magic, let's review these important safety guidelines.</Text>
+          <Text style={styles.title}>{t('safety_first')}</Text>
+          <Text style={styles.subtitle}>{t('safety_subtitle')}</Text>
         </View>
 
         <View style={styles.section}>
@@ -40,7 +54,7 @@ export default function SafetyScreen({ navigation, route }) {
             <View style={[styles.miniIconCircle, { backgroundColor: '#FFF7ED' }]}>
               <Icon name="warning" size={20} color="#EA580C" />
             </View>
-            <Text style={styles.sectionTitle}>Safety Tips</Text>
+            <Text style={styles.sectionTitle}>{t('safety_tips')}</Text>
           </View>
           <View style={[styles.card, styles.safetyCard]}>
             {safetyTips.map((tip, i) => (
@@ -59,7 +73,7 @@ export default function SafetyScreen({ navigation, route }) {
             <View style={[styles.miniIconCircle, { backgroundColor: '#FEF2F2' }]}>
               <Icon name="hammer" size={20} color="#DC2626" />
             </View>
-            <Text style={styles.sectionTitle}>When to Call a Pro</Text>
+            <Text style={styles.sectionTitle}>{t('when_to_call_pro')}</Text>
           </View>
           <View style={[styles.card, styles.proCard]}>
             {whenToCallPro.map((item, i) => (
@@ -76,7 +90,7 @@ export default function SafetyScreen({ navigation, route }) {
           onPress={() => navigation.replace('WorkshopSteps', { project })}
         >
           <Icon name="checkmark-circle" size={24} color="#fff" style={{ marginRight: 10 }} />
-          <Text style={styles.buttonText}>Workshop Ready! 🏗️</Text>
+          <Text style={styles.buttonText}>{t('workshop_ready')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

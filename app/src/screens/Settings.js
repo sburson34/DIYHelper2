@@ -1,13 +1,26 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, Switch } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { saveUserProfile, getUserProfile } from '../utils/storage';
+import {
+  saveUserProfile, getUserProfile,
+  getAppPrefs, setAppPrefs,
+  getCommunityOptIn, setCommunityOptIn,
+} from '../utils/storage';
+import { useTranslation } from '../i18n/I18nContext';
+import { useAppTheme } from '../ThemeContext';
 import theme from '../theme';
 
 export default function Settings() {
+  const { t, language, setLanguage } = useTranslation();
+  const { isDark, toggleDark } = useAppTheme();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [zip, setZip] = useState('');
+  const [skillLevel, setSkillLevel] = useState('intermediate');
+  const [reminders, setReminders] = useState(true);
+  const [community, setCommunity] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -18,17 +31,22 @@ export default function Settings() {
         setEmail(profile.email || '');
         setPhone(profile.phone || '');
       }
+      const prefs = await getAppPrefs();
+      setZip(prefs.zip || '');
+      setSkillLevel(prefs.skillLevel || 'intermediate');
+      setReminders(prefs.remindersEnabled !== false);
+      setCommunity(await getCommunityOptIn());
     })();
   }, []);
 
   const handleSave = async () => {
     if (!name.trim() || !email.trim() || !phone.trim()) {
-      Alert.alert('Required Fields', 'Please fill in your name, email, and phone number.');
+      Alert.alert(t('required_fields'), t('required_fields_msg'));
       return;
     }
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(email.trim())) {
-      Alert.alert('Invalid Email', 'Please enter a valid email address.');
+      Alert.alert(t('invalid_email'), t('invalid_email_msg'));
       return;
     }
     const success = await saveUserProfile({
@@ -36,13 +54,21 @@ export default function Settings() {
       email: email.trim(),
       phone: phone.trim(),
     });
+    await setAppPrefs({ zip: zip.trim(), skillLevel, remindersEnabled: reminders });
+    await setCommunityOptIn(community);
     if (success) {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } else {
-      Alert.alert('Error', 'Failed to save profile. Please try again.');
+      Alert.alert(t('error'), t('save_failed'));
     }
   };
+
+  const SKILLS = [
+    { id: 'beginner', label: 'Beginner' },
+    { id: 'intermediate', label: 'Intermediate' },
+    { id: 'advanced', label: 'Advanced' },
+  ];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -50,31 +76,29 @@ export default function Settings() {
         <ScrollView contentContainerStyle={styles.content}>
           <View style={styles.header}>
             <Icon name="person-circle-outline" size={64} color={theme.colors.primary} />
-            <Text style={styles.title}>Your Contact Info</Text>
-            <Text style={styles.subtitle}>
-              This info is included when you request professional help so they can reach you.
-            </Text>
+            <Text style={styles.title}>{t('your_contact_info')}</Text>
+            <Text style={styles.subtitle}>{t('contact_info_settings_desc')}</Text>
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Name</Text>
+            <Text style={styles.label}>{t('name')}</Text>
             <TextInput
               style={styles.input}
               value={name}
               onChangeText={setName}
-              placeholder="Your full name"
+              placeholder={t('full_name_placeholder')}
               placeholderTextColor={theme.colors.textSecondary}
               autoCapitalize="words"
             />
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Email</Text>
+            <Text style={styles.label}>{t('email')}</Text>
             <TextInput
               style={styles.input}
               value={email}
               onChangeText={setEmail}
-              placeholder="your@email.com"
+              placeholder={t('email_placeholder')}
               placeholderTextColor={theme.colors.textSecondary}
               keyboardType="email-address"
               autoCapitalize="none"
@@ -82,21 +106,100 @@ export default function Settings() {
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Phone</Text>
+            <Text style={styles.label}>{t('phone')}</Text>
             <TextInput
               style={styles.input}
               value={phone}
               onChangeText={setPhone}
-              placeholder="(555) 123-4567"
+              placeholder={t('phone_placeholder')}
               placeholderTextColor={theme.colors.textSecondary}
               keyboardType="phone-pad"
             />
           </View>
 
+          <View style={styles.field}>
+            <Text style={styles.label}>Zip code (for permit checks)</Text>
+            <TextInput
+              style={styles.input}
+              value={zip}
+              onChangeText={setZip}
+              placeholder="e.g. 02144"
+              placeholderTextColor={theme.colors.textSecondary}
+              keyboardType="number-pad"
+              maxLength={5}
+            />
+          </View>
+
+          <View style={styles.field}>
+            <Text style={styles.label}>DIY skill level</Text>
+            <View style={styles.skillRow}>
+              {SKILLS.map((s) => (
+                <TouchableOpacity
+                  key={s.id}
+                  style={[styles.skillBtn, skillLevel === s.id && styles.skillBtnActive]}
+                  onPress={() => setSkillLevel(s.id)}
+                >
+                  <Text style={[styles.skillBtnText, skillLevel === s.id && styles.skillBtnTextActive]}>{s.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Dark mode</Text>
+              <Text style={styles.toggleSub}>Use a dark color scheme.</Text>
+            </View>
+            <Switch value={isDark} onValueChange={toggleDark} />
+          </View>
+
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Reminders</Text>
+              <Text style={styles.toggleSub}>Notify me about unfinished projects.</Text>
+            </View>
+            <Switch value={reminders} onValueChange={setReminders} />
+          </View>
+
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Share to community</Text>
+              <Text style={styles.toggleSub}>Anonymously share completed projects to the community library.</Text>
+            </View>
+            <Switch value={community} onValueChange={setCommunity} />
+          </View>
+
           <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
             <Icon name={saved ? 'checkmark-circle' : 'save-outline'} size={22} color="#FFF" />
-            <Text style={styles.saveButtonText}>{saved ? 'Saved!' : 'Save Profile'}</Text>
+            <Text style={styles.saveButtonText}>{saved ? t('saved') : t('save_profile')}</Text>
           </TouchableOpacity>
+
+          {/* Language toggle */}
+          <View style={styles.languageSection}>
+            <View style={styles.languageHeader}>
+              <Icon name="language-outline" size={24} color={theme.colors.primary} />
+              <Text style={styles.languageTitle}>{t('language')}</Text>
+            </View>
+            <Text style={styles.languageDesc}>{t('language_desc')}</Text>
+            <View style={styles.languageButtons}>
+              <TouchableOpacity
+                style={[styles.langButton, language === 'en' && styles.langButtonActive]}
+                onPress={() => setLanguage('en')}
+              >
+                <Text style={[styles.langButtonText, language === 'en' && styles.langButtonTextActive]}>
+                  {t('english')}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.langButton, language === 'es' && styles.langButtonActive]}
+                onPress={() => setLanguage('es')}
+              >
+                <Text style={[styles.langButtonText, language === 'es' && styles.langButtonTextActive]}>
+                  {t('spanish')}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -161,4 +264,68 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
   },
+  languageSection: {
+    marginTop: theme.spacing.xl,
+    padding: theme.spacing.l,
+    backgroundColor: theme.colors.surface,
+    borderRadius: theme.roundness.large,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  languageHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 6,
+  },
+  languageTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: theme.colors.text,
+  },
+  languageDesc: {
+    fontSize: 13,
+    color: theme.colors.textSecondary,
+    marginBottom: 14,
+  },
+  languageButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  langButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: theme.roundness.medium,
+    borderWidth: 2,
+    borderColor: theme.colors.border,
+    alignItems: 'center',
+    backgroundColor: theme.colors.background,
+  },
+  langButtonActive: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primary + '15',
+  },
+  langButtonText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: theme.colors.textSecondary,
+  },
+  langButtonTextActive: {
+    color: theme.colors.primary,
+  },
+  skillRow: { flexDirection: 'row', gap: 8 },
+  skillBtn: {
+    flex: 1, paddingVertical: 12, borderRadius: theme.roundness.medium,
+    borderWidth: 2, borderColor: theme.colors.border, alignItems: 'center',
+    backgroundColor: theme.colors.background,
+  },
+  skillBtnActive: { borderColor: theme.colors.primary, backgroundColor: theme.colors.primary + '15' },
+  skillBtnText: { fontSize: 13, fontWeight: '700', color: theme.colors.textSecondary },
+  skillBtnTextActive: { color: theme.colors.primary },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: theme.colors.border,
+  },
+  toggleLabel: { fontSize: 15, fontWeight: '700', color: theme.colors.text },
+  toggleSub: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 },
 });

@@ -84,6 +84,11 @@ string? openAiKey = null;
         startupLogger.LogInformation("Backend starting up. Listening for requests...");
 }
 
+// Affiliate program configuration
+// Replace these placeholder values with your actual affiliate IDs once approved
+string amazonAssociateTag = Environment.GetEnvironmentVariable("AMAZON_ASSOCIATE_TAG") ?? "diyhelper20-20";
+string homeDepotImpactId = Environment.GetEnvironmentVariable("HOMEDEPOT_IMPACT_ID") ?? "YOUR_IMPACT_ID";
+
 // Ensure SQLite database is created
 using (var scope = app.Services.CreateScope())
 {
@@ -105,6 +110,9 @@ app.UseCors("MobilePolicy");
 app.MapControllers();
 
 app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
+
+// In-memory community projects store (#18). Replace with DB once schema is settled.
+var communityProjects = new List<CommunityProjectDto>();
 
 app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, ILogger<Program> logger) =>
 {
@@ -149,9 +157,21 @@ app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, ILo
             ? $"I have attached {imageCount} photo(s) numbered 1 through {imageCount}. Reference them by number in your annotations."
             : "No photos were provided.";
 
+        // Personalization: skill level (#15), zip/permits (#14), owned tools (#5)
+        string skillClause = !string.IsNullOrWhiteSpace(request.SkillLevel)
+            ? $"\nThe user describes themselves as a {request.SkillLevel} DIYer. Tailor instructions, warnings, and assumed knowledge accordingly."
+            : "";
+        string zipClause = !string.IsNullOrWhiteSpace(request.Zip)
+            ? $"\nThe user is in zip code {request.Zip}. Use this to determine whether a permit is likely required for this work in their jurisdiction (best guess)."
+            : "";
+        string ownedClause = (request.OwnedTools != null && request.OwnedTools.Length > 0)
+            ? $"\nThe user already owns the following tools/materials, so you should NOT include them in shopping_links (but still mention them in tools_and_materials with a marker like '(owned)'): {string.Join(", ", request.OwnedTools)}."
+            : "";
+
         string textContent = $@"I want to do a DIY project. {(string.IsNullOrEmpty(request.Description) ? "Please analyze the media." : $"Description: \"{request.Description}\"")}
 
 {imageRef}
+{skillClause}{zipClause}{ownedClause}
 
 Return a JSON object with exactly these fields:
 {{
@@ -178,22 +198,41 @@ Return a JSON object with exactly these fields:
   ""difficulty"": ""easy/medium/hard"",
   ""estimated_time"": ""e.g. 2 hours"",
   ""estimated_cost"": ""e.g. $50-$100"",
-  ""youtube_links"": [""https://youtube.com/watch?v=...""],
-  ""shopping_links"": [
-    {{ ""item"": ""item name"", ""url"": ""https://..."" }}
-  ],
+  ""youtube_links"": [""https://www.youtube.com/results?search_query=how+to+do+this+project""],
+  ""shopping_links"": [""specific product name 1"", ""specific product name 2""],
   ""safety_tips"": [""Tip 1"", ""Tip 2""],
-  ""when_to_call_pro"": [""Warning 1"", ""Warning 2""]
+  ""when_to_call_pro"": [""Warning 1"", ""Warning 2""],
+  ""permit_required"": false,
+  ""permit_notes"": ""Brief explanation if a permit may be required, or null"",
+  ""pro_cost"": ""Rough cost if hiring a pro, e.g. $200-$400"",
+  ""pro_time"": ""Rough time if hiring a pro"",
+  ""recommendation"": ""diy or pro — short justification"",
+  ""diy_vs_pro_summary"": ""1-2 sentence comparison""
 }}
 
 IMPORTANT for steps:
 - Each step's image_annotations should reference user photos by photo_number (1-indexed) when the photo is relevant to that step. Include a description of what to look at in the photo.
 - reference_image_search should be a useful Google Images search query that would find a helpful diagram or reference photo for that step. Set to null if the user's photos are sufficient.
-- The top-level image_annotations should provide an overview analysis of each user photo.";
+- The top-level image_annotations should provide an overview analysis of each user photo.
+
+IMPORTANT for shopping_links:
+- List specific product names that the user would need to buy (e.g. ""3/4 inch copper pipe"", ""Moen kitchen faucet cartridge"", ""DAP silicone caulk"").
+- Be specific with product names so searches return relevant results. Include brand names when a specific brand matters.
+- Include every item from tools_and_materials that would need to be purchased.
+
+IMPORTANT for youtube_links:
+- ALWAYS include 2-4 YouTube search URLs relevant to the project. Use the format: https://www.youtube.com/results?search_query=<url-encoded+search+terms>
+- Make each search query specific and different (e.g. one for the overall project, one for a tricky technique, one for a tool tutorial).
+- Only omit youtube_links if the project is so unusual that no relevant video could possibly exist.";
+
+        bool isSpanish = string.Equals(request.Language, "es", StringComparison.OrdinalIgnoreCase);
+        string languageInstruction = isSpanish
+            ? " IMPORTANT: All text fields in the JSON response (title, steps, tools_and_materials, difficulty, estimated_time, estimated_cost, safety_tips, when_to_call_pro, image_annotations descriptions and overviews) MUST be written in Spanish. URLs, JSON keys, and search query parameters should remain in English."
+            : "";
 
         var messages = new List<ChatMessage>
         {
-            new SystemChatMessage("You are a helpful DIY project assistant. Analyze any provided photos carefully. Provide a detailed step-by-step guide with image annotations referencing the user's photos and suggest reference image searches. Return valid JSON only.")
+            new SystemChatMessage("You are a helpful DIY project assistant. Analyze any provided photos carefully. Provide a detailed step-by-step guide with image annotations referencing the user's photos and suggest reference image searches. Return valid JSON only." + languageInstruction)
         };
 
         var userMessageParts = new List<ChatMessageContentPart>
@@ -267,7 +306,48 @@ IMPORTANT for steps:
         try
         {
             var parsed = JsonSerializer.Deserialize<JsonElement>(jsonContent);
-            return Results.Ok(parsed);
+
+            // Post-process: convert shopping_links item names into affiliate links
+            using var doc = JsonDocument.Parse(jsonContent);
+            var root = doc.RootElement;
+            var resultDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(jsonContent);
+
+            if (root.TryGetProperty("shopping_links", out var shoppingEl))
+            {
+                var affiliateLinks = new List<object>();
+
+                if (shoppingEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in shoppingEl.EnumerateArray())
+                    {
+                        // Handle both string items and {item, url} objects from GPT
+                        string itemName;
+                        if (item.ValueKind == JsonValueKind.String)
+                        {
+                            itemName = item.GetString() ?? "";
+                        }
+                        else if (item.TryGetProperty("item", out var itemProp))
+                        {
+                            itemName = itemProp.GetString() ?? "";
+                        }
+                        else continue;
+
+                        if (string.IsNullOrWhiteSpace(itemName)) continue;
+
+                        var encoded = Uri.EscapeDataString(itemName);
+                        affiliateLinks.Add(new
+                        {
+                            item = itemName,
+                            amazon_url = $"https://www.amazon.com/s?k={encoded}&tag={amazonAssociateTag}",
+                            homedepot_url = $"https://www.homedepot.com/s/{encoded}?NCNI-5&irclickid={homeDepotImpactId}"
+                        });
+                    }
+                }
+
+                resultDict!["shopping_links"] = JsonSerializer.SerializeToElement(affiliateLinks);
+            }
+
+            return Results.Ok(resultDict);
         }
         catch (JsonException ex)
         {
@@ -302,7 +382,9 @@ app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, ILogg
         ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
 
         string contextJson = JsonSerializer.Serialize(request.ProjectContext);
-        string systemPrompt = $"You are a helpful DIY project assistant. The user is currently working on a project with the following details: {contextJson}. Answer the user's question clearly and concisely within the context of this project.";
+        bool askIsSpanish = string.Equals(request.Language, "es", StringComparison.OrdinalIgnoreCase);
+        string langClause = askIsSpanish ? " Respond in Spanish." : "";
+        string systemPrompt = $"You are a helpful DIY project assistant. The user is currently working on a project with the following details: {contextJson}. Answer the user's question clearly and concisely within the context of this project.{langClause}";
 
         var messages = new List<ChatMessage>
         {
@@ -400,7 +482,239 @@ app.MapDelete("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
     return Results.NoContent();
 });
 
+// ── #9 verify-step ─────────────────────────────────────────────────
+app.MapPost("/api/verify-step", async ([FromBody] VerifyStepRequest req, ILogger<Program> logger) =>
+{
+    try
+    {
+        if (string.IsNullOrEmpty(openAiKey))
+            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
+
+        var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
+        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
+
+        bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
+        string lang = isEs ? " Respond entirely in Spanish." : "";
+
+        string prompt = $@"You are inspecting a user's photo of completed DIY work to verify quality.
+Project: ""{req.ProjectTitle}""
+Step they just completed: ""{req.StepText}""
+
+Return JSON only:
+{{
+  ""rating"": ""good|needs_work|wrong"",
+  ""score"": 1-10,
+  ""issues"": [""..""],
+  ""fixes"": [""..""],
+  ""summary"": ""1-2 sentences""
+}}{lang}";
+
+        var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
+        if (!string.IsNullOrEmpty(req.Base64Image))
+        {
+            try
+            {
+                byte[] data = Convert.FromBase64String(req.Base64Image);
+                parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), req.MimeType ?? "image/jpeg"));
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "verify-step: failed to decode image");
+            }
+        }
+
+        var messages = new List<ChatMessage>
+        {
+            new SystemChatMessage("You are a DIY project quality inspector. Return valid JSON only."),
+            new UserChatMessage(parts),
+        };
+        ChatCompletion completion = await client.CompleteChatAsync(messages);
+        string raw = completion.Content[0].Text.Trim();
+        int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
+        if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
+        return Results.Content(raw, "application/json");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "verify-step error");
+        return Results.Json(new { error = ex.Message }, statusCode: 500);
+    }
+});
+
+// ── #10 diagnose ───────────────────────────────────────────────────
+app.MapPost("/api/diagnose", async ([FromBody] AnalyzeProjectRequest req, ILogger<Program> logger) =>
+{
+    try
+    {
+        if (string.IsNullOrEmpty(openAiKey))
+            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
+
+        var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
+        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
+
+        bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
+        string lang = isEs ? " Respond entirely in Spanish." : "";
+
+        string prompt = $@"You are diagnosing a possible home issue. The user has not yet decided what's wrong — they want a ranked list of likely causes and what to check next.
+
+Description: {req.Description ?? "(none)"}
+
+Return JSON only:
+{{
+  ""possible_causes"": [
+    {{ ""issue"": ""…"", ""likelihood"": ""high|medium|low"", ""why"": ""…"", ""next_check"": ""what the user should look for or test next"" }}
+  ],
+  ""urgency"": ""low|medium|high|emergency"",
+  ""call_pro_immediately"": false,
+  ""summary"": ""1-2 sentences""
+}}{lang}";
+
+        var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
+        if (req.Media != null)
+        {
+            foreach (var m in req.Media)
+            {
+                if (m.Type == "video" || string.IsNullOrEmpty(m.Base64)) continue;
+                try
+                {
+                    byte[] data = Convert.FromBase64String(m.Base64);
+                    parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
+                }
+                catch { }
+            }
+        }
+        var messages = new List<ChatMessage>
+        {
+            new SystemChatMessage("You are a home repair diagnostician. Return valid JSON only."),
+            new UserChatMessage(parts),
+        };
+        ChatCompletion completion = await client.CompleteChatAsync(messages);
+        string raw = completion.Content[0].Text.Trim();
+        int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
+        if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
+        return Results.Content(raw, "application/json");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "diagnose error");
+        return Results.Json(new { error = ex.Message }, statusCode: 500);
+    }
+});
+
+// ── #11 clarifying questions ───────────────────────────────────────
+app.MapPost("/api/clarify", async ([FromBody] AnalyzeProjectRequest req, ILogger<Program> logger) =>
+{
+    try
+    {
+        if (string.IsNullOrEmpty(openAiKey))
+            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
+
+        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey));
+
+        bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
+        string lang = isEs ? " Respond in Spanish." : "";
+
+        string prompt = $@"Before generating a full DIY guide, you may want to ask 2-3 short clarifying questions. The user described: ""{req.Description ?? ""}"".
+
+Return JSON only:
+{{
+  ""questions"": [
+    {{ ""q"": ""short question"", ""why"": ""why this matters"", ""options"": [""option1"", ""option2""] }}
+  ]
+}}
+If the description is already complete and unambiguous, return {{""questions"": []}}.{lang}";
+
+        var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
+        if (req.Media != null)
+        {
+            foreach (var m in req.Media)
+            {
+                if (m.Type == "video" || string.IsNullOrEmpty(m.Base64)) continue;
+                try
+                {
+                    byte[] data = Convert.FromBase64String(m.Base64);
+                    parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
+                }
+                catch { }
+            }
+        }
+        var messages = new List<ChatMessage>
+        {
+            new SystemChatMessage("You ask short, useful clarifying questions for DIY projects. Return valid JSON only."),
+            new UserChatMessage(parts),
+        };
+        ChatCompletion completion = await client.CompleteChatAsync(messages);
+        string raw = completion.Content[0].Text.Trim();
+        int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
+        if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
+        return Results.Content(raw, "application/json");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "clarify error");
+        return Results.Json(new { error = ex.Message }, statusCode: 500);
+    }
+});
+
+// ── #18 community projects (in-memory; replace with DB if persistent) ──
+app.MapPost("/api/community-projects", ([FromBody] CommunityProjectDto dto) =>
+{
+    var entry = dto with { Id = Guid.NewGuid().ToString(), CreatedAt = DateTime.UtcNow };
+    communityProjects.Insert(0, entry);
+    return Results.Created($"/api/community-projects/{entry.Id}", entry);
+});
+
+app.MapGet("/api/community-projects", ([FromQuery] string? q) =>
+{
+    var results = communityProjects.AsEnumerable();
+    if (!string.IsNullOrWhiteSpace(q))
+    {
+        var ql = q.ToLowerInvariant();
+        results = results.Where(p =>
+            (p.Title ?? "").ToLowerInvariant().Contains(ql) ||
+            (p.Description ?? "").ToLowerInvariant().Contains(ql));
+    }
+    return Results.Ok(results.Take(50));
+});
+
+// ── #16 emergency directory (static for now) ───────────────────────
+app.MapGet("/api/emergency", () =>
+{
+    return Results.Ok(new
+    {
+        categories = new[]
+        {
+            new { id = "water", label = "Active leak / burst pipe", instructions = new[] { "Shut off your home's main water valve.", "Open a faucet to release pressure.", "Move valuables away from the leak." }, callType = "plumber" },
+            new { id = "electric", label = "Sparking outlet / shock", instructions = new[] { "Do NOT touch the affected outlet.", "Trip the breaker for that circuit at your panel.", "Unplug nearby devices once safe." }, callType = "electrician" },
+            new { id = "gas", label = "Gas smell", instructions = new[] { "Leave the building immediately.", "Do not flip light switches or use phones inside.", "Call your gas utility and 911 from outside." }, callType = "gas-utility" },
+            new { id = "fire", label = "Active fire", instructions = new[] { "Get out, stay out, call 911." }, callType = "911" },
+        }
+    });
+});
+
 app.Run();
+
+public record VerifyStepRequest(
+    [property: JsonPropertyName("stepText")] string StepText,
+    [property: JsonPropertyName("projectTitle")] string ProjectTitle,
+    [property: JsonPropertyName("base64Image")] string? Base64Image,
+    [property: JsonPropertyName("mimeType")] string? MimeType,
+    [property: JsonPropertyName("language")] string? Language
+);
+
+public record CommunityProjectDto
+{
+    [JsonPropertyName("id")] public string? Id { get; init; }
+    [JsonPropertyName("title")] public string? Title { get; init; }
+    [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("difficulty")] public string? Difficulty { get; init; }
+    [JsonPropertyName("estimated_time")] public string? EstimatedTime { get; init; }
+    [JsonPropertyName("estimated_cost")] public string? EstimatedCost { get; init; }
+    [JsonPropertyName("steps")] public object? Steps { get; init; }
+    [JsonPropertyName("tools_and_materials")] public object? ToolsAndMaterials { get; init; }
+    [JsonPropertyName("photoUri")] public string? PhotoUri { get; init; }
+    [JsonPropertyName("createdAt")] public DateTime CreatedAt { get; init; }
+}
 
 public record CreateHelpRequestDto(
     [property: JsonPropertyName("customerName")] string CustomerName,
@@ -420,12 +734,17 @@ public record UpdateHelpRequestDto(
 
 public record AskHelperRequest(
     [property: JsonPropertyName("question")] string Question,
-    [property: JsonPropertyName("projectContext")] object ProjectContext
+    [property: JsonPropertyName("projectContext")] object ProjectContext,
+    [property: JsonPropertyName("language")] string? Language
 );
 
 public record AnalyzeProjectRequest(
     [property: JsonPropertyName("description")] string? Description,
-    [property: JsonPropertyName("media")] MediaItem[]? Media
+    [property: JsonPropertyName("media")] MediaItem[]? Media,
+    [property: JsonPropertyName("language")] string? Language,
+    [property: JsonPropertyName("skillLevel")] string? SkillLevel,
+    [property: JsonPropertyName("zip")] string? Zip,
+    [property: JsonPropertyName("ownedTools")] string[]? OwnedTools
 );
 
 public record MediaItem(

@@ -1,3 +1,48 @@
+# OSX
+.DS_Store
+
+# Node / metro
+node_modules/
+npm-debug.log
+yarn-error.log
+.metro-health-check*
+
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# Env
+.env*.local
+
+# Android
+android/.gradle/
+android/.idea/
+android/build/
+android/captures/
+android/local.properties
+android/app/build/
+android/app/release/
+android/app/.cxx/
+android/.cxx/
+android/app/src/main/assets/index.android.bundle
+*.keystore
+!debug.keystore
+
+# iOS
+ios/Pods/
+ios/build/
+ios/DerivedData/
+ios/.xcode.env.local
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Misc
+*.log
+.DS_Store
 
 # Elastic Beanstalk Files
 .elasticbeanstalk/*

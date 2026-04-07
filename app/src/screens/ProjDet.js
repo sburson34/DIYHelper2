@@ -1,16 +1,18 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, SafeAreaView, Linking, TouchableOpacity, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { updateHoneyDoList, updateContractorList, removeFromHoneyDoList, removeFromContractorList } from '../utils/storage';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
-const TABS = [
-  { id: 'tools', label: 'Tools', icon: 'hammer-outline' },
-  { id: 'steps', label: 'Steps', icon: 'list-outline' },
-  { id: 'videos', label: 'Videos', icon: 'play-circle-outline' },
-];
-
 export default function ProjDet({ navigation, route }) {
+  const { t } = useTranslation();
+  const TABS = [
+    { id: 'tools', label: t('tab_tools'), icon: 'hammer-outline' },
+    { id: 'steps', label: t('tab_steps'), icon: 'list-outline' },
+    { id: 'videos', label: t('tab_videos'), icon: 'play-circle-outline' },
+  ];
   const { project: initialProject, listType } = route.params || {};
   const [project, setProject] = useState(initialProject);
   const [celebrationVisible, setCelebrationVisible] = useState(false);
@@ -49,12 +51,12 @@ export default function ProjDet({ navigation, route }) {
 
   const handleDelete = () => {
     Alert.alert(
-      "Delete Project",
-      "Are you sure you want to remove this project from your list?",
+      t('delete_project'),
+      t('delete_project_msg'),
       [
-        { text: "Cancel", style: "cancel" },
+        { text: t('cancel'), style: "cancel" },
         {
-          text: "Delete",
+          text: t('delete'),
           style: "destructive",
           onPress: async () => {
             let success = false;
@@ -75,7 +77,7 @@ export default function ProjDet({ navigation, route }) {
   const renderToolsTab = () => (
     <View>
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Tools & Materials 🛠️</Text>
+        <Text style={styles.sectionTitle}>{t('tools_and_materials')}</Text>
         {project?.tools_and_materials?.map((item, index) => (
           <View key={index} style={styles.materialItem}>
             <Icon name="checkmark-circle" size={18} color={theme.colors.accent} />
@@ -86,10 +88,10 @@ export default function ProjDet({ navigation, route }) {
 
       {project?.shopping_links && project.shopping_links.length > 0 && (
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Where to Buy 🛒</Text>
+          <Text style={styles.sectionTitle}>{t('where_to_buy')}</Text>
           {project.shopping_links.map((link, index) => (
             <TouchableOpacity key={index} onPress={() => openLink(link.url)} style={styles.linkItem}>
-              <Text style={styles.linkText}>Buy {link.item}</Text>
+              <Text style={styles.linkText}>{t('buy')} {link.item}</Text>
               <Icon name="open-outline" size={16} color={theme.colors.primary} />
             </TouchableOpacity>
           ))}
@@ -100,7 +102,7 @@ export default function ProjDet({ navigation, route }) {
 
   const renderStepsTab = () => (
     <View style={styles.card}>
-      <Text style={styles.sectionTitle}>Project Blueprint 📋</Text>
+      <Text style={styles.sectionTitle}>{t('project_blueprint_emoji')}</Text>
       {project?.steps?.map((step, index) => (
         <TouchableOpacity
           key={index}
@@ -129,16 +131,16 @@ export default function ProjDet({ navigation, route }) {
 
   const renderVideosTab = () => (
     <View style={styles.card}>
-      <Text style={styles.sectionTitle}>Visual Guides 📺</Text>
+      <Text style={styles.sectionTitle}>{t('visual_guides')}</Text>
       {project?.youtube_links && project.youtube_links.length > 0 ? (
         project.youtube_links.map((link, index) => (
           <TouchableOpacity key={index} onPress={() => openLink(link)} style={styles.linkItem}>
-            <Text style={styles.linkText}>Watch Tutorial {index + 1}</Text>
+            <Text style={styles.linkText}>{t('watch_tutorial')} {index + 1}</Text>
             <Icon name="play-circle-outline" size={20} color={theme.colors.danger} />
           </TouchableOpacity>
         ))
       ) : (
-        <Text style={styles.emptyText}>No tutorial videos found for this project.</Text>
+        <Text style={styles.emptyText}>{t('no_videos')}</Text>
       )}
     </View>
   );
@@ -147,23 +149,23 @@ export default function ProjDet({ navigation, route }) {
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.headerCard}>
-          <Text style={styles.title}>{project?.title || "Project Details"}</Text>
+          <Text style={styles.title}>{project?.title || t('project_details')}</Text>
 
           <View style={styles.infoGrid}>
             <View style={styles.infoBox}>
               <Icon name="speedometer-outline" size={20} color={theme.colors.primary} />
-              <Text style={styles.infoLabel}>Difficulty</Text>
+              <Text style={styles.infoLabel}>{t('difficulty')}</Text>
               <Text style={styles.infoValue}>{project?.difficulty}</Text>
             </View>
             <View style={styles.infoBox}>
               <Icon name="time-outline" size={20} color={theme.colors.primary} />
-              <Text style={styles.infoLabel}>Time</Text>
+              <Text style={styles.infoLabel}>{t('time')}</Text>
               <Text style={styles.infoValue}>{project?.estimated_time}</Text>
             </View>
             <View style={styles.infoBox}>
               <Icon name="cash-outline" size={20} color={theme.colors.primary} />
-              <Text style={styles.infoLabel}>Cost</Text>
-              <Text style={styles.infoValue}>{project?.estimated_cost || "N/A"}</Text>
+              <Text style={styles.infoLabel}>{t('cost')}</Text>
+              <Text style={styles.infoValue}>{project?.estimated_cost || t('not_available')}</Text>
             </View>
           </View>
         </View>
@@ -202,7 +204,7 @@ export default function ProjDet({ navigation, route }) {
           onPress={handleDelete}
         >
           <Icon name="trash-outline" size={20} color="#fff" />
-          <Text style={styles.deleteButtonText}>Delete Project</Text>
+          <Text style={styles.deleteButtonText}>{t('delete_project')}</Text>
         </TouchableOpacity>
       </ScrollView>
 
@@ -216,8 +218,8 @@ export default function ProjDet({ navigation, route }) {
             <View style={styles.celebrationIcon}>
               <Icon name="trophy" size={60} color={theme.colors.accent} />
             </View>
-            <Text style={styles.modalTitle}>Project Completed!</Text>
-            <Text style={styles.modalText}>Excellent work! You've successfully finished this DIY project. Your workshop skills are top-notch! 🛠️🎉</Text>
+            <Text style={styles.modalTitle}>{t('project_completed')}</Text>
+            <Text style={styles.modalText}>{t('project_completed_msg')}</Text>
 
             <TouchableOpacity
               style={[styles.modalButton, { backgroundColor: theme.colors.success }]}
@@ -225,7 +227,7 @@ export default function ProjDet({ navigation, route }) {
                 setCelebrationVisible(false);
               }}
             >
-              <Text style={styles.modalButtonText}>Awesome!</Text>
+              <Text style={styles.modalButtonText}>{t('awesome')}</Text>
             </TouchableOpacity>
           </View>
         </View>

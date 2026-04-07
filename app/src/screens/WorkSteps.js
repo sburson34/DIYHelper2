@@ -4,40 +4,87 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  SafeAreaView,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  TextInput,
+  Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import Tts from 'react-native-tts';
 import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+import * as ImagePicker from 'expo-image-picker';
 import theme from '../theme';
-import { askHelper } from '../api/backendClient';
+import { askHelper, verifyStep } from '../api/backendClient';
+import { updateHoneyDoList, updateContractorList } from '../utils/storage';
+import { useTranslation } from '../i18n/I18nContext';
 
 const getStepText = (step) => typeof step === 'string' ? step : step.text;
 
 export default function WorkSteps({ navigation, route }) {
-  const { project } = route.params;
-  const [checkedSteps, setCheckedSteps] = useState(new Array(project.steps.length).fill(false));
+  const { t, language } = useTranslation();
+  const { project: initialProject, listType } = route.params;
+  const [project, setProject] = useState(initialProject);
+  const [checkedSteps, setCheckedSteps] = useState(
+    Array.isArray(initialProject.checkedSteps) && initialProject.checkedSteps.length === initialProject.steps.length
+      ? initialProject.checkedSteps
+      : new Array(initialProject.steps.length).fill(false)
+  );
+  const [stepNotes, setStepNotes] = useState(initialProject.stepNotes || {});
+  const [photos, setPhotos] = useState(initialProject.photos || []);
+  const [verifyResult, setVerifyResult] = useState({});
+  const [verifying, setVerifying] = useState(null);
+
+  // Persist updates back to storage so changes survive a reload (#2 step notes, #1 photos)
+  const persist = async (patch) => {
+    const updated = { ...project, checkedSteps, stepNotes, photos, ...patch };
+    setProject(updated);
+    if (listType === 'contractor') {
+      await updateContractorList(updated);
+    } else {
+      await updateHoneyDoList(updated);
+    }
+  };
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const [isAudioMode, setIsAudioMode] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAskingHelper, setIsAskingHelper] = useState(false);
+  const [awaitingQuestion, setAwaitingQuestion] = useState(false);
   const [lastTranscript, setLastTranscript] = useState('');
 
+  // Refs to avoid stale closures in callbacks
   const currentStepIndexRef = useRef(0);
+  const isAudioModeRef = useRef(false);
+  const isSpeakingRef = useRef(false);
+  const isAskingHelperRef = useRef(false);
+  const awaitingQuestionRef = useRef(false);
+  const checkedStepsRef = useRef(checkedSteps);
+
+  // Keep refs in sync with state
+  useEffect(() => { isAudioModeRef.current = isAudioMode; }, [isAudioMode]);
+  useEffect(() => { isSpeakingRef.current = isSpeaking; }, [isSpeaking]);
+  useEffect(() => { isAskingHelperRef.current = isAskingHelper; }, [isAskingHelper]);
+  useEffect(() => { awaitingQuestionRef.current = awaitingQuestion; }, [awaitingQuestion]);
+  useEffect(() => { checkedStepsRef.current = checkedSteps; }, [checkedSteps]);
 
   useEffect(() => {
-    Tts.addEventListener('tts-start', () => setIsSpeaking(true));
+    Tts.addEventListener('tts-start', () => {
+      setIsSpeaking(true);
+      isSpeakingRef.current = true;
+    });
     Tts.addEventListener('tts-finish', () => {
       setIsSpeaking(false);
-      if (isAudioMode) {
+      isSpeakingRef.current = false;
+      if (isAudioModeRef.current) {
         startListening();
       }
     });
-    Tts.addEventListener('tts-cancel', () => setIsSpeaking(false));
+    Tts.addEventListener('tts-cancel', () => {
+      setIsSpeaking(false);
+      isSpeakingRef.current = false;
+    });
 
     return () => {
       Tts.stop();
@@ -52,16 +99,21 @@ export default function WorkSteps({ navigation, route }) {
       Tts.stop();
       ExpoSpeechRecognitionModule.stop();
       setIsListening(false);
+      setAwaitingQuestion(false);
     }
   }, [isAudioMode]);
 
   const readCurrentStep = () => {
-    if (currentStepIndex < project.steps.length) {
-      const stepText = `Step ${currentStepIndex + 1}: ${getStepText(project.steps[currentStepIndex])}`;
+    const idx = currentStepIndexRef.current;
+    if (idx < project.steps.length) {
+      const prefix = language === 'es' ? 'Paso' : 'Step';
+      const stepText = `${prefix} ${idx + 1}: ${getStepText(project.steps[idx])}`;
       Tts.stop();
       Tts.speak(stepText);
     } else {
-      Tts.speak("Congratulations! You have completed all steps in the project blueprint.");
+      Tts.speak(language === 'es'
+        ? '¡Felicidades! Has completado todos los pasos del plano del proyecto.'
+        : 'Congratulations! You have completed all steps in the project blueprint.');
       setIsAudioMode(false);
     }
   };
@@ -73,7 +125,7 @@ export default function WorkSteps({ navigation, route }) {
 
       setIsListening(true);
       ExpoSpeechRecognitionModule.start({
-        lang: 'en-US',
+        lang: language === 'es' ? 'es-US' : 'en-US',
         interimResults: false,
       });
     } catch (err) {
@@ -89,8 +141,8 @@ export default function WorkSteps({ navigation, route }) {
 
   useSpeechRecognitionEvent('end', () => {
     setIsListening(false);
-    // If audio mode is still on and we are not speaking or asking helper, restart listening
-    if (isAudioMode && !isSpeaking && !isAskingHelper) {
+    // Restart listening if audio mode is on and we're not busy
+    if (isAudioModeRef.current && !isSpeakingRef.current && !isAskingHelperRef.current) {
       startListening();
     }
   });
@@ -98,33 +150,64 @@ export default function WorkSteps({ navigation, route }) {
   const processVoiceCommand = async (command) => {
     console.log('Voice Command:', command);
 
-    if (command.includes('done') || command.includes('complete') || command.includes('next')) {
+    // If we're awaiting a follow-up question after "Hey Helper"
+    if (awaitingQuestionRef.current) {
+      setAwaitingQuestion(false);
+      awaitingQuestionRef.current = false;
+      if (command.trim()) {
+        handleAskHelper(command.trim());
+      } else {
+        Tts.speak(language === 'es'
+          ? 'No te escuché. Di Hey Helper y luego tu pregunta.'
+          : "I didn't catch that. Say Hey Helper and then your question.");
+      }
+      return;
+    }
+
+    // Check for "repeat" to re-read the current step
+    if (command.includes('repeat') || command.includes('say that again') || command.includes('one more time') ||
+        command.includes('repite') || command.includes('repetir') || command.includes('otra vez')) {
+      readCurrentStep();
+      return;
+    }
+
+    // Check for "done" or "complete" to mark current step
+    if (command.includes('done') || command.includes('complete') ||
+        command.includes('listo') || command.includes('completo') || command.includes('terminado')) {
       handleCheckStep(currentStepIndexRef.current);
       return;
     }
 
-    if (command.includes('hey helper') || command.includes('hey, helper') || command.includes('helper')) {
-      const question = command.replace(/hey helper|hey, helper|helper/g, '').trim();
+    // Check for "Hey Helper" wake phrase
+    if (command.includes('hey helper') || command.includes('hey, helper')) {
+      const question = command.replace(/hey,?\s*helper/g, '').trim();
       if (question) {
+        // Question was included in the same utterance
         handleAskHelper(question);
       } else {
-        Tts.speak("I'm listening. What is your question?");
+        // Just said "Hey Helper" — wait for the follow-up question
+        setAwaitingQuestion(true);
+        awaitingQuestionRef.current = true;
+        Tts.speak(language === 'es'
+          ? 'Estoy escuchando. ¿Cuál es tu pregunta?'
+          : "I'm listening. What is your question?");
       }
       return;
     }
   };
 
   const handleCheckStep = (index) => {
-    const newChecked = [...checkedSteps];
+    const newChecked = [...checkedStepsRef.current];
     newChecked[index] = true;
     setCheckedSteps(newChecked);
+    checkedStepsRef.current = newChecked;
 
     if (index === currentStepIndexRef.current) {
       const nextIndex = index + 1;
       setCurrentStepIndex(nextIndex);
       currentStepIndexRef.current = nextIndex;
 
-      if (isAudioMode) {
+      if (isAudioModeRef.current) {
         setTimeout(() => {
           readCurrentStep();
         }, 1000);
@@ -133,32 +216,36 @@ export default function WorkSteps({ navigation, route }) {
   };
 
   const toggleStep = (index) => {
-    const newChecked = [...checkedSteps];
+    const newChecked = [...checkedStepsRef.current];
     newChecked[index] = !newChecked[index];
     setCheckedSteps(newChecked);
+    checkedStepsRef.current = newChecked;
 
-    // Update current step index if we manually checked the "current" one
     if (index === currentStepIndex && newChecked[index]) {
-        const nextIndex = index + 1;
-        setCurrentStepIndex(nextIndex);
-        currentStepIndexRef.current = nextIndex;
+      const nextIndex = index + 1;
+      setCurrentStepIndex(nextIndex);
+      currentStepIndexRef.current = nextIndex;
     }
   };
 
   const handleAskHelper = async (question) => {
     setIsAskingHelper(true);
+    isAskingHelperRef.current = true;
     ExpoSpeechRecognitionModule.stop();
 
     try {
-      Tts.speak("Thinking...");
-      const result = await askHelper(question, project);
+      Tts.speak(language === 'es' ? 'Déjame revisarlo.' : 'Let me check on that.');
+      const result = await askHelper(question, project, language);
       Tts.stop();
       Tts.speak(result.answer);
     } catch (error) {
-      Tts.speak("Sorry, I couldn't get an answer right now.");
+      Tts.speak(language === 'es'
+        ? 'Lo siento, no pude obtener una respuesta ahora mismo.'
+        : "Sorry, I couldn't get an answer right now.");
       console.error(error);
     } finally {
       setIsAskingHelper(false);
+      isAskingHelperRef.current = false;
     }
   };
 
@@ -171,14 +258,14 @@ export default function WorkSteps({ navigation, route }) {
           onPress={() => setIsAudioMode(!isAudioMode)}
         >
           <Icon name={isAudioMode ? "volume-high" : "volume-mute-outline"} size={24} color="#fff" />
-          <Text style={styles.audioButtonText}>{isAudioMode ? "Audio Mode ON" : "Turn on Audio Mode"}</Text>
+          <Text style={styles.audioButtonText}>{isAudioMode ? t('audio_mode_on') : t('audio_mode_off')}</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.statusCard}>
           <View style={styles.statusHeader}>
-            <Text style={styles.statusLabel}>Current Progress</Text>
+            <Text style={styles.statusLabel}>{t('current_progress')}</Text>
             <Text style={styles.progressText}>
               {checkedSteps.filter(s => s).length} / {project.steps.length}
             </Text>
@@ -199,25 +286,24 @@ export default function WorkSteps({ navigation, route }) {
                 color={isListening ? theme.colors.primary : theme.colors.textSecondary}
               />
               <Text style={styles.listeningText}>
-                {isAskingHelper ? "Helper is thinking..." : (isSpeaking ? "Speaking..." : (isListening ? "Listening for 'done' or 'Hey Helper'..." : "Standby"))}
+                {isAskingHelper ? t('helper_checking') : (isSpeaking ? t('speaking') : (awaitingQuestion ? t('listening_for_question') : (isListening ? t('listening_for_commands') : t('standby'))))}
               </Text>
             </View>
           )}
         </View>
 
-        <Text style={styles.sectionTitle}>Step-by-Step Blueprint</Text>
+        <Text style={styles.sectionTitle}>{t('step_by_step')}</Text>
 
         {project.steps.map((step, index) => (
-          <TouchableOpacity
+          <View
             key={index}
             style={[
               styles.stepCard,
               checkedSteps[index] && styles.stepCardChecked,
               currentStepIndex === index && !checkedSteps[index] && styles.stepCardCurrent
             ]}
-            onPress={() => toggleStep(index)}
           >
-            <View style={styles.stepHeader}>
+            <TouchableOpacity style={styles.stepHeader} onPress={() => toggleStep(index)}>
               <View style={[
                 styles.stepNumberBadge,
                 checkedSteps[index] && { backgroundColor: theme.colors.success },
@@ -241,15 +327,95 @@ export default function WorkSteps({ navigation, route }) {
               ]}>
                 {checkedSteps[index] && <Icon name="checkmark" size={16} color="#fff" />}
               </View>
-            </View>
-          </TouchableOpacity>
+            </TouchableOpacity>
+
+            {/* Per-step notes (#2) */}
+            <TextInput
+              style={styles.noteInput}
+              placeholder="Notes for this step..."
+              placeholderTextColor={theme.colors.textSecondary}
+              value={stepNotes[index] || ''}
+              onChangeText={(v) => {
+                const next = { ...stepNotes, [index]: v };
+                setStepNotes(next);
+              }}
+              onBlur={() => persist({ stepNotes })}
+              multiline
+            />
+
+            {/* Verify-step button (#9) */}
+            <TouchableOpacity
+              style={styles.verifyBtn}
+              onPress={async () => {
+                try {
+                  const perm = await ImagePicker.requestCameraPermissionsAsync();
+                  if (!perm.granted) { Alert.alert('Camera permission needed'); return; }
+                  const result = await ImagePicker.launchCameraAsync({ base64: true, quality: 0.5 });
+                  if (result.canceled) return;
+                  const asset = result.assets?.[0];
+                  if (!asset?.base64) return;
+                  setVerifying(index);
+                  // Save photo to project timeline (#1)
+                  const newPhoto = { uri: asset.uri, stepIndex: index, takenAt: new Date().toISOString(), phase: 'progress' };
+                  const nextPhotos = [...photos, newPhoto];
+                  setPhotos(nextPhotos);
+                  await persist({ photos: nextPhotos });
+                  const r = await verifyStep({
+                    stepText: getStepText(step),
+                    projectTitle: project.title,
+                    base64Image: asset.base64,
+                    mimeType: 'image/jpeg',
+                    language,
+                  });
+                  setVerifyResult({ ...verifyResult, [index]: r });
+                } catch (e) {
+                  Alert.alert('Verify failed', e.message);
+                } finally {
+                  setVerifying(null);
+                }
+              }}
+            >
+              {verifying === index ? <ActivityIndicator color={theme.colors.primary} /> : (
+                <>
+                  <Icon name="camera-outline" size={16} color={theme.colors.primary} />
+                  <Text style={styles.verifyBtnText}>Verify with photo</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
+            {verifyResult[index] && (
+              <View style={[
+                styles.verifyResult,
+                verifyResult[index].rating === 'good' && { backgroundColor: '#ECFDF5', borderColor: '#10B981' },
+                verifyResult[index].rating === 'needs_work' && { backgroundColor: '#FFFBEB', borderColor: '#F59E0B' },
+                verifyResult[index].rating === 'wrong' && { backgroundColor: '#FEF2F2', borderColor: '#EF4444' },
+              ]}>
+                <Text style={styles.verifyRating}>
+                  {verifyResult[index].rating?.toUpperCase()} {verifyResult[index].score ? `(${verifyResult[index].score}/10)` : ''}
+                </Text>
+                {verifyResult[index].summary && <Text style={styles.verifySummary}>{verifyResult[index].summary}</Text>}
+                {(verifyResult[index].issues || []).map((iss, i) => (
+                  <Text key={i} style={styles.verifyIssue}>• {iss}</Text>
+                ))}
+              </View>
+            )}
+
+            {/* Photos taken for this step */}
+            {photos.filter(p => p.stepIndex === index).length > 0 && (
+              <ScrollView horizontal style={{ marginTop: 8 }} showsHorizontalScrollIndicator={false}>
+                {photos.filter(p => p.stepIndex === index).map((p, i) => (
+                  <Image key={i} source={{ uri: p.uri }} style={styles.thumbnail} />
+                ))}
+              </ScrollView>
+            )}
+          </View>
         ))}
       </ScrollView>
 
       {isAskingHelper && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color={theme.colors.primary} />
-          <Text style={styles.loadingText}>Helper is finding an answer...</Text>
+          <Text style={styles.loadingText}>{t('helper_finding')}</Text>
         </View>
       )}
     </SafeAreaView>
@@ -424,4 +590,22 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: theme.colors.primary,
   },
+  noteInput: {
+    marginTop: 10, padding: 10,
+    backgroundColor: '#F8FAFC', borderRadius: 10,
+    borderWidth: 1, borderColor: '#E2E8F0',
+    minHeight: 36, color: theme.colors.text, fontSize: 13,
+  },
+  verifyBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 10, padding: 8, borderRadius: 8,
+    backgroundColor: theme.colors.primary + '10',
+    alignSelf: 'flex-start',
+  },
+  verifyBtnText: { color: theme.colors.primary, fontWeight: '700', fontSize: 12 },
+  verifyResult: { marginTop: 8, padding: 10, borderRadius: 10, borderWidth: 1 },
+  verifyRating: { fontWeight: '800', fontSize: 12, marginBottom: 4 },
+  verifySummary: { fontSize: 12, color: '#374151', marginBottom: 4 },
+  verifyIssue: { fontSize: 11, color: '#6B7280' },
+  thumbnail: { width: 60, height: 60, borderRadius: 8, marginRight: 6 },
 });

@@ -3,10 +3,11 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "android": "react-native run-android",
-    "ios": "react-native run-ios",
+    "kill-metro": "npx kill-port 8081 2>/dev/null; echo 'Port 8081 cleared'",
+    "android": "npm run kill-metro && react-native run-android",
+    "ios": "npm run kill-metro && react-native run-ios",
     "lint": "eslint .",
-    "start": "react-native start",
+    "start": "npm run kill-metro && react-native start",
     "test": "jest"
   },
   "dependencies": {
@@ -20,6 +21,9 @@
     "expo-camera": "~55.0.13",
     "expo-constants": "~55.0.9",
     "expo-image-picker": "~55.0.16",
+    "expo-notifications": "~55.0.17",
+    "expo-print": "~55.0.12",
+    "expo-sharing": "~55.0.17",
     "expo-speech-recognition": "^3.1.2",
     "react": "19.2.4",
     "react-native": "0.83.0",
