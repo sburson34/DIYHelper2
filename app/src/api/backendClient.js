@@ -232,6 +232,54 @@ const browseCommunityProjects = async (query = '') => {
   return jsonGet(url);
 };
 
+// ── External API integrations ─────────────────────────────────────
+// Each call goes through the instrumented apiFetch above so correlation IDs
+// and breadcrumbs cover the new endpoints too. Failures return sane defaults
+// where that keeps the UI from breaking on a partial outage.
+
+const getFeatures = async () => {
+  try {
+    return await jsonGet(`${BASE_URL}/api/features`);
+  } catch {
+    return { amazonPa: false, attom: false, paintColors: false, claudeFallback: false,
+             youtube: false, weather: false, reddit: true, pubchem: true, receiptOcr: false };
+  }
+};
+
+const getWeather = async (zip, days = 5) => {
+  addBreadcrumb('weather: forecast', 'external', { zip, days });
+  return jsonGet(`${BASE_URL}/api/weather?zip=${encodeURIComponent(zip)}&days=${days}`);
+};
+
+const getRedditDiscussions = async (query) => {
+  addBreadcrumb('reddit: search', 'external', { query });
+  return jsonGet(`${BASE_URL}/api/reddit-discussions?query=${encodeURIComponent(query)}`);
+};
+
+const getSafetyData = async (chemical) => {
+  addBreadcrumb('pubchem: lookup', 'external', { chemical });
+  return jsonGet(`${BASE_URL}/api/safety-data?chemical=${encodeURIComponent(chemical)}`);
+};
+
+const getPropertyValueImpact = async ({ zip, repairType, estimatedCost }) => {
+  const params = new URLSearchParams();
+  if (zip) params.append('zip', zip);
+  params.append('repairType', repairType || 'general');
+  params.append('estimatedCost', String(estimatedCost || 0));
+  addBreadcrumb('attom: value impact', 'external', { zip, repairType, estimatedCost });
+  return jsonGet(`${BASE_URL}/api/property-value-impact?${params.toString()}`);
+};
+
+const uploadReceipt = async ({ base64Image, mimeType, projectId }) => {
+  addBreadcrumb('mindee: receipt ocr', 'external', { projectId, mimeType });
+  return jsonPost(`${BASE_URL}/api/receipt-ocr`, { base64Image, mimeType, projectId });
+};
+
+const matchPaintColor = async ({ base64Image, mimeType }) => {
+  addBreadcrumb('paint: color match', 'external', { mimeType });
+  return jsonPost(`${BASE_URL}/api/paint-color-match`, { base64Image, mimeType });
+};
+
 export {
   analyzeProject,
   askHelper,
@@ -244,4 +292,11 @@ export {
   listHelpRequests,
   submitCommunityProject,
   browseCommunityProjects,
+  getFeatures,
+  getWeather,
+  getRedditDiscussions,
+  getSafetyData,
+  getPropertyValueImpact,
+  uploadReceipt,
+  matchPaintColor,
 };

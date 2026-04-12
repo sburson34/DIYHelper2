@@ -14,6 +14,7 @@ import ResultScreen from './src/screens/ResultScreen';
 import SafetyScreen from './src/screens/SafetyScreen';
 import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
+import PaintMatchScreen from './src/screens/PaintMatchScreen';
 import HoneyDo from './src/screens/HoneyDo';
 import Contractors from './src/screens/Contractors';
 import Settings from './src/screens/Settings';
@@ -27,6 +28,7 @@ import ReportProblem from './src/screens/ReportProblem';
 import theme from './src/theme';
 import { I18nProvider, useTranslation } from './src/i18n/I18nContext';
 import { ThemeProvider } from './src/ThemeContext';
+import { FeaturesProvider } from './src/config/features';
 import { requestCaptureReset } from './src/utils/captureBus';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
@@ -161,6 +163,11 @@ function CaptureStack() {
         name="WorkshopSteps"
         component={WorkSteps}
         options={{ title: t('nav_workshop_mode') }}
+      />
+      <Stack.Screen
+        name="PaintMatch"
+        component={PaintMatchScreen}
+        options={{ title: 'Paint Color Match' }}
       />
     </Stack.Navigator>
   );
@@ -455,7 +462,9 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         <I18nProvider>
-          <AppContent />
+          <FeaturesProvider>
+            <AppContent />
+          </FeaturesProvider>
         </I18nProvider>
       </ThemeProvider>
     </GestureHandlerRootView>

@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Linking, TouchableOpacity, Modal, Alert, Image } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { updateHoneyDoList, updateContractorList, removeFromHoneyDoList, removeFromContractorList } from '../utils/storage';
+import { updateHoneyDoList, updateContractorList, removeFromHoneyDoList, removeFromContractorList, getAppPrefs } from '../utils/storage';
 import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
+import { getWeather, uploadReceipt } from '../api/backendClient';
+import { cancelForProject } from '../utils/notifications';
+import * as ImagePicker from 'expo-image-picker';
 
 export default function ProjDet({ navigation, route }) {
   const { t } = useTranslation();
@@ -12,14 +15,30 @@ export default function ProjDet({ navigation, route }) {
     { id: 'tools', label: t('tab_tools'), icon: 'hammer-outline' },
     { id: 'steps', label: t('tab_steps'), icon: 'list-outline' },
     { id: 'videos', label: t('tab_videos'), icon: 'play-circle-outline' },
+    { id: 'receipts', label: 'Receipts', icon: 'receipt-outline' },
   ];
   const { project: initialProject, listType } = route.params || {};
   const [project, setProject] = useState(initialProject);
   const [celebrationVisible, setCelebrationVisible] = useState(false);
   const [activeTab, setActiveTab] = useState('steps');
+  const [weather, setWeather] = useState(null);
+  const [scanningReceipt, setScanningReceipt] = useState(false);
   const [checkedSteps, setCheckedSteps] = useState(
     initialProject?.checkedSteps || new Array(initialProject?.steps?.length || 0).fill(false)
   );
+
+  // Fetch weather only for outdoor projects with a zip on file
+  useEffect(() => {
+    if (!initialProject?.outdoor) return;
+    (async () => {
+      try {
+        const prefs = await getAppPrefs();
+        if (!prefs.zip) return;
+        const data = await getWeather(prefs.zip, 5);
+        setWeather(data);
+      } catch {}
+    })();
+  }, []);
 
   useEffect(() => {
     // Update local storage when checkedSteps change
@@ -59,6 +78,7 @@ export default function ProjDet({ navigation, route }) {
           text: t('delete'),
           style: "destructive",
           onPress: async () => {
+            try { await cancelForProject(project); } catch {}
             let success = false;
             if (listType === 'honey-do') {
               success = await removeFromHoneyDoList(project.id);
@@ -73,6 +93,53 @@ export default function ProjDet({ navigation, route }) {
       ]
     );
   };
+
+  const scanReceipt = async () => {
+    try {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Camera permission required', 'Allow camera access to scan a receipt.');
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.6,
+        base64: true,
+      });
+      if (result.canceled || !result.assets?.[0]?.base64) return;
+      setScanningReceipt(true);
+      const parsed = await uploadReceipt({
+        base64Image: result.assets[0].base64,
+        mimeType: 'image/jpeg',
+        projectId: project.id,
+      });
+      const existing = Array.isArray(project.purchasedMaterials) ? project.purchasedMaterials : [];
+      const updated = {
+        ...project,
+        purchasedMaterials: [
+          ...existing,
+          {
+            receiptId: Date.now().toString(),
+            merchant: parsed.merchant,
+            date: parsed.date,
+            total: parsed.total,
+            lineItems: parsed.lineItems || [],
+          },
+        ],
+      };
+      setProject(updated);
+      if (listType === 'honey-do') await updateHoneyDoList(updated);
+      else await updateContractorList(updated);
+      Alert.alert('Receipt saved', `${parsed.merchant || 'Merchant'} · ${parsed.lineItems?.length || 0} items · total $${parsed.total || 0}`);
+    } catch (e) {
+      Alert.alert('Receipt scan failed', e.message || 'Unknown error');
+    } finally {
+      setScanningReceipt(false);
+    }
+  };
+
+  const receiptsTotal = (project?.purchasedMaterials || [])
+    .reduce((sum, r) => sum + (Number(r.total) || 0), 0);
 
   const renderToolsTab = () => (
     <View>
@@ -133,14 +200,76 @@ export default function ProjDet({ navigation, route }) {
     <View style={styles.card}>
       <Text style={styles.sectionTitle}>{t('visual_guides')}</Text>
       {project?.youtube_links && project.youtube_links.length > 0 ? (
-        project.youtube_links.map((link, index) => (
-          <TouchableOpacity key={index} onPress={() => openLink(link)} style={styles.linkItem}>
-            <Text style={styles.linkText}>{t('watch_tutorial')} {index + 1}</Text>
-            <Icon name="play-circle-outline" size={20} color={theme.colors.danger} />
-          </TouchableOpacity>
-        ))
+        project.youtube_links.map((link, index) => {
+          if (typeof link === 'string') {
+            return (
+              <TouchableOpacity key={index} onPress={() => openLink(link)} style={styles.linkItem}>
+                <Text style={styles.linkText}>{t('watch_tutorial')} {index + 1}</Text>
+                <Icon name="play-circle-outline" size={20} color={theme.colors.danger} />
+              </TouchableOpacity>
+            );
+          }
+          const url = link.url || (link.videoId ? `https://www.youtube.com/watch?v=${link.videoId}` : null);
+          return (
+            <TouchableOpacity key={index} onPress={() => openLink(url)} style={styles.videoCard}>
+              {link.thumbnailUrl ? (
+                <Image source={{ uri: link.thumbnailUrl }} style={styles.videoThumb} />
+              ) : (
+                <View style={[styles.videoThumb, { backgroundColor: theme.colors.border, justifyContent: 'center', alignItems: 'center' }]}>
+                  <Icon name="play-circle-outline" size={30} color={theme.colors.textSecondary} />
+                </View>
+              )}
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={{ color: theme.colors.text, fontWeight: '700', fontSize: 13 }} numberOfLines={2}>
+                  {link.title || link.query || `Tutorial ${index + 1}`}
+                </Text>
+                {link.channel ? (
+                  <Text style={{ color: theme.colors.textSecondary, fontSize: 11, marginTop: 2 }} numberOfLines={1}>
+                    {link.channel}
+                  </Text>
+                ) : null}
+              </View>
+              <Icon name="play-circle" size={24} color={theme.colors.danger} />
+            </TouchableOpacity>
+          );
+        })
       ) : (
         <Text style={styles.emptyText}>{t('no_videos')}</Text>
+      )}
+    </View>
+  );
+
+  const renderReceiptsTab = () => (
+    <View style={styles.card}>
+      <Text style={styles.sectionTitle}>Receipts</Text>
+      <Text style={{ color: theme.colors.textSecondary, fontSize: 13, marginBottom: 12 }}>
+        Spent so far: ${receiptsTotal.toFixed(2)} · Estimated: {project?.estimated_cost || '—'}
+      </Text>
+      <TouchableOpacity
+        style={[styles.linkItem, { backgroundColor: theme.colors.primary + '20' }]}
+        onPress={scanReceipt}
+        disabled={scanningReceipt}
+      >
+        <Text style={[styles.linkText, { color: theme.colors.primary }]}>
+          {scanningReceipt ? 'Scanning…' : '+ Scan a receipt'}
+        </Text>
+        <Icon name="camera-outline" size={20} color={theme.colors.primary} />
+      </TouchableOpacity>
+      {(project?.purchasedMaterials || []).map((r, i) => (
+        <View key={i} style={{ padding: 12, backgroundColor: theme.colors.background, borderRadius: 10, marginBottom: 8 }}>
+          <Text style={{ color: theme.colors.text, fontWeight: '800' }}>{r.merchant || 'Receipt'}</Text>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 }}>
+            {r.date || ''} · ${Number(r.total || 0).toFixed(2)}
+          </Text>
+          {(r.lineItems || []).slice(0, 6).map((li, j) => (
+            <Text key={j} style={{ color: theme.colors.textSecondary, fontSize: 11, marginLeft: 4, marginTop: 2 }}>
+              • {li.description} {li.total ? `— $${Number(li.total).toFixed(2)}` : ''}
+            </Text>
+          ))}
+        </View>
+      ))}
+      {(!project?.purchasedMaterials || project.purchasedMaterials.length === 0) && (
+        <Text style={styles.emptyText}>No receipts yet.</Text>
       )}
     </View>
   );
@@ -168,6 +297,21 @@ export default function ProjDet({ navigation, route }) {
               <Text style={styles.infoValue}>{project?.estimated_cost || t('not_available')}</Text>
             </View>
           </View>
+
+          {weather && weather.forecast && weather.forecast.length > 0 && (
+            <View style={styles.weatherBanner}>
+              <Icon
+                name={weather.forecast.some(d => d.goodForOutdoorWork) ? 'sunny-outline' : 'rainy-outline'}
+                size={18}
+                color={weather.forecast.some(d => d.goodForOutdoorWork) ? '#047857' : '#92400E'}
+              />
+              <Text style={styles.weatherBannerText}>
+                {weather.forecast.find(d => d.goodForOutdoorWork)
+                  ? `Good weather for outdoor work on ${weather.forecast.find(d => d.goodForOutdoorWork).date}`
+                  : `No ideal outdoor days in the next ${weather.forecast.length} day forecast`}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.tabBar}>
@@ -197,6 +341,7 @@ export default function ProjDet({ navigation, route }) {
           {activeTab === 'tools' && renderToolsTab()}
           {activeTab === 'steps' && renderStepsTab()}
           {activeTab === 'videos' && renderVideosTab()}
+          {activeTab === 'receipts' && renderReceiptsTab()}
         </View>
 
         <TouchableOpacity
@@ -470,5 +615,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 20,
-  }
+  },
+  videoCard: {
+    flexDirection: 'row', alignItems: 'center',
+    padding: 10, borderRadius: 12, backgroundColor: theme.colors.background, marginBottom: 10,
+  },
+  videoThumb: { width: 96, height: 54, borderRadius: 6 },
+  weatherBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginTop: 14, padding: 10, borderRadius: 10, backgroundColor: '#ECFDF5',
+  },
+  weatherBannerText: { color: '#065F46', fontSize: 13, fontWeight: '700', flex: 1 },
 });

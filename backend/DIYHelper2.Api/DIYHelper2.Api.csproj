@@ -25,6 +25,12 @@
 
   <ItemGroup>
     <Content Include=".ebextensions\**" CopyToPublishDirectory="Always" />
+    <None Update="Data\HazardousChemicals.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Data\RepairRoi.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

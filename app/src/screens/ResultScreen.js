@@ -3,7 +3,7 @@ import { View, Text, TextInput, StyleSheet, ScrollView, Linking, TouchableOpacit
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { saveToHoneyDoList, saveToContractorList, getUserProfile, saveUserProfile, saveLocalHelpRequest, getCommunityOptIn, getAppPrefs, getToolInventory, addToInventory, removeFromInventory } from '../utils/storage';
-import { submitCommunityProject, submitHelpRequest } from '../api/backendClient';
+import { submitCommunityProject, submitHelpRequest, getRedditDiscussions, getPropertyValueImpact } from '../api/backendClient';
 import { useTranslation } from '../i18n/I18nContext';
 import { reportError, addBreadcrumb } from '../services/monitoring';
 import theme from '../theme';
@@ -27,6 +27,8 @@ export default function ResultScreen({ navigation, route }) {
   const [activeTab, setActiveTab] = useState('steps');
   const [zip, setZip] = useState('');
   const [inventory, setInventory] = useState([]);
+  const [redditThreads, setRedditThreads] = useState([]);
+  const [propertyValue, setPropertyValue] = useState(null);
 
   const loadInventory = async () => setInventory(await getToolInventory());
 
@@ -35,6 +37,18 @@ export default function ResultScreen({ navigation, route }) {
       const prefs = await getAppPrefs();
       setZip(prefs.zip || '');
       loadInventory();
+      if (project?.title) {
+        getRedditDiscussions(project.title).then(r => setRedditThreads(r.threads || [])).catch(() => {});
+      }
+      if (project?.repair_type) {
+        const costMatch = (project.estimated_cost || '').match(/\d+/g);
+        const cost = costMatch ? Number(costMatch[costMatch.length - 1]) : 0;
+        if (cost > 0) {
+          getPropertyValueImpact({ zip: prefs.zip, repairType: project.repair_type, estimatedCost: cost })
+            .then(setPropertyValue)
+            .catch(() => {});
+        }
+      }
     })();
   }, []);
 
@@ -463,17 +477,61 @@ export default function ResultScreen({ navigation, route }) {
   );
 
   const renderVideosTab = () => (
-    <View style={styles.card}>
-      <Text style={styles.sectionTitle}>{t('visual_guides')}</Text>
-      {project.youtube_links && project.youtube_links.length > 0 ? (
-        project.youtube_links.map((link, index) => (
-          <TouchableOpacity key={index} onPress={() => openLink(link)} style={styles.linkItem}>
-            <Text style={styles.linkText}>{t('watch_tutorial')} {index + 1}</Text>
-            <Icon name="play-circle-outline" size={20} color={theme.colors.danger} />
-          </TouchableOpacity>
-        ))
-      ) : (
-        <Text style={styles.emptyText}>{t('no_videos')}</Text>
+    <View>
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>{t('visual_guides')}</Text>
+        {project.youtube_links && project.youtube_links.length > 0 ? (
+          project.youtube_links.map((link, index) => {
+            // New enriched shape: { videoId, title, channel, thumbnailUrl, url }
+            // Old fallback shape: plain string URL
+            if (typeof link === 'string') {
+              return (
+                <TouchableOpacity key={index} onPress={() => openLink(link)} style={styles.linkItem}>
+                  <Text style={styles.linkText}>{t('watch_tutorial')} {index + 1}</Text>
+                  <Icon name="play-circle-outline" size={20} color={theme.colors.danger} />
+                </TouchableOpacity>
+              );
+            }
+            const url = link.url || (link.videoId ? `https://www.youtube.com/watch?v=${link.videoId}` : null);
+            return (
+              <TouchableOpacity key={index} onPress={() => openLink(url)} style={styles.videoCard}>
+                {link.thumbnailUrl ? (
+                  <Image source={{ uri: link.thumbnailUrl }} style={styles.videoThumb} />
+                ) : (
+                  <View style={[styles.videoThumb, { backgroundColor: theme.colors.border, justifyContent: 'center', alignItems: 'center' }]}>
+                    <Icon name="play-circle-outline" size={32} color={theme.colors.textSecondary} />
+                  </View>
+                )}
+                <View style={styles.videoMeta}>
+                  <Text style={styles.videoTitle} numberOfLines={2}>{link.title || link.query || 'Tutorial'}</Text>
+                  {link.channel ? <Text style={styles.videoChannel} numberOfLines={1}>{link.channel}</Text> : null}
+                </View>
+                <Icon name="play-circle" size={26} color={theme.colors.danger} />
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <Text style={styles.emptyText}>{t('no_videos')}</Text>
+        )}
+      </View>
+
+      {/* Reddit discussions panel — only rendered when upstream returned something */}
+      {redditThreads && redditThreads.length > 0 && (
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <Text style={styles.sectionTitle}>What others tried</Text>
+            <View style={{ backgroundColor: '#FF4500', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+              <Text style={{ color: 'white', fontSize: 11, fontWeight: '800' }}>Reddit</Text>
+            </View>
+          </View>
+          {redditThreads.slice(0, 5).map((r, i) => (
+            <TouchableOpacity key={i} onPress={() => openLink(r.url)} style={styles.redditItem}>
+              <Text style={styles.redditTitle} numberOfLines={2}>{r.title}</Text>
+              <Text style={styles.redditMeta}>r/{r.subreddit} · {r.upvotes} upvotes · {r.numComments} comments</Text>
+              {r.excerpt ? <Text style={styles.redditExcerpt} numberOfLines={3}>{r.excerpt}</Text> : null}
+            </TouchableOpacity>
+          ))}
+        </View>
       )}
     </View>
   );
@@ -496,6 +554,16 @@ export default function ResultScreen({ navigation, route }) {
               <Icon name="document-text" size={16} color="#92400E" />
               <Text style={styles.permitBannerText}>
                 Permit may be required. {project.permit_notes || 'Check with your local building department.'}
+              </Text>
+            </View>
+          )}
+
+          {propertyValue && propertyValue.estimatedValueAdd > 0 && (
+            <View style={styles.valueAddBanner}>
+              <Icon name="trending-up" size={16} color="#065F46" />
+              <Text style={styles.valueAddText}>
+                Adds ~${Math.round(propertyValue.estimatedValueAdd).toLocaleString()} to home value
+                {propertyValue.source === 'static' ? ' (national avg)' : ''}
               </Text>
             </View>
           )}
@@ -1205,4 +1273,24 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.secondary + '10', borderRadius: 10, marginBottom: 10,
   },
   localStoreText: { color: theme.colors.secondary, fontWeight: '700', fontSize: 13 },
+  valueAddBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: '#D1FAE5', padding: 10, borderRadius: 10, marginBottom: 12,
+  },
+  valueAddText: { color: '#065F46', fontSize: 13, fontWeight: '700', flex: 1 },
+  videoCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 10, borderRadius: 12, backgroundColor: theme.colors.background, marginBottom: 10,
+  },
+  videoThumb: { width: 96, height: 54, borderRadius: 6 },
+  videoMeta: { flex: 1 },
+  videoTitle: { color: theme.colors.text, fontWeight: '700', fontSize: 13 },
+  videoChannel: { color: theme.colors.textSecondary, fontSize: 11, marginTop: 2 },
+  redditItem: {
+    padding: 12, borderRadius: 10, backgroundColor: theme.colors.background,
+    marginBottom: 8, borderWidth: 1, borderColor: theme.colors.border,
+  },
+  redditTitle: { color: theme.colors.text, fontWeight: '700', fontSize: 14 },
+  redditMeta: { color: theme.colors.textSecondary, fontSize: 11, marginTop: 4 },
+  redditExcerpt: { color: theme.colors.textSecondary, fontSize: 12, marginTop: 6, lineHeight: 16 },
 });

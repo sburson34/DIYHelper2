@@ -13,6 +13,8 @@ using DIYHelper2.Api;
 using DIYHelper2.Api.Data;
 using DIYHelper2.Api.Models;
 using DIYHelper2.Api.Middleware;
+using DIYHelper2.Api.AI;
+using DIYHelper2.Api.Integrations;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -113,6 +115,17 @@ builder.Services.AddCors(options =>
         });
 });
 
+// External integration clients (typed HttpClients for uniform retry/timeout/logging)
+builder.Services.AddHttpClient<YouTubeClient>();
+builder.Services.AddHttpClient<WeatherClient>();
+builder.Services.AddHttpClient<RedditClient>();
+builder.Services.AddHttpClient<PubChemClient>();
+builder.Services.AddHttpClient<AttomClient>();
+builder.Services.AddHttpClient<ReceiptOcrClient>();
+builder.Services.AddSingleton<AmazonPaClient>();
+builder.Services.AddSingleton<PaintColorClient>();
+builder.Services.AddSingleton<FeatureFlags>();
+
 var app = builder.Build();
 
 // Fetch OpenAI API key from AWS Secrets Manager (or fall back to env var for local dev)
@@ -189,7 +202,34 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp =
 // In-memory community projects store (#18). Replace with DB once schema is settled.
 var communityProjects = new List<CommunityProjectDto>();
 
-app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, HttpContext context, ILogger<Program> logger) =>
+// Hazardous-chemical keyword list loaded once at startup for PubChem enrichment
+HashSet<string> hazardousChemicals;
+try
+{
+    var hazPath = Path.Combine(AppContext.BaseDirectory, "Data", "HazardousChemicals.json");
+    if (File.Exists(hazPath))
+    {
+        var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(hazPath)) ?? new();
+        hazardousChemicals = new HashSet<string>(list.Select(s => s.ToLowerInvariant()));
+    }
+    else
+    {
+        hazardousChemicals = new HashSet<string>();
+    }
+}
+catch
+{
+    hazardousChemicals = new HashSet<string>();
+}
+
+app.MapPost("/api/analyze", async (
+    [FromBody] AnalyzeProjectRequest request,
+    HttpContext context,
+    ILogger<Program> logger,
+    YouTubeClient youTube,
+    PubChemClient pubChem,
+    AmazonPaClient amazonPa,
+    FeatureFlags features) =>
 {
     try
     {
@@ -269,7 +309,7 @@ Return a JSON object with exactly these fields:
   ""difficulty"": ""easy/medium/hard"",
   ""estimated_time"": ""e.g. 2 hours"",
   ""estimated_cost"": ""e.g. $50-$100"",
-  ""youtube_links"": [""https://www.youtube.com/results?search_query=how+to+do+this+project""],
+  ""youtube_queries"": [""short search query for a helpful tutorial video"", ""second query for a different technique""],
   ""shopping_links"": [""specific product name 1"", ""specific product name 2""],
   ""safety_tips"": [""Tip 1"", ""Tip 2""],
   ""when_to_call_pro"": [""Warning 1"", ""Warning 2""],
@@ -278,7 +318,10 @@ Return a JSON object with exactly these fields:
   ""pro_cost"": ""Rough cost if hiring a pro, e.g. $200-$400"",
   ""pro_time"": ""Rough time if hiring a pro"",
   ""recommendation"": ""diy or pro — short justification"",
-  ""diy_vs_pro_summary"": ""1-2 sentence comparison""
+  ""diy_vs_pro_summary"": ""1-2 sentence comparison"",
+  ""outdoor"": false,
+  ""weather_sensitive"": false,
+  ""repair_type"": ""one of: kitchen, bathroom, roof, flooring, windows, deck, exterior_paint, interior_paint, plumbing, electrical, hvac, landscaping, garage, basement, drywall, general""
 }}
 
 IMPORTANT for steps:
@@ -291,10 +334,14 @@ IMPORTANT for shopping_links:
 - Be specific with product names so searches return relevant results. Include brand names when a specific brand matters.
 - Include every item from tools_and_materials that would need to be purchased.
 
-IMPORTANT for youtube_links:
-- ALWAYS include 2-4 YouTube search URLs relevant to the project. Use the format: https://www.youtube.com/results?search_query=<url-encoded+search+terms>
-- Make each search query specific and different (e.g. one for the overall project, one for a tricky technique, one for a tool tutorial).
-- Only omit youtube_links if the project is so unusual that no relevant video could possibly exist.";
+IMPORTANT for youtube_queries:
+- ALWAYS include 2-4 short, specific YouTube search queries relevant to the project (plain text, not URLs).
+- Make each query specific and different (e.g. one for the overall project, one for a tricky technique, one for a tool tutorial).
+
+IMPORTANT for outdoor / weather_sensitive / repair_type:
+- outdoor: true if the user will be working outside
+- weather_sensitive: true if weather conditions would affect the work (e.g. paint, concrete, roofing)
+- repair_type: pick the single best category from the enumerated list. Use ""general"" if nothing fits.";
 
         bool isSpanish = string.Equals(request.Language, "es", StringComparison.OrdinalIgnoreCase);
         string languageInstruction = isSpanish
@@ -405,11 +452,107 @@ IMPORTANT for youtube_links:
                 resultDict!["shopping_links"] = JsonSerializer.SerializeToElement(affiliateLinks);
             }
 
+            // ── YouTube enrichment: replace youtube_queries with real video metadata ──
+            try
+            {
+                var queries = new List<string>();
+                if (root.TryGetProperty("youtube_queries", out var qEl) && qEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var q in qEl.EnumerateArray())
+                        if (q.ValueKind == JsonValueKind.String) queries.Add(q.GetString() ?? "");
+                }
+                else if (root.TryGetProperty("youtube_links", out var oldEl) && oldEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var u in oldEl.EnumerateArray())
+                    {
+                        if (u.ValueKind != JsonValueKind.String) continue;
+                        var s = u.GetString() ?? "";
+                        var markerIdx = s.IndexOf("search_query=", StringComparison.OrdinalIgnoreCase);
+                        queries.Add(markerIdx >= 0
+                            ? Uri.UnescapeDataString(s.Substring(markerIdx + "search_query=".Length)).Replace('+', ' ')
+                            : s);
+                    }
+                }
+
+                if (youTube.IsConfigured && queries.Count > 0)
+                {
+                    var videos = new List<object>();
+                    foreach (var q in queries.Take(4))
+                    {
+                        var results = await youTube.SearchAsync(q, limit: 1);
+                        foreach (var v in results)
+                        {
+                            videos.Add(new
+                            {
+                                videoId = v.VideoId,
+                                title = v.Title,
+                                channel = v.Channel,
+                                thumbnailUrl = v.ThumbnailUrl,
+                                publishedAt = v.PublishedAt,
+                                url = $"https://www.youtube.com/watch?v={v.VideoId}"
+                            });
+                        }
+                    }
+                    if (videos.Count > 0)
+                        resultDict!["youtube_links"] = JsonSerializer.SerializeToElement(videos);
+                    else
+                        resultDict!["youtube_links"] = JsonSerializer.SerializeToElement(
+                            queries.Select(q => new { query = q, url = $"https://www.youtube.com/results?search_query={Uri.EscapeDataString(q)}" }));
+                }
+                else if (queries.Count > 0)
+                {
+                    resultDict!["youtube_links"] = JsonSerializer.SerializeToElement(
+                        queries.Select(q => new { query = q, url = $"https://www.youtube.com/results?search_query={Uri.EscapeDataString(q)}" }));
+                }
+            }
+            catch (Exception ytEx)
+            {
+                logger.LogWarning(ytEx, "YouTube enrichment failed");
+            }
+
+            // ── PubChem enrichment: surface hazard data for recognized hazardous materials ──
+            try
+            {
+                if (root.TryGetProperty("tools_and_materials", out var toolsEl) && toolsEl.ValueKind == JsonValueKind.Array)
+                {
+                    var pubchemResults = new List<object>();
+                    var seen = new HashSet<string>();
+                    foreach (var tool in toolsEl.EnumerateArray())
+                    {
+                        if (tool.ValueKind != JsonValueKind.String) continue;
+                        var text = tool.GetString()?.ToLowerInvariant() ?? "";
+                        foreach (var chem in hazardousChemicals)
+                        {
+                            if (!text.Contains(chem) || !seen.Add(chem)) continue;
+                            var data = await pubChem.LookupAsync(chem);
+                            if (data is null) continue;
+                            pubchemResults.Add(new
+                            {
+                                chemical = data.Chemical,
+                                cid = data.Cid,
+                                hazards = data.Hazards,
+                                pictograms = data.GhsPictograms,
+                                firstAid = data.FirstAid,
+                                storage = data.Storage,
+                            });
+                            if (pubchemResults.Count >= 5) break;
+                        }
+                        if (pubchemResults.Count >= 5) break;
+                    }
+                    if (pubchemResults.Count > 0)
+                        resultDict!["pubchem_safety"] = JsonSerializer.SerializeToElement(pubchemResults);
+                }
+            }
+            catch (Exception pcEx)
+            {
+                logger.LogWarning(pcEx, "PubChem enrichment failed");
+            }
+
             return Results.Ok(resultDict);
         }
         catch (JsonException)
         {
-            // Shopping link post-processing failed — return the AI result as-is.
+            // Shopping link / enrichment post-processing failed — return the AI result as-is.
             return Results.Ok(resultDict);
         }
     }
@@ -758,6 +901,117 @@ app.MapGet("/api/emergency", () =>
     });
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+// External-API integration endpoints
+// ══════════════════════════════════════════════════════════════════════════
+
+// ── Feature flags (frontend polls this on boot) ────────────────────
+app.MapGet("/api/features", (FeatureFlags flags) => Results.Ok(flags.ToPublicJson()));
+
+// ── Weather forecast for an outdoor project ────────────────────────
+app.MapGet("/api/weather", async ([FromQuery] string zip, [FromQuery] int? days, WeatherClient weather) =>
+{
+    if (string.IsNullOrWhiteSpace(zip))
+        return Results.Json(new { error = "zip query parameter is required." }, statusCode: 400);
+    if (!weather.IsConfigured)
+        return Results.Json(new { error = "Weather service not configured.", configured = false }, statusCode: 503);
+    var forecast = await weather.GetForecastAsync(zip, days ?? 5);
+    if (forecast is null)
+        return Results.Json(new { error = "Weather lookup failed." }, statusCode: 502);
+    return Results.Ok(forecast);
+});
+
+// ── Reddit community discussions ───────────────────────────────────
+app.MapGet("/api/reddit-discussions", async ([FromQuery] string query, RedditClient reddit) =>
+{
+    if (string.IsNullOrWhiteSpace(query))
+        return Results.Json(new { error = "query parameter is required." }, statusCode: 400);
+    var threads = await reddit.SearchAsync(query);
+    return Results.Ok(new { threads });
+});
+
+// ── PubChem safety data for a single chemical ──────────────────────
+app.MapGet("/api/safety-data", async ([FromQuery] string chemical, PubChemClient pubChem) =>
+{
+    if (string.IsNullOrWhiteSpace(chemical))
+        return Results.Json(new { error = "chemical parameter is required." }, statusCode: 400);
+    var data = await pubChem.LookupAsync(chemical);
+    if (data is null)
+        return Results.Json(new { error = "Chemical not found or PubChem unavailable." }, statusCode: 404);
+    return Results.Ok(new
+    {
+        chemical = data.Chemical,
+        cid = data.Cid,
+        hazards = data.Hazards,
+        pictograms = data.GhsPictograms,
+        firstAid = data.FirstAid,
+        storage = data.Storage,
+    });
+});
+
+// ── Property-value impact (ATTOM or static fallback) ───────────────
+app.MapGet("/api/property-value-impact", async (
+    [FromQuery] string? zip,
+    [FromQuery] string repairType,
+    [FromQuery] double estimatedCost,
+    AttomClient attom,
+    FeatureFlags features) =>
+{
+    if (string.IsNullOrWhiteSpace(repairType))
+        return Results.Json(new { error = "repairType parameter is required." }, statusCode: 400);
+    var impact = await attom.EstimateAsync(zip ?? "", repairType, estimatedCost);
+    if (impact is null)
+        return Results.Json(new { error = "Property value lookup failed." }, statusCode: 502);
+    return Results.Ok(new
+    {
+        estimatedValueAdd = impact.EstimatedValueAdd,
+        confidence = impact.Confidence,
+        source = impact.Source,
+        attomEnabled = features.Attom,
+    });
+});
+
+// ── Receipt OCR (Mindee) ───────────────────────────────────────────
+app.MapPost("/api/receipt-ocr", async ([FromBody] ReceiptOcrRequest req, ReceiptOcrClient ocr) =>
+{
+    if (!ocr.IsConfigured)
+        return Results.Json(new { error = "Receipt OCR not configured." }, statusCode: 503);
+    if (string.IsNullOrWhiteSpace(req.Base64Image))
+        return Results.Json(new { error = "base64Image is required." }, statusCode: 400);
+    byte[] data;
+    try { data = Convert.FromBase64String(req.Base64Image); }
+    catch { return Results.Json(new { error = "base64Image is not valid base64." }, statusCode: 400); }
+
+    var parsed = await ocr.ParseAsync(data, req.MimeType ?? "image/jpeg");
+    if (parsed is null)
+        return Results.Json(new { error = "Receipt OCR failed." }, statusCode: 502);
+    return Results.Ok(new
+    {
+        merchant = parsed.Merchant,
+        date = parsed.Date,
+        total = parsed.Total,
+        lineItems = parsed.LineItems,
+    });
+});
+
+// ── Paint color match ──────────────────────────────────────────────
+app.MapPost("/api/paint-color-match", ([FromBody] PaintColorRequest req, PaintColorClient paint, FeatureFlags features) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Base64Image))
+        return Results.Json(new { error = "base64Image is required." }, statusCode: 400);
+    byte[] data;
+    try { data = Convert.FromBase64String(req.Base64Image); }
+    catch { return Results.Json(new { error = "base64Image is not valid base64." }, statusCode: 400); }
+
+    var result = paint.Match(data);
+    return Results.Ok(new
+    {
+        dominantHex = result.DominantHex,
+        matches = result.Matches,
+        source = features.PaintColors ? "brand-api" : "bundled-palette",
+    });
+});
+
 app.Run();
 
 public record VerifyStepRequest(
@@ -818,6 +1072,17 @@ public record MediaItem(
     [property: JsonPropertyName("base64")] string? Base64,
     [property: JsonPropertyName("mimeType")] string? MimeType,
     [property: JsonPropertyName("type")] string? Type
+);
+
+public record ReceiptOcrRequest(
+    [property: JsonPropertyName("base64Image")] string? Base64Image,
+    [property: JsonPropertyName("mimeType")] string? MimeType,
+    [property: JsonPropertyName("projectId")] string? ProjectId
+);
+
+public record PaintColorRequest(
+    [property: JsonPropertyName("base64Image")] string? Base64Image,
+    [property: JsonPropertyName("mimeType")] string? MimeType
 );
 
 public record CreateFeedbackDto(

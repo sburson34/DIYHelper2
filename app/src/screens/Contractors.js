@@ -2,15 +2,25 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { getContractorList, removeFromContractorList } from '../utils/storage';
+import { getContractorList, removeFromContractorList, getAppPrefs } from '../utils/storage';
+import { getPropertyValueImpact } from '../api/backendClient';
+import { cancelForProject } from '../utils/notifications';
 import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
+
+const parseCost = (s) => {
+  const matches = (s || '').match(/\d+/g);
+  if (!matches || matches.length === 0) return 0;
+  const nums = matches.map(Number);
+  return nums.length === 1 ? nums[0] : (nums[0] + nums[nums.length - 1]) / 2;
+};
 
 export default function Contractors({ navigation }) {
   const { t } = useTranslation();
   const [items, setItems] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState('');
+  const [roiByProject, setRoiByProject] = useState({});
 
   const filtered = useMemo(() => {
     if (!search.trim()) return items;
@@ -43,6 +53,25 @@ export default function Contractors({ navigation }) {
     const list = await getContractorList();
     setItems(list || []);
     setRefreshing(false);
+
+    try {
+      const prefs = await getAppPrefs();
+      const next = {};
+      for (const p of list || []) {
+        if (!p.repair_type) continue;
+        const cost = parseCost(p.estimated_cost);
+        if (!cost) continue;
+        try {
+          const impact = await getPropertyValueImpact({
+            zip: prefs.zip,
+            repairType: p.repair_type,
+            estimatedCost: cost,
+          });
+          next[p.id] = impact;
+        } catch {}
+      }
+      setRoiByProject(next);
+    } catch {}
   };
 
   const handleDelete = (id) => {
@@ -55,6 +84,8 @@ export default function Contractors({ navigation }) {
           text: t('remove'),
           style: "destructive",
           onPress: async () => {
+            const target = items.find(p => p.id === id);
+            if (target) { try { await cancelForProject(target); } catch {} }
             const success = await removeFromContractorList(id);
             if (success) {
               loadItems();
@@ -115,6 +146,14 @@ export default function Contractors({ navigation }) {
                   <Icon name="cash-outline" size={14} color={theme.colors.secondary} style={{ marginRight: 4 }} />
                   <Text style={[styles.badgeText, { color: theme.colors.secondary }]}>{t('est_cost')}: {item.estimated_cost || t('not_available')}</Text>
                 </View>
+                {roiByProject[item.id] && roiByProject[item.id].estimatedValueAdd > 0 && (
+                  <View style={[styles.badge, { backgroundColor: '#D1FAE5' }]}>
+                    <Icon name="trending-up" size={14} color="#065F46" style={{ marginRight: 4 }} />
+                    <Text style={[styles.badgeText, { color: '#065F46' }]}>
+                      +${Math.round(roiByProject[item.id].estimatedValueAdd).toLocaleString()} value
+                    </Text>
+                  </View>
+                )}
               </View>
             </TouchableOpacity>
             <TouchableOpacity

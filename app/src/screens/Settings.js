@@ -7,6 +7,7 @@ import {
   getAppPrefs, setAppPrefs,
   getCommunityOptIn, setCommunityOptIn,
 } from '../utils/storage';
+import { requestPermissions as requestNotificationPermissions } from '../utils/notifications';
 import { useTranslation } from '../i18n/I18nContext';
 import { useAppTheme } from '../ThemeContext';
 import theme from '../theme';
@@ -160,7 +161,19 @@ export default function Settings() {
               <Text style={styles.toggleLabel}>Reminders</Text>
               <Text style={styles.toggleSub}>Notify me about unfinished projects.</Text>
             </View>
-            <Switch value={reminders} onValueChange={setReminders} />
+            <Switch
+              value={reminders}
+              onValueChange={async (val) => {
+                setReminders(val);
+                if (val) {
+                  const granted = await requestNotificationPermissions();
+                  if (!granted) {
+                    Alert.alert('Permission denied', 'Enable notifications in system settings to receive reminders.');
+                    setReminders(false);
+                  }
+                }
+              }}
+            />
           </View>
 
           <View style={styles.toggleRow}>

@@ -37,6 +37,7 @@ export default function SafetyScreen({ navigation, route }) {
 
   const safetyTips = project?.safety_tips || defaultSafetyTips;
   const whenToCallPro = project?.when_to_call_pro || defaultWhenToCallPro;
+  const chemicalHazards = project?.pubchem_safety || [];
 
   return (
     <SafeAreaView style={styles.container}>
@@ -67,6 +68,35 @@ export default function SafetyScreen({ navigation, route }) {
             ))}
           </View>
         </View>
+
+        {chemicalHazards.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionHeader}>
+              <View style={[styles.miniIconCircle, { backgroundColor: '#FEF2F2' }]}>
+                <Icon name="flask" size={20} color="#B91C1C" />
+              </View>
+              <Text style={styles.sectionTitle}>Chemical Hazards</Text>
+            </View>
+            <View style={[styles.card, styles.proCard]}>
+              <Text style={{ color: '#7F1D1D', fontSize: 12, marginBottom: 12, fontStyle: 'italic' }}>
+                Sourced from NIH PubChem for materials listed in this project.
+              </Text>
+              {chemicalHazards.map((h, i) => (
+                <View key={i} style={{ marginBottom: 14, paddingBottom: 12, borderBottomWidth: i < chemicalHazards.length - 1 ? 1 : 0, borderBottomColor: '#FEE2E2' }}>
+                  <Text style={{ fontWeight: '800', color: '#991B1B', fontSize: 15, marginBottom: 6, textTransform: 'capitalize' }}>
+                    {h.chemical}
+                  </Text>
+                  {(h.hazards || []).slice(0, 5).map((hz, j) => (
+                    <View key={j} style={styles.listItem}>
+                      <View style={[styles.dot, { backgroundColor: '#B91C1C' }]} />
+                      <Text style={styles.itemText}>{hz}</Text>
+                    </View>
+                  ))}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
 
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
