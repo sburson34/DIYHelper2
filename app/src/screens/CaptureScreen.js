@@ -5,6 +5,10 @@ import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-spe
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { analyzeProject, submitHelpRequest, getClarifyingQuestions } from '../api/backendClient';
 import { reportError, reportHandledError, addBreadcrumb } from '../services/monitoring';
+import { labelImage } from '../mlkit/imageLabeling';
+import ImageLabelsChip from '../components/ImageLabelsChip';
+import { extractEntities } from '../mlkit/entityExtraction';
+import ExtractedEntitiesBar from '../components/ExtractedEntitiesBar';
 import { getUserProfile, saveLocalHelpRequest, getMostRecentProject } from '../utils/storage';
 import { subscribeReset } from '../utils/captureBus';
 import { useTranslation } from '../i18n/I18nContext';
@@ -26,6 +30,19 @@ export default function CaptureScreen({ navigation, route }) {
   const [clarifyQuestions, setClarifyQuestions] = useState(null);
   const [isClarifying, setIsClarifying] = useState(false);
   const [clarifyAnswers, setClarifyAnswers] = useState({});
+  const [extractedEntities, setExtractedEntities] = useState([]);
+
+  // Debounced entity extraction on description changes
+  useEffect(() => {
+    if (!description || description.length < 10) {
+      setExtractedEntities([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      extractEntities(description).then(setExtractedEntities);
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [description]);
 
   // Ref tracks the latest transcript so the 'end' handler always sees the
   // most recent value, even if React hasn't re-rendered yet.
@@ -115,13 +132,23 @@ export default function CaptureScreen({ navigation, route }) {
     if (!cameraRef.current) return;
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.5, base64: true });
-      setMedia((prev) => [...prev, {
+      const mediaItem = {
         uri: photo.uri,
         type: 'photo',
         base64: photo.base64,
         mimeType: 'image/jpeg',
-      }]);
+        labels: [],
+      };
+      setMedia((prev) => [...prev, mediaItem]);
       setShowCamera(false);
+      // Run ML Kit image labeling in background (non-blocking)
+      labelImage(photo.base64).then((labels) => {
+        if (labels.length > 0) {
+          setMedia((prev) => prev.map(m =>
+            m.uri === photo.uri ? { ...m, labels } : m
+          ));
+        }
+      });
     } catch (err) {
       Alert.alert(t('camera_error'), err.message);
     }
@@ -199,7 +226,8 @@ export default function CaptureScreen({ navigation, route }) {
         uri: m.uri,
         base64: m.base64,
         mimeType: m.mimeType,
-        type: m.type
+        type: m.type,
+        labels: m.labels || [],
       }));
       const fullDesc = extraDescription ? `${description}\n\n${extraDescription}` : description;
       addBreadcrumb('Starting project analysis', 'user.action', {
@@ -372,9 +400,20 @@ export default function CaptureScreen({ navigation, route }) {
                     >
                       <Icon name="close-circle" size={20} color={theme.colors.danger} />
                     </TouchableOpacity>
+                    {m.type === 'photo' && (
+                      <TouchableOpacity
+                        style={styles.annotateMedia}
+                        onPress={() => navigation.navigate('Annotate', { photoUri: m.uri, mediaIndex: i })}
+                      >
+                        <Icon name="brush-outline" size={14} color="#fff" />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 ))}
               </ScrollView>
+              {media.some(m => m.labels && m.labels.length > 0) && (
+                <ImageLabelsChip labels={media.flatMap(m => m.labels || []).filter((v, i, a) => a.findIndex(x => x.label === v.label) === i)} />
+              )}
             </View>
           )}
         </View>
@@ -416,6 +455,8 @@ export default function CaptureScreen({ navigation, route }) {
             </View>
             <Text style={styles.stepTitle}>{t('capture_step3')}</Text>
           </View>
+
+          <ExtractedEntitiesBar entities={extractedEntities} />
 
           <TouchableOpacity
             style={[styles.analyzeButtonHome, (isAnalyzing || isClarifying || (!description && media.length === 0)) && styles.disabledButton]}
@@ -631,6 +672,14 @@ const styles = StyleSheet.create({
     right: -5,
     backgroundColor: '#fff',
     borderRadius: 10,
+  },
+  annotateMedia: {
+    position: 'absolute',
+    bottom: 2,
+    right: 2,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    borderRadius: 10,
+    padding: 4,
   },
   voiceButtonHome: {
     backgroundColor: theme.colors.secondary,

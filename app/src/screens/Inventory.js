@@ -1,11 +1,12 @@
 // Tool inventory screen (#5, #8). Lets the user maintain a list of tools/materials they own
 // so the AI analyzer can deduct them from shopping lists.
-import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Alert, Modal } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermissions } from 'expo-camera';
 import { getToolInventory, addToInventory, removeFromInventory } from '../utils/storage';
+import BarcodeScannerModal from '../components/BarcodeScannerModal';
 import theme from '../theme';
 
 export default function Inventory({ navigation }) {
@@ -13,7 +14,6 @@ export default function Inventory({ navigation }) {
   const [text, setText] = useState('');
   const [scannerVisible, setScannerVisible] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const scannedRef = useRef(false); // debounce: barcodes fire rapidly
 
   const load = async () => setItems(await getToolInventory());
 
@@ -37,7 +37,6 @@ export default function Inventory({ navigation }) {
     ]);
   };
 
-  // Barcode scanner (#8). Uses expo-camera's built-in scanner — no extra package needed.
   const scanBarcode = async () => {
     if (!cameraPermission?.granted) {
       const { granted } = await requestCameraPermission();
@@ -46,18 +45,15 @@ export default function Inventory({ navigation }) {
         return;
       }
     }
-    scannedRef.current = false;
     setScannerVisible(true);
   };
 
-  const onBarcodeScanned = ({ data, type }) => {
-    if (scannedRef.current) return;
-    scannedRef.current = true;
+  const onBarcodeScanned = ({ data, format }) => {
     setScannerVisible(false);
     Alert.prompt
       ? Alert.prompt(
           'Add to inventory',
-          `Scanned ${type}: ${data}\n\nWhat is this item called?`,
+          `Scanned ${format}: ${data}\n\nWhat is this item called?`,
           async (name) => {
             if (name && name.trim()) {
               await addToInventory({ name: name.trim(), barcode: data });
@@ -66,7 +62,6 @@ export default function Inventory({ navigation }) {
           }
         )
       : (async () => {
-          // Android: Alert.prompt isn't available, so save with the barcode as the name.
           await addToInventory({ name: data, barcode: data });
           load();
           Alert.alert('Added', `Saved barcode ${data}. Tap it in the list to rename.`);
@@ -115,27 +110,11 @@ export default function Inventory({ navigation }) {
           </View>
         )}
       />
-      <Modal visible={scannerVisible} animationType="slide">
-        <View style={styles.scannerContainer}>
-          <CameraView
-            style={styles.scannerCamera}
-            facing="back"
-            barcodeScannerSettings={{
-              barcodeTypes: ['qr', 'ean13', 'ean8', 'upc_a', 'upc_e', 'code39', 'code128', 'codabar', 'itf14'],
-            }}
-            onBarcodeScanned={scannerVisible ? onBarcodeScanned : undefined}
-          >
-            <View style={styles.scannerOverlay}>
-              <Text style={styles.scannerHint}>Point at a barcode</Text>
-              <View style={styles.scannerBox} />
-              <TouchableOpacity style={styles.scannerClose} onPress={() => setScannerVisible(false)}>
-                <Icon name="close" size={28} color="#fff" />
-                <Text style={styles.scannerCloseText}>Cancel</Text>
-              </TouchableOpacity>
-            </View>
-          </CameraView>
-        </View>
-      </Modal>
+      <BarcodeScannerModal
+        visible={scannerVisible}
+        onScanned={onBarcodeScanned}
+        onClose={() => setScannerVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -168,14 +147,4 @@ const styles = StyleSheet.create({
   removeBtn: { padding: 6 },
   empty: { alignItems: 'center', marginTop: 60, padding: 40 },
   emptyText: { textAlign: 'center', color: theme.colors.textSecondary, marginTop: 12, fontSize: 14, lineHeight: 20 },
-  scannerContainer: { flex: 1, backgroundColor: '#000' },
-  scannerCamera: { flex: 1 },
-  scannerOverlay: { flex: 1, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
-  scannerHint: { color: '#fff', fontSize: 16, fontWeight: '700', marginBottom: 20, backgroundColor: 'rgba(0,0,0,0.5)', padding: 10, borderRadius: 8 },
-  scannerBox: { width: 260, height: 160, borderWidth: 3, borderColor: '#FCA004', borderRadius: 12 },
-  scannerClose: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 40,
-    backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 24, paddingVertical: 14, borderRadius: 100,
-  },
-  scannerCloseText: { color: '#fff', fontWeight: '700' },
 });

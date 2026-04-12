@@ -1,14 +1,18 @@
 // Aggregated shopping list across all active honey-do projects (#6, #7).
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Linking } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, Linking, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { getHoneyDoList, getShoppingBought, setShoppingBought, getToolInventory } from '../utils/storage';
+import { useCameraPermissions } from 'expo-camera';
+import { getHoneyDoList, getShoppingBought, setShoppingBought, getToolInventory, findInventoryByBarcode } from '../utils/storage';
+import BarcodeScannerModal from '../components/BarcodeScannerModal';
 import theme from '../theme';
 
 export default function ShoppingList({ navigation }) {
   const [items, setItems] = useState([]);
   const [bought, setBought] = useState({});
+  const [scannerVisible, setScannerVisible] = useState(false);
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
 
   const load = async () => {
     const projects = await getHoneyDoList();
@@ -49,12 +53,54 @@ export default function ShoppingList({ navigation }) {
     await setShoppingBought(key, next);
   };
 
+  const openScanner = async () => {
+    if (!cameraPermission?.granted) {
+      const { granted } = await requestCameraPermission();
+      if (!granted) {
+        Alert.alert('Permission denied', 'Camera permission is needed to scan barcodes.');
+        return;
+      }
+    }
+    setScannerVisible(true);
+  };
+
+  const onBarcodeScanCheckOff = async ({ data }) => {
+    setScannerVisible(false);
+    // Try to match barcode against inventory items, then check off matching shopping items
+    const inventoryItem = await findInventoryByBarcode(data);
+    if (inventoryItem) {
+      const key = inventoryItem.name.toLowerCase();
+      const match = items.find(i => i.key === key || i.name.toLowerCase().includes(key));
+      if (match && !bought[match.key]) {
+        setBought({ ...bought, [match.key]: true });
+        await setShoppingBought(match.key, true);
+        Alert.alert('Checked off', `"${match.name}" matched via barcode and marked as bought.`);
+        return;
+      }
+    }
+    // Fuzzy match: check if barcode data matches any item name
+    const fuzzy = items.find(i => !bought[i.key] && (i.name.toLowerCase().includes(data.toLowerCase()) || data.toLowerCase().includes(i.name.toLowerCase())));
+    if (fuzzy) {
+      setBought({ ...bought, [fuzzy.key]: true });
+      await setShoppingBought(fuzzy.key, true);
+      Alert.alert('Checked off', `"${fuzzy.name}" marked as bought.`);
+      return;
+    }
+    Alert.alert('No match', `Barcode "${data}" didn't match any item on your list.`);
+  };
+
   const remaining = items.filter(i => !bought[i.key]).length;
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Shopping List</Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+          <Text style={styles.title}>Shopping List</Text>
+          <TouchableOpacity onPress={openScanner} style={styles.scanBtn}>
+            <Icon name="barcode-outline" size={20} color={theme.colors.secondary} />
+            <Text style={styles.scanBtnText}>Scan</Text>
+          </TouchableOpacity>
+        </View>
         <Text style={styles.subtitle}>{remaining} item{remaining === 1 ? '' : 's'} remaining across all projects</Text>
       </View>
       <FlatList
@@ -88,6 +134,11 @@ export default function ShoppingList({ navigation }) {
           </View>
         )}
       />
+      <BarcodeScannerModal
+        visible={scannerVisible}
+        onScanned={onBarcodeScanCheckOff}
+        onClose={() => setScannerVisible(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -108,6 +159,12 @@ const styles = StyleSheet.create({
   itemNameDone: { textDecorationLine: 'line-through' },
   itemMeta: { fontSize: 11, color: theme.colors.textSecondary, marginTop: 2 },
   linkBtn: { padding: 8 },
+  scanBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border,
+    paddingHorizontal: 12, paddingVertical: 8, borderRadius: theme.roundness.medium,
+  },
+  scanBtnText: { fontSize: 13, fontWeight: '600', color: theme.colors.secondary },
   empty: { alignItems: 'center', marginTop: 60, padding: 40 },
   emptyText: { textAlign: 'center', color: theme.colors.textSecondary, marginTop: 12, fontSize: 14, lineHeight: 20 },
 });

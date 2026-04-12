@@ -11,6 +11,13 @@ const DEFAULT_FEATURES = {
   reddit: true,
   pubchem: true,
   receiptOcr: false,
+  // ML Kit features (on-device)
+  barcodeScanner: false,
+  imageLabeling: false,
+  onDeviceTranslation: false,
+  digitalInk: false,
+  entityExtraction: false,
+  poseDetection: false,
 };
 
 const FeaturesContext = createContext(DEFAULT_FEATURES);

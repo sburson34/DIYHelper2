@@ -13,10 +13,12 @@ import { useAppTheme } from '../ThemeContext';
 import theme from '../theme';
 import { reportError, reportHandledError, reportWarning, addBreadcrumb } from '../services/monitoring';
 import { Sentry } from '../services/sentry';
+import { useMLTranslation } from '../mlkit/TranslationProvider';
 
 export default function Settings() {
   const { t, language, setLanguage } = useTranslation();
   const { isDark, toggleDark } = useAppTheme();
+  const { available: translationAvailable, isModelReady, isDownloading, downloadModel } = useMLTranslation();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -214,6 +216,22 @@ export default function Settings() {
                 </Text>
               </TouchableOpacity>
             </View>
+            {translationAvailable && (
+              <TouchableOpacity
+                style={[styles.langButton, { marginTop: 12, flexDirection: 'row', gap: 6, alignItems: 'center' }]}
+                onPress={downloadModel}
+                disabled={isModelReady || isDownloading}
+              >
+                <Icon
+                  name={isModelReady ? 'checkmark-circle' : isDownloading ? 'cloud-download-outline' : 'download-outline'}
+                  size={18}
+                  color={isModelReady ? theme.colors.success : theme.colors.secondary}
+                />
+                <Text style={[styles.langButtonText, isModelReady && { color: theme.colors.success }]}>
+                  {isModelReady ? 'Offline translation ready' : isDownloading ? 'Downloading...' : 'Download Spanish language pack'}
+                </Text>
+              </TouchableOpacity>
+            )}
           </View>
 
           {__DEV__ ? (

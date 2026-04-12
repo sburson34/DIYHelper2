@@ -279,10 +279,28 @@ app.MapPost("/api/analyze", async (
             ? $"\nThe user already owns the following tools/materials, so you should NOT include them in shopping_links (but still mention them in tools_and_materials with a marker like '(owned)'): {string.Join(", ", request.OwnedTools)}."
             : "";
 
+        // ML Kit on-device labels from the mobile app's image labeling
+        var allLabels = (request.Media ?? Array.Empty<MediaItem>())
+            .Where(m => m.Labels != null && m.Labels.Length > 0)
+            .SelectMany(m => m.Labels!)
+            .Distinct()
+            .ToArray();
+        string mlLabelsClause = allLabels.Length > 0
+            ? $"\nML Kit detected the following in the photos: {string.Join(", ", allLabels)}. Use this context to focus your analysis."
+            : "";
+
+        // Entity extraction results from on-device ML Kit
+        var entities = (request.ExtractedEntities ?? Array.Empty<ExtractedEntity>())
+            .Where(e => !string.IsNullOrWhiteSpace(e.Text))
+            .ToArray();
+        string entitiesClause = entities.Length > 0
+            ? $"\nStructured data extracted from description: {string.Join("; ", entities.Select(e => $"{e.Type}: {e.Text}"))}. Incorporate these values where relevant (e.g. measurements in steps, costs in estimates)."
+            : "";
+
         string textContent = $@"I want to do a DIY project. {(string.IsNullOrEmpty(request.Description) ? "Please analyze the media." : $"Description: \"{request.Description}\"")}
 
 {imageRef}
-{skillClause}{zipClause}{ownedClause}
+{skillClause}{zipClause}{ownedClause}{mlLabelsClause}{entitiesClause}
 
 Return a JSON object with exactly these fields:
 {{
@@ -1064,14 +1082,21 @@ public record AnalyzeProjectRequest(
     [property: JsonPropertyName("language")] string? Language,
     [property: JsonPropertyName("skillLevel")] string? SkillLevel,
     [property: JsonPropertyName("zip")] string? Zip,
-    [property: JsonPropertyName("ownedTools")] string[]? OwnedTools
+    [property: JsonPropertyName("ownedTools")] string[]? OwnedTools,
+    [property: JsonPropertyName("extractedEntities")] ExtractedEntity[]? ExtractedEntities
+);
+
+public record ExtractedEntity(
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("text")] string? Text
 );
 
 public record MediaItem(
     [property: JsonPropertyName("uri")] string? Url,
     [property: JsonPropertyName("base64")] string? Base64,
     [property: JsonPropertyName("mimeType")] string? MimeType,
-    [property: JsonPropertyName("type")] string? Type
+    [property: JsonPropertyName("type")] string? Type,
+    [property: JsonPropertyName("labels")] string[]? Labels
 );
 
 public record ReceiptOcrRequest(

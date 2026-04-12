@@ -199,6 +199,12 @@ export const removeFromInventory = async (id) => {
   return true;
 };
 
+export const findInventoryByBarcode = async (barcode) => {
+  if (!barcode) return null;
+  const list = await getToolInventory();
+  return list.find(i => i.barcode && i.barcode === barcode) || null;
+};
+
 // ── Shopping bought-state map (#6) ──────────────────────────────────
 export const getShoppingBought = async () => {
   try {

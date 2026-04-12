@@ -15,6 +15,8 @@ import SafetyScreen from './src/screens/SafetyScreen';
 import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
 import PaintMatchScreen from './src/screens/PaintMatchScreen';
+import AnnotateScreen from './src/screens/AnnotateScreen';
+import WorkshopARScreen from './src/screens/WorkshopARScreen';
 import HoneyDo from './src/screens/HoneyDo';
 import Contractors from './src/screens/Contractors';
 import Settings from './src/screens/Settings';
@@ -29,6 +31,7 @@ import theme from './src/theme';
 import { I18nProvider, useTranslation } from './src/i18n/I18nContext';
 import { ThemeProvider } from './src/ThemeContext';
 import { FeaturesProvider } from './src/config/features';
+import { TranslationProvider } from './src/mlkit/TranslationProvider';
 import { requestCaptureReset } from './src/utils/captureBus';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
@@ -168,6 +171,16 @@ function CaptureStack() {
         name="PaintMatch"
         component={PaintMatchScreen}
         options={{ title: 'Paint Color Match' }}
+      />
+      <Stack.Screen
+        name="Annotate"
+        component={AnnotateScreen}
+        options={{ title: 'Annotate Photo', headerShown: false }}
+      />
+      <Stack.Screen
+        name="WorkshopAR"
+        component={WorkshopARScreen}
+        options={{ title: 'AR Guide', headerShown: false }}
       />
     </Stack.Navigator>
   );
@@ -463,7 +476,9 @@ export default function App() {
       <ThemeProvider>
         <I18nProvider>
           <FeaturesProvider>
-            <AppContent />
+            <TranslationProvider targetLang="es">
+              <AppContent />
+            </TranslationProvider>
           </FeaturesProvider>
         </I18nProvider>
       </ThemeProvider>

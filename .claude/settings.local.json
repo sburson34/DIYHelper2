@@ -50,5 +50,20 @@
       "Bash(adb reverse:*)",
       "Bash(keytool -genkeypair -v -storetype PKCS12 -keystore diyhelper-release.keystore -alias diyhelper -keyalg RSA -keysize 2048 -validity 10000 -storepass DIYHelper2024 -keypass DIYHelper2024 -dname \"CN=DIYHelper, OU=Mobile, O=DIYHelper, L=Unknown, ST=Unknown, C=US\")"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{const cmd=JSON.parse(d).tool_input.command;process.exit(cmd.includes('assembleRelease')||cmd.includes('bundleRelease')?0:1)})\" && cp 'C:/Users/sburs/WebstormProjects/DIYHelper2/app/android/app/build/outputs/apk/release/app-release.apk' '/c/Users/sburs/OneDrive/CarHelper APKs/diy-release.apk' && echo '{\"systemMessage\":\"APK copied to OneDrive as diy-release.apk\"}' || true",
+            "timeout": 30,
+            "statusMessage": "Copying release APK to OneDrive..."
+          }
+        ]
+      }
+    ]
   }
 }

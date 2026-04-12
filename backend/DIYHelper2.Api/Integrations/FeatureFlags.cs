@@ -16,6 +16,14 @@ public class FeatureFlags
     public bool PubChem { get; }
     public bool ReceiptOcr { get; }
 
+    // ML Kit features (on-device, controlled by backend flags for fleet management)
+    public bool BarcodeScanner { get; }
+    public bool ImageLabeling { get; }
+    public bool OnDeviceTranslation { get; }
+    public bool DigitalInk { get; }
+    public bool EntityExtraction { get; }
+    public bool PoseDetection { get; }
+
     public FeatureFlags()
     {
         AmazonPa = ReadBool("FEATURES_AMAZON_PA");
@@ -28,6 +36,13 @@ public class FeatureFlags
         Reddit = ReadBool("FEATURES_REDDIT", defaultValue: true);
         PubChem = ReadBool("FEATURES_PUBCHEM", defaultValue: true);
         ReceiptOcr = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MINDEE_API_KEY"));
+        // ML Kit features — all default OFF until validated on target devices.
+        BarcodeScanner = ReadBool("FEATURES_BARCODE_SCANNER");
+        ImageLabeling = ReadBool("FEATURES_IMAGE_LABELING");
+        OnDeviceTranslation = ReadBool("FEATURES_ON_DEVICE_TRANSLATION");
+        DigitalInk = ReadBool("FEATURES_DIGITAL_INK");
+        EntityExtraction = ReadBool("FEATURES_ENTITY_EXTRACTION");
+        PoseDetection = ReadBool("FEATURES_POSE_DETECTION");
     }
 
     private static bool ReadBool(string name, bool defaultValue = false)
@@ -48,5 +63,11 @@ public class FeatureFlags
         reddit = Reddit,
         pubchem = PubChem,
         receiptOcr = ReceiptOcr,
+        barcodeScanner = BarcodeScanner,
+        imageLabeling = ImageLabeling,
+        onDeviceTranslation = OnDeviceTranslation,
+        digitalInk = DigitalInk,
+        entityExtraction = EntityExtraction,
+        poseDetection = PoseDetection,
     };
 }

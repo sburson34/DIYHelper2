@@ -19,11 +19,13 @@ import theme from '../theme';
 import { askHelper, verifyStep } from '../api/backendClient';
 import { updateHoneyDoList, updateContractorList } from '../utils/storage';
 import { useTranslation } from '../i18n/I18nContext';
+import { useMlKitFeature } from '../mlkit/useMlKitFeature';
 
 const getStepText = (step) => typeof step === 'string' ? step : step.text;
 
 export default function WorkSteps({ navigation, route }) {
   const { t, language } = useTranslation();
+  const { ready: poseReady } = useMlKitFeature('poseDetection');
   const { project: initialProject, listType } = route.params;
   const [project, setProject] = useState(initialProject);
   const [checkedSteps, setCheckedSteps] = useState(
@@ -382,6 +384,20 @@ export default function WorkSteps({ navigation, route }) {
                 </>
               )}
             </TouchableOpacity>
+
+            {poseReady && (
+              <TouchableOpacity
+                style={[styles.verifyBtn, { borderColor: '#7C3AED20' }]}
+                onPress={() => navigation.navigate('WorkshopAR', {
+                  stepText: getStepText(step),
+                  stepIndex: index,
+                  projectTitle: project.title,
+                })}
+              >
+                <Icon name="body-outline" size={16} color="#7C3AED" />
+                <Text style={[styles.verifyBtnText, { color: '#7C3AED' }]}>AR Guide</Text>
+              </TouchableOpacity>
+            )}
 
             {verifyResult[index] && (
               <View style={[
