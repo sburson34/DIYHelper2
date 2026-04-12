@@ -82,11 +82,13 @@ export default function Inventory({ navigation }) {
           value={text}
           onChangeText={setText}
           onSubmitEditing={add}
+          accessibilityLabel="Add a tool or material"
+          accessibilityRole="text"
         />
-        <TouchableOpacity style={styles.addBtn} onPress={add}>
+        <TouchableOpacity style={styles.addBtn} onPress={add} accessibilityLabel="Add tool to inventory" accessibilityRole="button">
           <Icon name="add" size={22} color="#fff" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.scanBtn} onPress={scanBarcode}>
+        <TouchableOpacity style={styles.scanBtn} onPress={scanBarcode} accessibilityLabel="Scan barcode to add tool" accessibilityRole="button">
           <Icon name="barcode-outline" size={22} color={theme.colors.secondary} />
         </TouchableOpacity>
       </View>
@@ -104,7 +106,7 @@ export default function Inventory({ navigation }) {
           <View style={styles.row}>
             <Icon name="checkmark-circle" size={22} color={theme.colors.success} />
             <Text style={styles.rowText}>{item.name}</Text>
-            <TouchableOpacity onPress={() => remove(item.id)} style={styles.removeBtn}>
+            <TouchableOpacity onPress={() => remove(item.id)} style={styles.removeBtn} accessibilityLabel={`Remove ${item.name} from inventory`} accessibilityRole="button">
               <Icon name="trash-outline" size={20} color={theme.colors.danger} />
             </TouchableOpacity>
           </View>

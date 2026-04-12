@@ -258,6 +258,8 @@ export default function WorkSteps({ navigation, route }) {
         <TouchableOpacity
           style={[styles.audioButton, isAudioMode && styles.audioButtonActive]}
           onPress={() => setIsAudioMode(!isAudioMode)}
+          accessibilityLabel={isAudioMode ? "Turn off audio guided mode" : "Turn on audio guided mode"}
+          accessibilityRole="button"
         >
           <Icon name={isAudioMode ? "volume-high" : "volume-mute-outline"} size={24} color="#fff" />
           <Text style={styles.audioButtonText}>{isAudioMode ? t('audio_mode_on') : t('audio_mode_off')}</Text>
@@ -305,7 +307,7 @@ export default function WorkSteps({ navigation, route }) {
               currentStepIndex === index && !checkedSteps[index] && styles.stepCardCurrent
             ]}
           >
-            <TouchableOpacity style={styles.stepHeader} onPress={() => toggleStep(index)}>
+            <TouchableOpacity style={styles.stepHeader} onPress={() => toggleStep(index)} accessibilityLabel={`Step ${index + 1}: ${getStepText(step)}, ${checkedSteps[index] ? 'completed' : 'not completed'}`} accessibilityRole="checkbox" accessibilityState={{ checked: checkedSteps[index] }}>
               <View style={[
                 styles.stepNumberBadge,
                 checkedSteps[index] && { backgroundColor: theme.colors.success },
@@ -343,6 +345,8 @@ export default function WorkSteps({ navigation, route }) {
               }}
               onBlur={() => persist({ stepNotes })}
               multiline
+              accessibilityLabel={`Notes for step ${index + 1}`}
+              accessibilityRole="text"
             />
 
             {/* Verify-step button (#9) */}

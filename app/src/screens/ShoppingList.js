@@ -96,7 +96,7 @@ export default function ShoppingList({ navigation }) {
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text style={styles.title}>Shopping List</Text>
-          <TouchableOpacity onPress={openScanner} style={styles.scanBtn}>
+          <TouchableOpacity onPress={openScanner} style={styles.scanBtn} accessibilityLabel="Scan barcode to check off item" accessibilityRole="button">
             <Icon name="barcode-outline" size={20} color={theme.colors.secondary} />
             <Text style={styles.scanBtnText}>Scan</Text>
           </TouchableOpacity>
@@ -115,7 +115,7 @@ export default function ShoppingList({ navigation }) {
         }
         renderItem={({ item }) => (
           <View style={[styles.row, bought[item.key] && styles.rowDone]}>
-            <TouchableOpacity onPress={() => toggle(item.key)} style={styles.checkBtn}>
+            <TouchableOpacity onPress={() => toggle(item.key)} style={styles.checkBtn} accessibilityLabel={`${item.name}, ${bought[item.key] ? 'purchased' : 'not purchased'}`} accessibilityRole="checkbox" accessibilityState={{ checked: !!bought[item.key] }}>
               <Icon
                 name={bought[item.key] ? 'checkmark-circle' : 'ellipse-outline'}
                 size={26}

@@ -3,7 +3,8 @@
 
 import React, { useRef, useState, useCallback } from 'react';
 import { View, PanResponder, StyleSheet } from 'react-native';
-import Svg, { Path } from 'react-native-svg' || {};
+let Svg, Path;
+try { ({ default: Svg, Path } = require('react-native-svg')); } catch {}
 
 // Fallback for missing react-native-svg: just render the container
 const hasSvg = (() => {

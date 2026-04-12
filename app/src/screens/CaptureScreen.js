@@ -367,14 +367,14 @@ export default function CaptureScreen({ navigation, route }) {
           </View>
 
           <View style={styles.mediaGrid}>
-            <TouchableOpacity style={styles.mediaCard} onPress={takePhoto}>
+            <TouchableOpacity style={styles.mediaCard} onPress={takePhoto} accessibilityLabel="Take a photo of your repair issue" accessibilityRole="button">
               <View style={[styles.iconCircle, { backgroundColor: '#FEF3C7' }]}>
                 <Icon name="camera" size={28} color="#D97706" />
               </View>
               <Text style={styles.mediaLabel}>{t('take_photo')}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.mediaCard} onPress={recordVideo}>
+            <TouchableOpacity style={styles.mediaCard} onPress={recordVideo} accessibilityLabel="Record a video of your repair issue" accessibilityRole="button">
               <View style={[styles.iconCircle, { backgroundColor: '#FEF3C7' }]}>
                 <Icon name="videocam" size={28} color="#D97706" />
               </View>
@@ -397,6 +397,8 @@ export default function CaptureScreen({ navigation, route }) {
                     <TouchableOpacity
                       style={styles.removeMedia}
                       onPress={() => setMedia(media.filter((_, index) => index !== i))}
+                      accessibilityLabel={`Remove photo ${i + 1}`}
+                      accessibilityRole="button"
                     >
                       <Icon name="close-circle" size={20} color={theme.colors.danger} />
                     </TouchableOpacity>
@@ -430,6 +432,8 @@ export default function CaptureScreen({ navigation, route }) {
           <TouchableOpacity
             style={[styles.voiceButtonHome, isRecording && styles.recordingHome]}
             onPress={isRecording ? stopRecording : startRecording}
+            accessibilityLabel={isRecording ? "Stop voice recording" : "Describe your issue with voice"}
+            accessibilityRole="button"
           >
             <Icon name={isRecording ? "stop" : "mic"} size={22} color="#fff" />
             <Text style={styles.voiceButtonTextHome}>
@@ -444,6 +448,8 @@ export default function CaptureScreen({ navigation, route }) {
             multiline
             value={isRecording ? (description ? `${description} ${transcript}` : transcript) : description}
             onChangeText={setDescription}
+            accessibilityLabel="Describe your repair issue"
+            accessibilityRole="text"
           />
         </View>
 
@@ -462,6 +468,8 @@ export default function CaptureScreen({ navigation, route }) {
             style={[styles.analyzeButtonHome, (isAnalyzing || isClarifying || (!description && media.length === 0)) && styles.disabledButton]}
             onPress={handleAnalyze}
             disabled={isAnalyzing || isClarifying || (!description && media.length === 0)}
+            accessibilityLabel="Get AI-powered DIY repair guide"
+            accessibilityRole="button"
           >
             {(isAnalyzing || isClarifying) ? (
               <ActivityIndicator color="#fff" />
@@ -477,6 +485,8 @@ export default function CaptureScreen({ navigation, route }) {
             style={[styles.proButtonHome, (!description && media.length === 0) && styles.disabledButton]}
             onPress={sendToProfessional}
             disabled={!description && media.length === 0}
+            accessibilityLabel="Send request to a professional"
+            accessibilityRole="button"
           >
             <Icon name="construct" size={20} color="#64748B" />
             <Text style={styles.proButtonTextHome}>{t('get_pro_help')}</Text>

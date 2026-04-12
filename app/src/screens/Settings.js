@@ -6,6 +6,7 @@ import {
   saveUserProfile, getUserProfile,
   getAppPrefs, setAppPrefs,
   getCommunityOptIn, setCommunityOptIn,
+  clearAllUserData,
 } from '../utils/storage';
 import { requestPermissions as requestNotificationPermissions } from '../utils/notifications';
 import { useTranslation } from '../i18n/I18nContext';
@@ -94,6 +95,8 @@ export default function Settings() {
               placeholder={t('full_name_placeholder')}
               placeholderTextColor={theme.colors.textSecondary}
               autoCapitalize="words"
+              accessibilityLabel="Full name"
+              accessibilityRole="text"
             />
           </View>
 
@@ -107,6 +110,8 @@ export default function Settings() {
               placeholderTextColor={theme.colors.textSecondary}
               keyboardType="email-address"
               autoCapitalize="none"
+              accessibilityLabel="Email address"
+              accessibilityRole="text"
             />
           </View>
 
@@ -119,6 +124,8 @@ export default function Settings() {
               placeholder={t('phone_placeholder')}
               placeholderTextColor={theme.colors.textSecondary}
               keyboardType="phone-pad"
+              accessibilityLabel="Phone number"
+              accessibilityRole="text"
             />
           </View>
 
@@ -132,6 +139,8 @@ export default function Settings() {
               placeholderTextColor={theme.colors.textSecondary}
               keyboardType="number-pad"
               maxLength={5}
+              accessibilityLabel="Zip code"
+              accessibilityRole="text"
             />
           </View>
 
@@ -143,6 +152,8 @@ export default function Settings() {
                   key={s.id}
                   style={[styles.skillBtn, skillLevel === s.id && styles.skillBtnActive]}
                   onPress={() => setSkillLevel(s.id)}
+                  accessibilityLabel={`Skill level ${s.label}${skillLevel === s.id ? ', selected' : ''}`}
+                  accessibilityRole="button"
                 >
                   <Text style={[styles.skillBtnText, skillLevel === s.id && styles.skillBtnTextActive]}>{s.label}</Text>
                 </TouchableOpacity>
@@ -155,7 +166,7 @@ export default function Settings() {
               <Text style={styles.toggleLabel}>Dark mode</Text>
               <Text style={styles.toggleSub}>Use a dark color scheme.</Text>
             </View>
-            <Switch value={isDark} onValueChange={toggleDark} />
+            <Switch value={isDark} onValueChange={toggleDark} accessibilityLabel="Dark mode" accessibilityRole="switch" accessibilityState={{ checked: isDark }} />
           </View>
 
           <View style={styles.toggleRow}>
@@ -175,6 +186,9 @@ export default function Settings() {
                   }
                 }
               }}
+              accessibilityLabel="Reminders for unfinished projects"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: reminders }}
             />
           </View>
 
@@ -183,10 +197,10 @@ export default function Settings() {
               <Text style={styles.toggleLabel}>Share to community</Text>
               <Text style={styles.toggleSub}>Anonymously share completed projects to the community library.</Text>
             </View>
-            <Switch value={community} onValueChange={setCommunity} />
+            <Switch value={community} onValueChange={setCommunity} accessibilityLabel="Share completed projects to community" accessibilityRole="switch" accessibilityState={{ checked: community }} />
           </View>
 
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
+          <TouchableOpacity style={styles.saveButton} onPress={handleSave} accessibilityLabel="Save profile settings" accessibilityRole="button">
             <Icon name={saved ? 'checkmark-circle' : 'save-outline'} size={22} color="#FFF" />
             <Text style={styles.saveButtonText}>{saved ? t('saved') : t('save_profile')}</Text>
           </TouchableOpacity>
@@ -202,6 +216,8 @@ export default function Settings() {
               <TouchableOpacity
                 style={[styles.langButton, language === 'en' && styles.langButtonActive]}
                 onPress={() => setLanguage('en')}
+                accessibilityLabel={`English language${language === 'en' ? ', selected' : ''}`}
+                accessibilityRole="button"
               >
                 <Text style={[styles.langButtonText, language === 'en' && styles.langButtonTextActive]}>
                   {t('english')}
@@ -210,6 +226,8 @@ export default function Settings() {
               <TouchableOpacity
                 style={[styles.langButton, language === 'es' && styles.langButtonActive]}
                 onPress={() => setLanguage('es')}
+                accessibilityLabel={`Spanish language${language === 'es' ? ', selected' : ''}`}
+                accessibilityRole="button"
               >
                 <Text style={[styles.langButtonText, language === 'es' && styles.langButtonTextActive]}>
                   {t('spanish')}
@@ -232,6 +250,59 @@ export default function Settings() {
                 </Text>
               </TouchableOpacity>
             )}
+          </View>
+
+          {/* Delete my data */}
+          <View style={styles.languageSection}>
+            <View style={styles.languageHeader}>
+              <Icon name="trash-outline" size={24} color="#DC2626" />
+              <Text style={styles.languageTitle}>{t('delete_my_data')}</Text>
+            </View>
+            <Text style={styles.languageDesc}>{t('delete_my_data_desc')}</Text>
+            <TouchableOpacity
+              style={[styles.langButton, { borderColor: '#DC2626' }]}
+              onPress={() => {
+                Alert.alert(
+                  t('delete_confirm_title'),
+                  t('delete_confirm_msg'),
+                  [
+                    { text: t('cancel'), style: 'cancel' },
+                    {
+                      text: t('delete_everything'),
+                      style: 'destructive',
+                      onPress: () => {
+                        Alert.alert(
+                          t('delete_final_title'),
+                          t('delete_final_msg'),
+                          [
+                            { text: t('cancel'), style: 'cancel' },
+                            {
+                              text: t('delete_everything'),
+                              style: 'destructive',
+                              onPress: async () => {
+                                await clearAllUserData();
+                                setName('');
+                                setEmail('');
+                                setPhone('');
+                                setZip('');
+                                setSkillLevel('intermediate');
+                                setReminders(true);
+                                setCommunity(false);
+                                Alert.alert(t('data_deleted'), t('data_deleted_msg'));
+                              },
+                            },
+                          ],
+                        );
+                      },
+                    },
+                  ],
+                );
+              }}
+            >
+              <Text style={[styles.langButtonText, { color: '#DC2626' }]}>
+                {t('delete_all_data')}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           {__DEV__ ? (

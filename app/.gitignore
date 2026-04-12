@@ -48,6 +48,12 @@ ios/.xcode.env.local
 *.xcodeproj/xcuserdata/
 *.xcodeproj/project.xcworkspace/xcuserdata/
 
+# Google Play service account key (EAS Submit)
+google-service-account.json
+
+# Logo backup (original before compression)
+assets/logo_original.png
+
 # Misc
 *.log
 .DS_Store

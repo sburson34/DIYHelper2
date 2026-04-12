@@ -8,9 +8,17 @@
     "assetBundlePatterns": [
       "**/*"
     ],
+    "icon": "./assets/logo.png",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.diyhelper2"
+      "bundleIdentifier": "com.diyhelper2",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "DIY Helper needs camera access to capture photos and videos of your home repair projects.",
+        "NSMicrophoneUsageDescription": "DIY Helper needs microphone access for voice descriptions and hands-free workshop mode.",
+        "NSPhotoLibraryUsageDescription": "DIY Helper needs photo library access to save and share project photos.",
+        "NSSpeechRecognitionUsageDescription": "DIY Helper uses speech recognition for voice commands in workshop mode."
+      }
     },
     "android": {
       "package": "com.diyhelper2",

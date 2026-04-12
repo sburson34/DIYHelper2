@@ -148,6 +148,18 @@ export const translations = {
     language_desc: 'Choose your preferred language for the app.',
     english: 'English',
     spanish: 'Español',
+
+    // Delete my data
+    delete_my_data: 'Delete my data',
+    delete_my_data_desc: 'Permanently delete all your projects, tools, profile, and preferences from this device.',
+    delete_all_data: 'Delete all my data',
+    delete_confirm_title: 'Are you sure?',
+    delete_confirm_msg: 'This will permanently delete all your projects, tools, profile, and preferences. This cannot be undone.',
+    delete_final_title: 'Last chance',
+    delete_final_msg: 'This action is irreversible. Delete everything?',
+    delete_everything: 'Delete Everything',
+    data_deleted: 'Data Deleted',
+    data_deleted_msg: 'All your data has been deleted from this device.',
   },
   es: {
     // Navigation / Drawer
@@ -295,5 +307,17 @@ export const translations = {
     language_desc: 'Elige tu idioma preferido para la aplicación.',
     english: 'English',
     spanish: 'Español',
+
+    // Delete my data
+    delete_my_data: 'Eliminar mis datos',
+    delete_my_data_desc: 'Eliminar permanentemente todos tus proyectos, herramientas, perfil y preferencias de este dispositivo.',
+    delete_all_data: 'Eliminar todos mis datos',
+    delete_confirm_title: '¿Estás seguro?',
+    delete_confirm_msg: 'Esto eliminará permanentemente todos tus proyectos, herramientas, perfil y preferencias. No se puede deshacer.',
+    delete_final_title: 'Última oportunidad',
+    delete_final_msg: 'Esta acción es irreversible. ¿Eliminar todo?',
+    delete_everything: 'Eliminar Todo',
+    data_deleted: 'Datos Eliminados',
+    data_deleted_msg: 'Todos tus datos han sido eliminados de este dispositivo.',
   },
 };

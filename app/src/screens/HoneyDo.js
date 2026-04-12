@@ -82,6 +82,8 @@ export default function HoneyDo({ navigation }) {
               placeholderTextColor={theme.colors.textSecondary}
               value={search}
               onChangeText={setSearch}
+              accessibilityLabel="Search projects"
+              accessibilityRole="search"
             />
             {search ? (
               <TouchableOpacity onPress={() => setSearch('')}>
@@ -110,6 +112,8 @@ export default function HoneyDo({ navigation }) {
             <TouchableOpacity
               style={styles.item}
               onPress={() => navigation.navigate('ProjectDetail', { project: item, listType: 'honey-do' })}
+              accessibilityLabel={`Project: ${item.title}, ${item.difficulty}, ${item.estimated_time}`}
+              accessibilityRole="button"
             >
               <View style={styles.itemHeader}>
                 <Text style={styles.itemTitle}>{item.title}</Text>
@@ -132,6 +136,8 @@ export default function HoneyDo({ navigation }) {
             <TouchableOpacity
               style={styles.deleteIcon}
               onPress={() => handleDelete(item.id)}
+              accessibilityLabel={`Delete project ${item.title}`}
+              accessibilityRole="button"
             >
               <Icon name="trash-outline" size={20} color={theme.colors.danger} />
             </TouchableOpacity>

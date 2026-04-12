@@ -79,7 +79,7 @@ export default function Emergency() {
           <Icon name="warning" size={40} color="#fff" />
           <Text style={styles.bannerTitle}>Emergency Mode</Text>
           <Text style={styles.bannerSubtitle}>If life is in danger, call 911 immediately.</Text>
-          <TouchableOpacity style={styles.call911} onPress={() => callPro('911')}>
+          <TouchableOpacity style={styles.call911} onPress={() => callPro('911')} accessibilityLabel="Call 911 emergency services" accessibilityRole="button">
             <Icon name="call" size={20} color="#fff" />
             <Text style={styles.call911Text}>Call 911</Text>
           </TouchableOpacity>
@@ -97,7 +97,12 @@ export default function Emergency() {
                 <Text style={styles.stepText}>{step}</Text>
               </View>
             ))}
-            <TouchableOpacity style={[styles.callBtn, { backgroundColor: s.color }]} onPress={() => callPro(s.callType)}>
+            <TouchableOpacity
+              style={[styles.callBtn, { backgroundColor: s.color }]}
+              onPress={() => callPro(s.callType)}
+              accessibilityLabel={s.callType === '911' ? `Call 911 for ${s.label}` : `Find a ${s.callType.replace(' near me', '')} near you`}
+              accessibilityRole="button"
+            >
               <Icon name="call" size={18} color="#fff" />
               <Text style={styles.callBtnText}>
                 {s.callType === '911' ? 'Call 911' : `Find a ${s.callType.replace(' near me', '')}`}

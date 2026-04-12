@@ -341,3 +341,19 @@ export const getCommunityOptIn = async () => {
 export const setCommunityOptIn = async (val) => {
   await AsyncStorage.setItem(COMMUNITY_OPT_IN_KEY, val ? 'true' : 'false');
 };
+
+// ── Clear all user data (account deletion) ─────────────────────────
+export const clearAllUserData = async () => {
+  const allKeys = [
+    HONEY_DO_KEY,
+    CONTRACTOR_KEY,
+    USER_PROFILE_KEY,
+    TOOL_INVENTORY_KEY,
+    SHOPPING_BOUGHT_KEY,
+    APP_PREFS_KEY,
+    ANALYZE_CACHE_KEY,
+    HELP_REQUESTS_KEY,
+    COMMUNITY_OPT_IN_KEY,
+  ];
+  await AsyncStorage.multiRemove(allKeys);
+};
