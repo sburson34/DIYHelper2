@@ -4,6 +4,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { analyzeProject, submitHelpRequest, getClarifyingQuestions } from '../api/backendClient';
+import { reportError, reportHandledError, addBreadcrumb } from '../services/monitoring';
 import { getUserProfile, saveLocalHelpRequest, getMostRecentProject } from '../utils/storage';
 import { subscribeReset } from '../utils/captureBus';
 import { useTranslation } from '../i18n/I18nContext';
@@ -26,16 +27,22 @@ export default function CaptureScreen({ navigation, route }) {
   const [isClarifying, setIsClarifying] = useState(false);
   const [clarifyAnswers, setClarifyAnswers] = useState({});
 
+  // Ref tracks the latest transcript so the 'end' handler always sees the
+  // most recent value, even if React hasn't re-rendered yet.
+  const transcriptRef = useRef('');
+
   useSpeechRecognitionEvent('result', (event) => {
-    // Safely check for results. transcript is usually results[0].transcript
     const transcriptValue = event.results?.[0]?.transcript || '';
+    transcriptRef.current = transcriptValue;
     setTranscript(transcriptValue);
   });
 
   useSpeechRecognitionEvent('end', () => {
     setIsRecording(false);
-    if (transcript) {
-      setDescription((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    const finalTranscript = transcriptRef.current;
+    if (finalTranscript) {
+      setDescription((prev) => (prev ? `${prev} ${finalTranscript}` : finalTranscript));
+      transcriptRef.current = '';
       setTranscript('');
     }
   });
@@ -195,6 +202,10 @@ export default function CaptureScreen({ navigation, route }) {
         type: m.type
       }));
       const fullDesc = extraDescription ? `${description}\n\n${extraDescription}` : description;
+      addBreadcrumb('Starting project analysis', 'user.action', {
+        mediaCount: mediaItems.length,
+        hasDescription: !!fullDesc,
+      });
       const result = await analyzeProject(fullDesc, mediaItems, language);
       if (result._fromCache) {
         Alert.alert('Offline mode', 'Couldn\'t reach the server — showing a cached version of this analysis.');
@@ -204,6 +215,7 @@ export default function CaptureScreen({ navigation, route }) {
         originalRequest: { description: fullDesc, mediaUrls: media.map(m => m.uri) }
       });
     } catch (error) {
+      reportError(error, { source: 'CaptureScreen', operation: 'runAnalyze' });
       Alert.alert(t('analysis_error'), error.message);
     } finally {
       setIsAnalyzing(false);
@@ -231,8 +243,7 @@ export default function CaptureScreen({ navigation, route }) {
         await runAnalyze();
       }
     } catch (e) {
-      // If clarify fails, go straight to analyze
-      console.warn('clarify failed, proceeding directly:', e.message);
+      reportHandledError('ClarifyFallbackToAnalyze', e, { source: 'CaptureScreen' });
       await runAnalyze();
     } finally {
       setIsClarifying(false);
@@ -278,6 +289,7 @@ export default function CaptureScreen({ navigation, route }) {
       Alert.alert('Sent', 'Your request has been sent to a professional. Track its status in the Quote Tracker.');
       resetAll();
     } catch (e) {
+      reportError(e, { source: 'CaptureScreen', operation: 'sendToProfessional' });
       Alert.alert('Could not send', e.message);
     }
   };
@@ -436,6 +448,7 @@ export default function CaptureScreen({ navigation, route }) {
              <Icon name="refresh" size={16} color="#94A3B8" />
              <Text style={styles.resetButtonTextHome}>{t('start_over')}</Text>
            </TouchableOpacity>
+
         </View>
       </View>
 

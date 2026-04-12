@@ -1,13 +1,16 @@
 {
   "name": "DIYHelper2",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "kill-metro": "npx kill-port 8081 2>/dev/null; echo 'Port 8081 cleared'",
-    "android": "npm run kill-metro && react-native run-android",
-    "ios": "npm run kill-metro && react-native run-ios",
+    "env": "bash scripts/load-env.sh",
+    "android": "npm run kill-metro && bash scripts/load-env.sh react-native run-android",
+    "ios": "npm run kill-metro && bash scripts/load-env.sh react-native run-ios",
+    "start": "npm run kill-metro && bash scripts/load-env.sh react-native start",
+    "build:beta": "bash scripts/load-env.sh bash android/gradlew -p android assembleRelease",
+    "build:beta:bundle": "bash scripts/load-env.sh bash android/gradlew -p android bundleRelease",
     "lint": "eslint .",
-    "start": "npm run kill-metro && react-native start",
     "test": "jest"
   },
   "dependencies": {
@@ -16,6 +19,7 @@
     "@react-navigation/drawer": "^7.9.8",
     "@react-navigation/native": "^7.2.2",
     "@react-navigation/native-stack": "^7.14.10",
+    "@sentry/react-native": "^6.22.0",
     "expo": "~55.0.9",
     "expo-audio": "~55.0.9",
     "expo-camera": "~55.0.13",
@@ -25,6 +29,7 @@
     "expo-print": "~55.0.12",
     "expo-sharing": "~55.0.17",
     "expo-speech-recognition": "^3.1.2",
+    "expo-splash-screen": "~55.0.17",
     "react": "19.2.4",
     "react-native": "0.83.0",
     "react-native-gesture-handler": "~2.30.0",

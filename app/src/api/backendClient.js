@@ -1,31 +1,124 @@
 import { API_BASE_URL } from '../config/api';
 import { getCachedAnalysis, setCachedAnalysis, getAppPrefs, getToolInventory } from '../utils/storage';
+import { reportError, reportHandledError, addBreadcrumb } from '../services/monitoring';
+import { RELEASE } from '../config/appInfo';
 
 const BASE_URL = API_BASE_URL;
 
-const jsonFetch = async (url, body, opts = {}) => {
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    ...opts,
+// ── Correlation ID ────────────────────────────────────────────────────
+let counter = 0;
+const generateCorrelationId = () => {
+  const ts = Date.now().toString(36);
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${ts}-${rand}-${++counter}`;
+};
+
+// ── Instrumented fetch ────────────────────────────────────────────────
+// Every outbound request gets a correlation ID, timing, and breadcrumbs.
+const apiFetch = async (url, options = {}) => {
+  const correlationId = generateCorrelationId();
+  const method = options.method || 'GET';
+  const path = url.replace(BASE_URL, '');
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Correlation-ID': correlationId,
+    'X-App-Version': RELEASE,
+    ...options.headers,
+  };
+
+  addBreadcrumb(`${method} ${path}`, 'http', {
+    url: path,
+    method,
+    correlationId,
   });
-  if (!response.ok) {
-    let errorData = {};
-    try { errorData = await response.json(); } catch {}
-    throw new Error(errorData.error || `Request failed: ${response.status}`);
+
+  const start = Date.now();
+  let status;
+  try {
+    const response = await fetch(url, { ...options, headers });
+    status = response.status;
+    const durationMs = Date.now() - start;
+
+    if (!response.ok) {
+      let errorMessage;
+      try {
+        const body = await response.json();
+        errorMessage = body.error || body.message;
+      } catch {}
+
+      const summary = errorMessage || `HTTP ${status}`;
+      addBreadcrumb(`${method} ${path} failed: ${summary}`, 'http', {
+        url: path, method, status, durationMs, correlationId,
+      });
+      const err = new Error(summary);
+      err.status = status;
+      err.correlationId = correlationId;
+      err.durationMs = durationMs;
+      throw err;
+    }
+
+    addBreadcrumb(`${method} ${path} OK`, 'http', {
+      url: path, method, status, durationMs, correlationId,
+    });
+    return response;
+  } catch (error) {
+    const durationMs = Date.now() - start;
+    // Network-level failure (no response at all)
+    if (!status) {
+      addBreadcrumb(`${method} ${path} network error`, 'http', {
+        url: path, method, durationMs, correlationId,
+        error: error.message,
+      });
+    }
+    if (!error.correlationId) {
+      error.correlationId = correlationId;
+      error.durationMs = durationMs;
+    }
+    throw error;
   }
+};
+
+// Convenience: POST JSON body → parsed JSON response
+const jsonPost = async (url, body) => {
+  const response = await apiFetch(url, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
   return response.json();
 };
 
-// ── #5/#14/#15: enriched analyze with prefs + inventory ────────────
+// Convenience: GET → parsed JSON response
+const jsonGet = async (url) => {
+  const response = await apiFetch(url);
+  return response.json();
+};
+
+// Convenience: PUT JSON body → parsed JSON response
+const jsonPut = async (url, body) => {
+  const response = await apiFetch(url, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return response.json();
+};
+
+// ── Endpoints ─────────────────────────────────────────────────────────
+
 const analyzeProject = async (description, mediaItems = [], language = 'en') => {
   const url = `${BASE_URL}/api/analyze`;
   const prefs = await getAppPrefs().catch(() => ({}));
   const inventory = await getToolInventory().catch(() => []);
 
+  addBreadcrumb('AI: analyze project', 'ai', {
+    action: 'analyze',
+    descriptionLength: description?.length ?? 0,
+    mediaCount: mediaItems.length,
+    language,
+  });
+
   try {
-    const result = await jsonFetch(url, {
+    const result = await jsonPost(url, {
       description,
       media: mediaItems,
       language,
@@ -33,53 +126,76 @@ const analyzeProject = async (description, mediaItems = [], language = 'en') => 
       zip: prefs.zip,
       ownedTools: inventory.map(i => i.name),
     });
-    // Cache successful analyses for offline mode (#23). Fire-and-forget so the
-    // navigate-to-Result transition isn't blocked by AsyncStorage serialization
-    // (which can take seconds when the cache file grows).
     setCachedAnalysis(description, mediaItems.length, result).catch(() => {});
     return result;
   } catch (error) {
     console.error('Error in analyzeProject detail:', error);
-    // Offline fallback
     const cached = await getCachedAnalysis(description, mediaItems.length);
     if (cached) {
-      console.log('Using cached analysis (offline mode)');
+      reportHandledError('AnalysisFallbackToCache', error, {
+        mediaCount: mediaItems.length,
+        cacheAge: Date.now() - cached.cachedAt,
+        correlationId: error.correlationId,
+      });
       return { ...cached.result, _fromCache: true, _cachedAt: cached.cachedAt };
     }
     if (error.message === 'Network request failed') {
+      reportError(error, {
+        source: 'backendClient',
+        operation: 'analyzeProject',
+        extra: { url, mediaCount: mediaItems.length, correlationId: error.correlationId },
+      });
       throw new Error(`Network error! Hit ${url} and it failed. Check adb reverse tcp:5206 tcp:5206 and that backend is running.`);
     }
+    reportError(error, {
+      source: 'backendClient',
+      operation: 'analyzeProject',
+      extra: { correlationId: error.correlationId },
+    });
     throw error;
   }
 };
 
 const askHelper = async (question, project, language = 'en') => {
-  const url = `${BASE_URL}/api/ask-helper`;
-  return jsonFetch(url, { question, projectContext: project, language });
+  addBreadcrumb('AI: ask helper', 'ai', {
+    action: 'ask-helper',
+    questionLength: question?.length ?? 0,
+    language,
+  });
+  return jsonPost(`${BASE_URL}/api/ask-helper`, { question, projectContext: project, language });
 };
 
-// ── #9: verify a finished step ─────────────────────────────────────
 const verifyStep = async ({ stepText, projectTitle, base64Image, mimeType, language = 'en' }) => {
-  const url = `${BASE_URL}/api/verify-step`;
-  return jsonFetch(url, { stepText, projectTitle, base64Image, mimeType, language });
+  addBreadcrumb('AI: verify step', 'ai', {
+    action: 'verify-step',
+    hasImage: !!base64Image,
+    language,
+  });
+  return jsonPost(`${BASE_URL}/api/verify-step`, { stepText, projectTitle, base64Image, mimeType, language });
 };
 
-// ── #10: diagnostic mode ───────────────────────────────────────────
 const diagnoseProblem = async ({ description, media = [], language = 'en' }) => {
-  const url = `${BASE_URL}/api/diagnose`;
-  return jsonFetch(url, { description, media, language });
+  addBreadcrumb('AI: diagnose', 'ai', {
+    action: 'diagnose',
+    descriptionLength: description?.length ?? 0,
+    mediaCount: media.length,
+    language,
+  });
+  return jsonPost(`${BASE_URL}/api/diagnose`, { description, media, language });
 };
 
-// ── #11: progressive clarifying questions ──────────────────────────
 const getClarifyingQuestions = async ({ description, media = [], language = 'en' }) => {
-  const url = `${BASE_URL}/api/clarify`;
-  return jsonFetch(url, { description, media, language });
+  addBreadcrumb('AI: clarify', 'ai', {
+    action: 'clarify',
+    descriptionLength: description?.length ?? 0,
+    mediaCount: media.length,
+    language,
+  });
+  return jsonPost(`${BASE_URL}/api/clarify`, { description, media, language });
 };
 
-// ── #20/#21: help requests ─────────────────────────────────────────
 const submitHelpRequest = async ({ customerName, customerEmail, customerPhone, projectTitle, userDescription, projectData, imageBase64 }) => {
-  const url = `${BASE_URL}/api/help-requests`;
-  return jsonFetch(url, {
+  return jsonPost(`${BASE_URL}/api/help-requests`, {
     customerName,
     customerEmail,
     customerPhone,
@@ -91,43 +207,29 @@ const submitHelpRequest = async ({ customerName, customerEmail, customerPhone, p
 };
 
 const getHelpRequest = async (id) => {
-  const response = await fetch(`${BASE_URL}/api/help-requests/${id}`);
-  if (!response.ok) throw new Error('Failed to fetch help request');
-  return response.json();
+  return jsonGet(`${BASE_URL}/api/help-requests/${id}`);
 };
 
 const updateHelpRequestStatus = async (id, status, notes) => {
-  const response = await fetch(`${BASE_URL}/api/help-requests/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ status, notes }),
-  });
-  if (!response.ok) throw new Error('Failed to update help request');
-  return response.json();
+  return jsonPut(`${BASE_URL}/api/help-requests/${id}`, { status, notes });
 };
 
 const listHelpRequests = async (status) => {
   const url = status
     ? `${BASE_URL}/api/help-requests?status=${encodeURIComponent(status)}`
     : `${BASE_URL}/api/help-requests`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error('Failed to list help requests');
-  return response.json();
+  return jsonGet(url);
 };
 
-// ── #18: community-shared projects ─────────────────────────────────
 const submitCommunityProject = async (project) => {
-  const url = `${BASE_URL}/api/community-projects`;
-  return jsonFetch(url, project);
+  return jsonPost(`${BASE_URL}/api/community-projects`, project);
 };
 
 const browseCommunityProjects = async (query = '') => {
   const url = query
     ? `${BASE_URL}/api/community-projects?q=${encodeURIComponent(query)}`
     : `${BASE_URL}/api/community-projects`;
-  const response = await fetch(url);
-  if (!response.ok) throw new Error('Failed to browse community projects');
-  return response.json();
+  return jsonGet(url);
 };
 
 export {

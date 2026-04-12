@@ -13,12 +13,30 @@
       "bundleIdentifier": "com.diyhelper2"
     },
     "android": {
-      "package": "com.diyhelper2"
+      "package": "com.diyhelper2",
+      "versionCode": 1
+    },
+    "extra": {
+      "sentryDsn": "https://bf84aa0077ae0f4ccf5100632b3f1ed7@o4511185009049600.ingest.us.sentry.io/4511185011736576"
+    },
+    "splash": {
+      "image": "./assets/logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0F2253"
     },
     "plugins": [
+      "expo-splash-screen",
       "expo-audio",
       "expo-speech-recognition",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "project": "react-native",
+          "organization": "burson-properties"
+        }
+      ]
     ]
   }
 }

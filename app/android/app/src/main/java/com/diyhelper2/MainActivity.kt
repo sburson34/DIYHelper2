@@ -1,4 +1,5 @@
 package com.diyhelper2
+import expo.modules.splashscreen.SplashScreenManager
 import expo.modules.ReactActivityDelegateWrapper
 
 import android.os.Bundle
@@ -19,6 +20,9 @@ class MainActivity : ReactActivity() {
   // expo-image-picker uses onActivityResult (not savedInstanceState) to
   // deliver camera results, so this is safe.
   override fun onCreate(savedInstanceState: Bundle?) {
+    // @generated begin expo-splashscreen - expo prebuild (DO NOT MODIFY) sync-f3ff59a738c56c9a6119210cb55f0b613eb8b6af
+    SplashScreenManager.registerOnActivity(this)
+    // @generated end expo-splashscreen
     super.onCreate(null)
   }
 

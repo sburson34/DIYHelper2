@@ -16,6 +16,13 @@ web-build/
 # Env
 .env*.local
 
+# Sentry — never commit auth tokens or generated source maps
+sentry.properties
+android/sentry.properties
+ios/sentry.properties
+**/*.map
+.sentryclirc
+
 # Android
 android/.gradle/
 android/.idea/
@@ -29,6 +36,7 @@ android/.cxx/
 android/app/src/main/assets/index.android.bundle
 *.keystore
 !debug.keystore
+android/keystore.properties
 
 # iOS
 ios/Pods/
@@ -48,3 +56,5 @@ ios/.xcode.env.local
 .elasticbeanstalk/*
 !.elasticbeanstalk/*.cfg.yml
 !.elasticbeanstalk/*.global.yml
+
+.env.local

@@ -9,8 +9,14 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using Amazon.SecretsManager;
 using Amazon.SecretsManager.Model;
+using DIYHelper2.Api;
 using DIYHelper2.Api.Data;
 using DIYHelper2.Api.Models;
+using DIYHelper2.Api.Middleware;
+using OpenTelemetry;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,8 +24,68 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 
-builder.Logging.AddConsole();
-builder.Logging.AddDebug();
+builder.Logging.ClearProviders();
+if (builder.Environment.IsDevelopment())
+{
+    builder.Logging.AddSimpleConsole(options =>
+    {
+        options.IncludeScopes = true;
+        options.TimestampFormat = "yyyy-MM-dd HH:mm:ss ";
+    });
+}
+else
+{
+    // Structured JSON — one line per event, CloudWatch-parseable.
+    builder.Logging.AddJsonConsole(options =>
+    {
+        options.IncludeScopes = true;
+        options.UseUtcTimestamp = true;
+        options.TimestampFormat = "yyyy-MM-ddTHH:mm:ss.fffZ";
+        options.JsonWriterOptions = new System.Text.Json.JsonWriterOptions { Indented = false };
+    });
+}
+
+// ── OpenTelemetry ─────────────────────────────────────────────────────
+var otelServiceName = Environment.GetEnvironmentVariable("OTEL_SERVICE_NAME") ?? "diyhelper2-api";
+var otelEnvironment = builder.Environment.EnvironmentName; // Development / Staging / Production
+var otelServiceVersion = typeof(Program).Assembly.GetName().Version?.ToString() ?? "1.0.0";
+var useOtlpExporter = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OTEL_EXPORTER_OTLP_ENDPOINT"));
+
+var resourceBuilder = ResourceBuilder.CreateDefault()
+    .AddService(serviceName: otelServiceName, serviceVersion: otelServiceVersion)
+    .AddAttributes(new Dictionary<string, object>
+    {
+        ["deployment.environment"] = otelEnvironment,
+    });
+
+builder.Services.AddOpenTelemetry()
+    .WithTracing(tracing =>
+    {
+        tracing
+            .SetResourceBuilder(resourceBuilder)
+            .AddAspNetCoreInstrumentation(opts =>
+            {
+                // Don't trace static files or health checks.
+                opts.Filter = ctx => ctx.Request.Path.StartsWithSegments("/api");
+            })
+            .AddHttpClientInstrumentation();
+
+        if (useOtlpExporter)
+            tracing.AddOtlpExporter();
+        else if (builder.Environment.IsDevelopment())
+            tracing.AddConsoleExporter();
+    })
+    .WithMetrics(metrics =>
+    {
+        metrics
+            .SetResourceBuilder(resourceBuilder)
+            .AddAspNetCoreInstrumentation()
+            .AddHttpClientInstrumentation()
+            .AddRuntimeInstrumentation();
+
+        if (useOtlpExporter)
+            metrics.AddOtlpExporter();
+    });
 
 // Increase max request body size to 50MB (default is 30MB)
 builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -107,25 +173,30 @@ app.UseStaticFiles();
 
 app.UseCors("MobilePolicy");
 
+// Observability middleware — order matters:
+// 1. CorrelationId: assigns/reads the ID and pushes it into the log scope
+// 2. ExceptionHandler: catches unhandled throws, logs them, returns safe JSON
+// 3. RequestLogging: logs method/path/status/duration for every API request
+app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseMiddleware<ExceptionHandlerMiddleware>();
+app.UseMiddleware<RequestLoggingMiddleware>();
+
 app.MapControllers();
 
 app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
+app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 // In-memory community projects store (#18). Replace with DB once schema is settled.
 var communityProjects = new List<CommunityProjectDto>();
 
-app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, ILogger<Program> logger) =>
+app.MapPost("/api/analyze", async ([FromBody] AnalyzeProjectRequest request, HttpContext context, ILogger<Program> logger) =>
 {
     try
     {
-        string requestSizeStr = request.Media != null ? $"{request.Media.Length} media items, total base64 chars: {request.Media.Sum(m => (long)(m.Base64?.Length ?? 0))}" : "no media";
-        logger.LogInformation("Analysis request received. Description: {DescLength} chars, {RequestSize}", request.Description?.Length ?? 0, requestSizeStr);
-
         if (string.IsNullOrEmpty(openAiKey))
-        {
-            logger.LogError("OPENAI_API_KEY is not configured.");
-            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
-        }
+            return ApiError.NotConfigured(context, "OpenAI API key");
+
+        var correlationId = context.Items["CorrelationId"] as string;
 
         OpenAIClientOptions clientOptions = new();
         clientOptions.NetworkTimeout = TimeSpan.FromMinutes(2); // Wait up to 2 minutes for long uploads/analysis
@@ -284,34 +355,21 @@ IMPORTANT for youtube_links:
         }
 
         if (!hasValidImages && string.IsNullOrEmpty(request.Description))
-        {
-            return Results.Json(new { error = "Please provide a project description or a valid image." }, statusCode: 400);
-        }
+            return ApiError.BadRequest(context, "Please provide a project description or a valid image.");
 
         messages.Add(new UserChatMessage(userMessageParts));
 
-        ChatCompletion completion = await client.CompleteChatAsync(messages, options);
-        string rawContent = completion.Content[0].Text.Trim();
-        logger.LogInformation("OpenAI raw response: {Response}", rawContent);
+        var aiCtx = new AiCallContext("analyze", "gpt-4o", request.Description?.Length ?? 0, imageCount, request.Language, correlationId);
+        string rawContent = await AiWorkflow.CompleteAsync(client, messages, options, aiCtx, logger);
 
-        string jsonContent = rawContent;
-        // Robust JSON extraction
-        int firstBrace = rawContent.IndexOf('{');
-        int lastBrace = rawContent.LastIndexOf('}');
-        if (firstBrace >= 0 && lastBrace > firstBrace)
-        {
-            jsonContent = rawContent.Substring(firstBrace, lastBrace - firstBrace + 1);
-        }
+        var resultDict = AiWorkflow.ParseJsonResponse(rawContent, aiCtx, logger);
+        if (resultDict == null)
+            return ApiError.Response(context, 502, "AI returned an unparseable response. Please try again.", "ai_parse_error");
 
         try
         {
-            var parsed = JsonSerializer.Deserialize<JsonElement>(jsonContent);
-
-            // Post-process: convert shopping_links item names into affiliate links
-            using var doc = JsonDocument.Parse(jsonContent);
+            using var doc = JsonDocument.Parse(rawContent.Substring(rawContent.IndexOf('{'), rawContent.LastIndexOf('}') - rawContent.IndexOf('{') + 1));
             var root = doc.RootElement;
-            var resultDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(jsonContent);
-
             if (root.TryGetProperty("shopping_links", out var shoppingEl))
             {
                 var affiliateLinks = new List<object>();
@@ -349,59 +407,43 @@ IMPORTANT for youtube_links:
 
             return Results.Ok(resultDict);
         }
-        catch (JsonException ex)
+        catch (JsonException)
         {
-            logger.LogError(ex, "Failed to parse OpenAI JSON response. Content: {Content}", jsonContent);
-            return Results.Json(new { error = "AI returned invalid JSON", rawResponse = rawContent }, statusCode: 500);
+            // Shopping link post-processing failed — return the AI result as-is.
+            return Results.Ok(resultDict);
         }
     }
-    catch (Exception ex)
+    catch (Exception)
     {
-        logger.LogError(ex, "Error during DIY analysis. Exception: {Message}. StackTrace: {StackTrace}", ex.Message, ex.StackTrace);
-
-        // Detailed error for common OpenAI failures
-        if (ex.Message.Contains("400") || ex.Message.Contains("content_filter") || ex.Message.Contains("limit"))
-        {
-             return Results.Json(new { error = $"OpenAI API Error: {ex.Message}", details = ex.ToString() }, statusCode: 400);
-        }
-
-        return Results.Json(new { error = ex.Message, stackTrace = ex.StackTrace, innerException = ex.InnerException?.Message }, statusCode: 500);
+        // Let ExceptionHandlerMiddleware classify and format the response.
+        throw;
     }
 });
 
-app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, ILogger<Program> logger) =>
+app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, HttpContext context, ILogger<Program> logger) =>
 {
-    try
+    if (string.IsNullOrEmpty(openAiKey))
+        return ApiError.NotConfigured(context, "OpenAI API key");
+
+    var correlationId = context.Items["CorrelationId"] as string;
+    OpenAIClientOptions clientOptions = new();
+    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
+
+    string contextJson = JsonSerializer.Serialize(request.ProjectContext);
+    bool askIsSpanish = string.Equals(request.Language, "es", StringComparison.OrdinalIgnoreCase);
+    string langClause = askIsSpanish ? " Respond in Spanish." : "";
+    string systemPrompt = $"You are a helpful DIY project assistant. The user is currently working on a project with the following details: {contextJson}. Answer the user's question clearly and concisely within the context of this project.{langClause}";
+
+    var messages = new List<ChatMessage>
     {
-        if (string.IsNullOrEmpty(openAiKey))
-        {
-            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
-        }
+        new SystemChatMessage(systemPrompt),
+        new UserChatMessage(request.Question)
+    };
 
-        OpenAIClientOptions clientOptions = new();
-        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
+    var aiCtx = new AiCallContext("ask-helper", "gpt-4o", request.Question?.Length ?? 0, 0, request.Language, correlationId);
+    string answer = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
 
-        string contextJson = JsonSerializer.Serialize(request.ProjectContext);
-        bool askIsSpanish = string.Equals(request.Language, "es", StringComparison.OrdinalIgnoreCase);
-        string langClause = askIsSpanish ? " Respond in Spanish." : "";
-        string systemPrompt = $"You are a helpful DIY project assistant. The user is currently working on a project with the following details: {contextJson}. Answer the user's question clearly and concisely within the context of this project.{langClause}";
-
-        var messages = new List<ChatMessage>
-        {
-            new SystemChatMessage(systemPrompt),
-            new UserChatMessage(request.Question)
-        };
-
-        ChatCompletion completion = await client.CompleteChatAsync(messages);
-        string answer = completion.Content[0].Text.Trim();
-
-        return Results.Ok(new { answer });
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Error in Ask Helper endpoint.");
-        return Results.Json(new { error = ex.Message }, statusCode: 500);
-    }
+    return Results.Ok(new { answer });
 });
 
 // ── Help Request endpoints ──────────────────────────────────────────
@@ -483,20 +525,19 @@ app.MapDelete("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
 });
 
 // ── #9 verify-step ─────────────────────────────────────────────────
-app.MapPost("/api/verify-step", async ([FromBody] VerifyStepRequest req, ILogger<Program> logger) =>
+app.MapPost("/api/verify-step", async ([FromBody] VerifyStepRequest req, HttpContext context, ILogger<Program> logger) =>
 {
-    try
-    {
-        if (string.IsNullOrEmpty(openAiKey))
-            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
+    if (string.IsNullOrEmpty(openAiKey))
+        return ApiError.NotConfigured(context, "OpenAI API key");
 
-        var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
-        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
+    var correlationId = context.Items["CorrelationId"] as string;
+    var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
+    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
 
-        bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
-        string lang = isEs ? " Respond entirely in Spanish." : "";
+    bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
+    string lang = isEs ? " Respond entirely in Spanish." : "";
 
-        string prompt = $@"You are inspecting a user's photo of completed DIY work to verify quality.
+    string prompt = $@"You are inspecting a user's photo of completed DIY work to verify quality.
 Project: ""{req.ProjectTitle}""
 Step they just completed: ""{req.StepText}""
 
@@ -509,53 +550,48 @@ Return JSON only:
   ""summary"": ""1-2 sentences""
 }}{lang}";
 
-        var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
-        if (!string.IsNullOrEmpty(req.Base64Image))
-        {
-            try
-            {
-                byte[] data = Convert.FromBase64String(req.Base64Image);
-                parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), req.MimeType ?? "image/jpeg"));
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "verify-step: failed to decode image");
-            }
-        }
-
-        var messages = new List<ChatMessage>
-        {
-            new SystemChatMessage("You are a DIY project quality inspector. Return valid JSON only."),
-            new UserChatMessage(parts),
-        };
-        ChatCompletion completion = await client.CompleteChatAsync(messages);
-        string raw = completion.Content[0].Text.Trim();
-        int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
-        if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
-        return Results.Content(raw, "application/json");
-    }
-    catch (Exception ex)
+    int imgCount = 0;
+    var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
+    if (!string.IsNullOrEmpty(req.Base64Image))
     {
-        logger.LogError(ex, "verify-step error");
-        return Results.Json(new { error = ex.Message }, statusCode: 500);
+        try
+        {
+            byte[] data = Convert.FromBase64String(req.Base64Image);
+            parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), req.MimeType ?? "image/jpeg"));
+            imgCount = 1;
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "verify-step: failed to decode image");
+        }
     }
+
+    var messages = new List<ChatMessage>
+    {
+        new SystemChatMessage("You are a DIY project quality inspector. Return valid JSON only."),
+        new UserChatMessage(parts),
+    };
+    var aiCtx = new AiCallContext("verify-step", "gpt-4o", req.StepText?.Length ?? 0, imgCount, req.Language, correlationId);
+    string raw = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
+    if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
+    return Results.Content(raw, "application/json");
 });
 
 // ── #10 diagnose ───────────────────────────────────────────────────
-app.MapPost("/api/diagnose", async ([FromBody] AnalyzeProjectRequest req, ILogger<Program> logger) =>
+app.MapPost("/api/diagnose", async ([FromBody] AnalyzeProjectRequest req, HttpContext context, ILogger<Program> logger) =>
 {
-    try
-    {
-        if (string.IsNullOrEmpty(openAiKey))
-            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
+    if (string.IsNullOrEmpty(openAiKey))
+        return ApiError.NotConfigured(context, "OpenAI API key");
 
-        var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
-        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
+    var correlationId = context.Items["CorrelationId"] as string;
+    var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
+    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
 
-        bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
-        string lang = isEs ? " Respond entirely in Spanish." : "";
+    bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
+    string lang = isEs ? " Respond entirely in Spanish." : "";
 
-        string prompt = $@"You are diagnosing a possible home issue. The user has not yet decided what's wrong — they want a ranked list of likely causes and what to check next.
+    string prompt = $@"You are diagnosing a possible home issue. The user has not yet decided what's wrong — they want a ranked list of likely causes and what to check next.
 
 Description: {req.Description ?? "(none)"}
 
@@ -569,52 +605,47 @@ Return JSON only:
   ""summary"": ""1-2 sentences""
 }}{lang}";
 
-        var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
-        if (req.Media != null)
-        {
-            foreach (var m in req.Media)
-            {
-                if (m.Type == "video" || string.IsNullOrEmpty(m.Base64)) continue;
-                try
-                {
-                    byte[] data = Convert.FromBase64String(m.Base64);
-                    parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
-                }
-                catch { }
-            }
-        }
-        var messages = new List<ChatMessage>
-        {
-            new SystemChatMessage("You are a home repair diagnostician. Return valid JSON only."),
-            new UserChatMessage(parts),
-        };
-        ChatCompletion completion = await client.CompleteChatAsync(messages);
-        string raw = completion.Content[0].Text.Trim();
-        int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
-        if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
-        return Results.Content(raw, "application/json");
-    }
-    catch (Exception ex)
+    int imgCount = 0;
+    var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
+    if (req.Media != null)
     {
-        logger.LogError(ex, "diagnose error");
-        return Results.Json(new { error = ex.Message }, statusCode: 500);
+        foreach (var m in req.Media)
+        {
+            if (m.Type == "video" || string.IsNullOrEmpty(m.Base64)) continue;
+            try
+            {
+                byte[] data = Convert.FromBase64String(m.Base64);
+                parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
+                imgCount++;
+            }
+            catch { }
+        }
     }
+    var messages = new List<ChatMessage>
+    {
+        new SystemChatMessage("You are a home repair diagnostician. Return valid JSON only."),
+        new UserChatMessage(parts),
+    };
+    var aiCtx = new AiCallContext("diagnose", "gpt-4o", req.Description?.Length ?? 0, imgCount, req.Language, correlationId);
+    string raw = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
+    if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
+    return Results.Content(raw, "application/json");
 });
 
 // ── #11 clarifying questions ───────────────────────────────────────
-app.MapPost("/api/clarify", async ([FromBody] AnalyzeProjectRequest req, ILogger<Program> logger) =>
+app.MapPost("/api/clarify", async ([FromBody] AnalyzeProjectRequest req, HttpContext context, ILogger<Program> logger) =>
 {
-    try
-    {
-        if (string.IsNullOrEmpty(openAiKey))
-            return Results.Json(new { error = "OPENAI_API_KEY is not configured." }, statusCode: 500);
+    if (string.IsNullOrEmpty(openAiKey))
+        return ApiError.NotConfigured(context, "OpenAI API key");
 
-        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey));
+    var correlationId = context.Items["CorrelationId"] as string;
+    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey));
 
-        bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
-        string lang = isEs ? " Respond in Spanish." : "";
+    bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
+    string lang = isEs ? " Respond in Spanish." : "";
 
-        string prompt = $@"Before generating a full DIY guide, you may want to ask 2-3 short clarifying questions. The user described: ""{req.Description ?? ""}"".
+    string prompt = $@"Before generating a full DIY guide, you may want to ask 2-3 short clarifying questions. The user described: ""{req.Description ?? ""}"".
 
 Return JSON only:
 {{
@@ -624,36 +655,32 @@ Return JSON only:
 }}
 If the description is already complete and unambiguous, return {{""questions"": []}}.{lang}";
 
-        var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
-        if (req.Media != null)
-        {
-            foreach (var m in req.Media)
-            {
-                if (m.Type == "video" || string.IsNullOrEmpty(m.Base64)) continue;
-                try
-                {
-                    byte[] data = Convert.FromBase64String(m.Base64);
-                    parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
-                }
-                catch { }
-            }
-        }
-        var messages = new List<ChatMessage>
-        {
-            new SystemChatMessage("You ask short, useful clarifying questions for DIY projects. Return valid JSON only."),
-            new UserChatMessage(parts),
-        };
-        ChatCompletion completion = await client.CompleteChatAsync(messages);
-        string raw = completion.Content[0].Text.Trim();
-        int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
-        if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
-        return Results.Content(raw, "application/json");
-    }
-    catch (Exception ex)
+    int imgCount = 0;
+    var parts = new List<ChatMessageContentPart> { ChatMessageContentPart.CreateTextPart(prompt) };
+    if (req.Media != null)
     {
-        logger.LogError(ex, "clarify error");
-        return Results.Json(new { error = ex.Message }, statusCode: 500);
+        foreach (var m in req.Media)
+        {
+            if (m.Type == "video" || string.IsNullOrEmpty(m.Base64)) continue;
+            try
+            {
+                byte[] data = Convert.FromBase64String(m.Base64);
+                parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
+                imgCount++;
+            }
+            catch { }
+        }
     }
+    var messages = new List<ChatMessage>
+    {
+        new SystemChatMessage("You ask short, useful clarifying questions for DIY projects. Return valid JSON only."),
+        new UserChatMessage(parts),
+    };
+    var aiCtx = new AiCallContext("clarify", "gpt-4o", req.Description?.Length ?? 0, imgCount, req.Language, correlationId);
+    string raw = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    int a = raw.IndexOf('{'); int b = raw.LastIndexOf('}');
+    if (a >= 0 && b > a) raw = raw.Substring(a, b - a + 1);
+    return Results.Content(raw, "application/json");
 });
 
 // ── #18 community projects (in-memory; replace with DB if persistent) ──
@@ -675,6 +702,45 @@ app.MapGet("/api/community-projects", ([FromQuery] string? q) =>
             (p.Description ?? "").ToLowerInvariant().Contains(ql));
     }
     return Results.Ok(results.Take(50));
+});
+
+// ── Beta feedback ─────────────────────────────────────────────────
+app.MapPost("/api/feedback", async ([FromBody] CreateFeedbackDto dto, AppDbContext db) =>
+{
+    var feedback = new BetaFeedback
+    {
+        ClientId = dto.Id ?? "",
+        Description = dto.Description ?? "",
+        WhatYouWereDoing = dto.WhatYouWereDoing,
+        ReproSteps = dto.ReproSteps,
+        AppVersion = dto.Metadata?.AppVersion,
+        BuildNumber = dto.Metadata?.BuildNumber,
+        Platform = dto.Metadata?.Platform,
+        OsVersion = dto.Metadata?.OsVersion,
+        Environment = dto.Metadata?.Environment,
+        GitCommit = dto.Metadata?.GitCommit,
+        CurrentScreen = dto.Metadata?.CurrentScreen,
+        CorrelationId = dto.Metadata?.LastCorrelationId,
+        CreatedAt = DateTime.UtcNow,
+    };
+    db.BetaFeedback.Add(feedback);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/feedback/{feedback.Id}", new { id = feedback.Id });
+});
+
+app.MapGet("/api/feedback", async (AppDbContext db) =>
+{
+    var results = await db.BetaFeedback
+        .OrderByDescending(f => f.CreatedAt)
+        .Take(100)
+        .Select(f => new
+        {
+            f.Id, f.ClientId, f.Description, f.WhatYouWereDoing, f.ReproSteps,
+            f.AppVersion, f.Platform, f.OsVersion, f.CurrentScreen,
+            f.Environment, f.GitCommit, f.CorrelationId, f.CreatedAt,
+        })
+        .ToListAsync();
+    return Results.Ok(results);
 });
 
 // ── #16 emergency directory (static for now) ───────────────────────
@@ -752,4 +818,24 @@ public record MediaItem(
     [property: JsonPropertyName("base64")] string? Base64,
     [property: JsonPropertyName("mimeType")] string? MimeType,
     [property: JsonPropertyName("type")] string? Type
+);
+
+public record CreateFeedbackDto(
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("whatYouWereDoing")] string? WhatYouWereDoing,
+    [property: JsonPropertyName("reproSteps")] string? ReproSteps,
+    [property: JsonPropertyName("metadata")] FeedbackMetadataDto? Metadata
+);
+
+public record FeedbackMetadataDto(
+    [property: JsonPropertyName("appVersion")] string? AppVersion,
+    [property: JsonPropertyName("buildNumber")] string? BuildNumber,
+    [property: JsonPropertyName("platform")] string? Platform,
+    [property: JsonPropertyName("osVersion")] string? OsVersion,
+    [property: JsonPropertyName("environment")] string? Environment,
+    [property: JsonPropertyName("release")] string? Release,
+    [property: JsonPropertyName("gitCommit")] string? GitCommit,
+    [property: JsonPropertyName("currentScreen")] string? CurrentScreen,
+    [property: JsonPropertyName("lastCorrelationId")] string? LastCorrelationId
 );

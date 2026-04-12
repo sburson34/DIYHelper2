@@ -8,4 +8,5 @@ public class AppDbContext : DbContext
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<HelpRequest> HelpRequests => Set<HelpRequest>();
+    public DbSet<BetaFeedback> BetaFeedback => Set<BetaFeedback>();
 }

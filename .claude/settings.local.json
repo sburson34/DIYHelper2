@@ -43,7 +43,12 @@
       "Bash(taskkill //F //PID 8068)",
       "Bash(npm uninstall:*)",
       "Bash(git add:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(ipconfig)",
+      "Bash(adb reverse:*)",
+      "Bash(keytool -genkeypair -v -storetype PKCS12 -keystore diyhelper-release.keystore -alias diyhelper -keyalg RSA -keysize 2048 -validity 10000 -storepass DIYHelper2024 -keypass DIYHelper2024 -dname \"CN=DIYHelper, OU=Mobile, O=DIYHelper, L=Unknown, ST=Unknown, C=US\")"
     ]
   }
 }

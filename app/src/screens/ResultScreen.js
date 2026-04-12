@@ -3,9 +3,9 @@ import { View, Text, TextInput, StyleSheet, ScrollView, Linking, TouchableOpacit
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { saveToHoneyDoList, saveToContractorList, getUserProfile, saveUserProfile, saveLocalHelpRequest, getCommunityOptIn, getAppPrefs, getToolInventory, addToInventory, removeFromInventory } from '../utils/storage';
-import { API_BASE_URL } from '../config/api';
-import { submitCommunityProject } from '../api/backendClient';
+import { submitCommunityProject, submitHelpRequest } from '../api/backendClient';
 import { useTranslation } from '../i18n/I18nContext';
+import { reportError, addBreadcrumb } from '../services/monitoring';
 import theme from '../theme';
 
 export default function ResultScreen({ navigation, route }) {
@@ -102,35 +102,28 @@ export default function ResultScreen({ navigation, route }) {
 
     if (hasPhone || hasEmail) {
       // Already have valid contact info, submit directly
+      addBreadcrumb('Contacting professional from result screen', 'user.action', {
+        projectTitle: project?.title,
+      });
       try {
-        const response = await fetch(`${API_BASE_URL}/api/help-requests`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            customerName: profile.name || '',
-            customerEmail: profile.email || '',
-            customerPhone: profile.phone || '',
-            projectTitle: project.title || 'Untitled Project',
-            userDescription: originalRequest?.description || '',
-            projectData: JSON.stringify(project),
-            imageBase64: originalRequest?.mediaItems?.[0]?.base64 || null,
-          }),
+        const created = await submitHelpRequest({
+          customerName: profile.name || '',
+          customerEmail: profile.email || '',
+          customerPhone: profile.phone || '',
+          projectTitle: project.title || 'Untitled Project',
+          userDescription: originalRequest?.description || '',
+          projectData: JSON.stringify(project),
+          imageBase64: originalRequest?.mediaItems?.[0]?.base64 || null,
         });
-        if (response.ok) {
-          try {
-            const created = await response.json();
-            await saveLocalHelpRequest({
-              id: String(created.id || Date.now()),
-              projectTitle: project.title || 'Untitled Project',
-              userDescription: originalRequest?.description || '',
-              status: 'sent',
-            });
-          } catch {}
-          Alert.alert(t('request_submitted'), t('request_submitted_msg'));
-        } else {
-          Alert.alert(t('error'), t('submit_failed'));
-        }
+        await saveLocalHelpRequest({
+          id: String(created.id || Date.now()),
+          projectTitle: project.title || 'Untitled Project',
+          userDescription: originalRequest?.description || '',
+          status: 'sent',
+        });
+        Alert.alert(t('request_submitted'), t('request_submitted_msg'));
       } catch (e) {
+        reportError(e, { source: 'ResultScreen', operation: 'contactProfessional' });
         Alert.alert(t('connection_error'), t('connection_error_msg'));
       }
       return;
@@ -170,25 +163,17 @@ export default function ResultScreen({ navigation, route }) {
       });
 
       // Submit to backend
-      const response = await fetch(`${API_BASE_URL}/api/help-requests`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerName: existingProfile.name || '',
-          customerEmail: hasEmail ? contactEmail.trim() : '',
-          customerPhone: hasPhone ? contactPhone.trim() : '',
-          projectTitle: project.title || 'Untitled Project',
-          userDescription: originalRequest?.description || '',
-          projectData: JSON.stringify(project),
-          imageBase64: originalRequest?.mediaItems?.[0]?.base64 || null,
-        }),
+      await submitHelpRequest({
+        customerName: existingProfile.name || '',
+        customerEmail: hasEmail ? contactEmail.trim() : '',
+        customerPhone: hasPhone ? contactPhone.trim() : '',
+        projectTitle: project.title || 'Untitled Project',
+        userDescription: originalRequest?.description || '',
+        projectData: JSON.stringify(project),
+        imageBase64: originalRequest?.mediaItems?.[0]?.base64 || null,
       });
       setContactModalVisible(false);
-      if (response.ok) {
-        Alert.alert(t('request_submitted'), t('request_submitted_msg'));
-      } else {
-        Alert.alert(t('error'), t('submit_failed'));
-      }
+      Alert.alert(t('request_submitted'), t('request_submitted_msg'));
     } catch (e) {
       setContactModalVisible(false);
       Alert.alert(t('connection_error'), t('connection_error_msg'));

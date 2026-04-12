@@ -1,7 +1,11 @@
-import React from 'react';
+import React, { useCallback, useRef } from 'react';
 import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
+
+SplashScreen.preventAutoHideAsync();
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer, DefaultTheme, DrawerActions } from '@react-navigation/native';
+import { navigationIntegration } from './src/services/sentry';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { Ionicons as Icon } from '@expo/vector-icons';
@@ -19,10 +23,12 @@ import Emergency from './src/screens/Emergency';
 import Diagnose from './src/screens/Diagnose';
 import Quotes from './src/screens/Quotes';
 import Community from './src/screens/Community';
+import ReportProblem from './src/screens/ReportProblem';
 import theme from './src/theme';
 import { I18nProvider, useTranslation } from './src/i18n/I18nContext';
 import { ThemeProvider } from './src/ThemeContext';
 import { requestCaptureReset } from './src/utils/captureBus';
+import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
 // Helper used by both the logo header and the "New Project" drawer item.
 // Asks the Capture screen to reset (it decides whether to prompt) and pops
@@ -67,6 +73,23 @@ const LogoHeader = ({ onPress, title, subtitle }) => (
 const Stack = createNativeStackNavigator();
 const Drawer = createDrawerNavigator();
 
+// Per-screen wrappers so the error boundary resets when navigating away and back.
+const CaptureWithBoundary = (props) => (
+  <ScreenErrorBoundary screenName="CaptureScreen">
+    <CaptureScreen {...props} />
+  </ScreenErrorBoundary>
+);
+const ResultWithBoundary = (props) => (
+  <ScreenErrorBoundary screenName="ResultScreen">
+    <ResultScreen {...props} />
+  </ScreenErrorBoundary>
+);
+const DiagnoseWithBoundary = (props) => (
+  <ScreenErrorBoundary screenName="DiagnoseScreen">
+    <Diagnose {...props} />
+  </ScreenErrorBoundary>
+);
+
 const MyTheme = {
   ...DefaultTheme,
   colors: {
@@ -103,7 +126,7 @@ function CaptureStack() {
     >
       <Stack.Screen
         name="Capture"
-        component={CaptureScreen}
+        component={CaptureWithBoundary}
         options={({ navigation }) => ({
           headerTitle: () => <LogoHeader onPress={() => goToFreshCapture(navigation)} title={t('app_title')} subtitle={t('app_subtitle')} />,
           headerTitleAlign: 'left',
@@ -121,7 +144,7 @@ function CaptureStack() {
       />
       <Stack.Screen
         name="Result"
-        component={ResultScreen}
+        component={ResultWithBoundary}
         options={{ title: t('nav_project_steps') }}
       />
       <Stack.Screen
@@ -145,8 +168,22 @@ function CaptureStack() {
 
 function AppContent() {
   const { t } = useTranslation();
+  // Hand the NavigationContainer ref to Sentry's react-navigation integration
+  // so route changes are emitted as breadcrumbs (and tx spans when tracing).
+  const navigationRef = useRef(null);
   return (
-    <NavigationContainer theme={MyTheme}>
+    <NavigationContainer
+      theme={MyTheme}
+      ref={navigationRef}
+      onReady={() => {
+        try {
+          navigationIntegration.registerNavigationContainer(navigationRef);
+        } catch {
+          // Sentry not initialized (no DSN) — safe to ignore.
+        }
+        SplashScreen.hideAsync();
+      }}
+    >
       <Drawer.Navigator
         initialRouteName="NewProject"
         screenOptions={{
@@ -176,7 +213,11 @@ function AppContent() {
       >
         <Drawer.Screen
           name="NewProject"
-          component={CaptureStack}
+          children={() => (
+            <ScreenErrorBoundary screenName="CaptureStack">
+              <CaptureStack />
+            </ScreenErrorBoundary>
+          )}
           listeners={({ navigation }) => ({
             drawerItemPress: (e) => {
               // Always fire a reset request when "New Project" is tapped from the drawer.
@@ -286,7 +327,7 @@ function AppContent() {
         />
         <Drawer.Screen
           name="Diagnose"
-          component={Diagnose}
+          component={DiagnoseWithBoundary}
           options={({ navigation }) => ({
             title: t('nav_diagnose') || "What's Wrong?",
             headerShown: true,
@@ -358,6 +399,25 @@ function AppContent() {
             ),
             headerLeft: () => null,
             drawerIcon: ({ color, size }) => <Icon name="warning-outline" size={size} color="#DC2626" />,
+          })}
+        />
+        <Drawer.Screen
+          name="ReportProblem"
+          component={ReportProblem}
+          options={({ navigation }) => ({
+            title: 'Report a Problem',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => goToFreshCapture(navigation)} title="Report a Problem" subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="chatbubble-ellipses-outline" size={size} color={color} />,
           })}
         />
         <Drawer.Screen

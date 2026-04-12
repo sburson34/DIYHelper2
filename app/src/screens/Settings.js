@@ -10,6 +10,8 @@ import {
 import { useTranslation } from '../i18n/I18nContext';
 import { useAppTheme } from '../ThemeContext';
 import theme from '../theme';
+import { reportError, reportHandledError, reportWarning, addBreadcrumb } from '../services/monitoring';
+import { Sentry } from '../services/sentry';
 
 export default function Settings() {
   const { t, language, setLanguage } = useTranslation();
@@ -200,6 +202,84 @@ export default function Settings() {
               </TouchableOpacity>
             </View>
           </View>
+
+          {__DEV__ ? (
+            <View style={styles.languageSection}>
+              <View style={styles.languageHeader}>
+                <Icon name="bug-outline" size={24} color={theme.colors.primary} />
+                <Text style={styles.languageTitle}>Sentry debug</Text>
+              </View>
+              <Text style={styles.languageDesc}>
+                Dev-only. Trigger test events to verify Sentry wiring. These
+                buttons are stripped from release builds by the __DEV__ guard.
+              </Text>
+              <View style={{ gap: 8, marginTop: 8 }}>
+                <TouchableOpacity
+                  style={styles.langButton}
+                  onPress={() => {
+                    reportWarning('Sentry test warning from Settings', {
+                      source: 'settings_debug_panel',
+                    });
+                    Alert.alert('Sentry', 'Test warning sent');
+                  }}
+                >
+                  <Text style={styles.langButtonText}>Send test warning</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.langButton}
+                  onPress={() => {
+                    try {
+                      throw new Error('Sentry test: handled JS exception');
+                    } catch (e) {
+                      reportHandledError('SettingsDebugPanel', e, { source: 'settings_debug_panel' });
+                      Alert.alert('Sentry', 'Handled exception captured');
+                    }
+                  }}
+                >
+                  <Text style={styles.langButtonText}>Throw handled exception</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.langButton}
+                  onPress={() => {
+                    // Defer so the press handler returns first; this becomes
+                    // an UNHANDLED rejection caught by Sentry's global hook.
+                    setTimeout(() => {
+                      throw new Error('Sentry test: unhandled JS exception');
+                    }, 0);
+                  }}
+                >
+                  <Text style={styles.langButtonText}>Throw unhandled exception</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.langButton, { borderColor: '#DC2626' }]}
+                  onPress={() => {
+                    Alert.alert(
+                      'Native crash',
+                      'This will hard-crash the app to verify native crash reporting. Continue?',
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        {
+                          text: 'Crash',
+                          style: 'destructive',
+                          onPress: () => {
+                            try {
+                              Sentry.nativeCrash();
+                            } catch (e) {
+                              captureException(e);
+                            }
+                          },
+                        },
+                      ],
+                    );
+                  }}
+                >
+                  <Text style={[styles.langButtonText, { color: '#DC2626' }]}>
+                    Trigger native crash
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

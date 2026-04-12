@@ -1,0 +1,12 @@
+# Copy to app/sentry.properties (and to app/android/sentry.properties).
+# DO NOT commit the real file — it contains an auth token.
+# Add `sentry.properties` to .gitignore.
+
+defaults.url=https://sentry.io/
+defaults.org=YOUR_SENTRY_ORG_SLUG
+defaults.project=YOUR_SENTRY_PROJECT_SLUG
+
+# Personal/Internal auth token with `project:releases` + `org:read` scopes.
+# Prefer setting SENTRY_AUTH_TOKEN as a CI/local env var instead of writing it
+# here in plain text.
+auth.token=YOUR_SENTRY_AUTH_TOKEN
