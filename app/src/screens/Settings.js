@@ -7,9 +7,15 @@ import {
   getAppPrefs, setAppPrefs,
   getCommunityOptIn, setCommunityOptIn,
 } from '../utils/storage';
+import { requestPermissions as requestNotificationPermissions } from '../utils/notifications';
 import { useTranslation } from '../i18n/I18nContext';
 import { useAppTheme } from '../ThemeContext';
 import theme from '../theme';
+import {
+  triggerHandledException,
+  triggerUnhandledException,
+  triggerNativeCrash,
+} from '../utils/sentryTest';
 
 export default function Settings() {
   const { t, language, setLanguage } = useTranslation();
@@ -158,7 +164,19 @@ export default function Settings() {
               <Text style={styles.toggleLabel}>Reminders</Text>
               <Text style={styles.toggleSub}>Notify me about unfinished projects.</Text>
             </View>
-            <Switch value={reminders} onValueChange={setReminders} />
+            <Switch
+              value={reminders}
+              onValueChange={async (val) => {
+                setReminders(val);
+                if (val) {
+                  const granted = await requestNotificationPermissions();
+                  if (!granted) {
+                    Alert.alert('Permission denied', 'Enable notifications in system settings to receive reminders.');
+                    setReminders(false);
+                  }
+                }
+              }}
+            />
           </View>
 
           <View style={styles.toggleRow}>
@@ -200,6 +218,45 @@ export default function Settings() {
               </TouchableOpacity>
             </View>
           </View>
+
+          {__DEV__ ? (
+            <View style={styles.languageSection}>
+              <View style={styles.languageHeader}>
+                <Icon name="bug-outline" size={24} color={theme.colors.primary} />
+                <Text style={styles.languageTitle}>Sentry Test (dev only)</Text>
+              </View>
+              <Text style={styles.languageDesc}>
+                Trigger sample errors to verify the Sentry pipeline. Native crash will exit the app.
+              </Text>
+              <TouchableOpacity
+                style={[styles.langButton, { marginBottom: 8 }]}
+                onPress={triggerHandledException}
+              >
+                <Text style={styles.langButtonText}>Send handled exception</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.langButton, { marginBottom: 8 }]}
+                onPress={triggerUnhandledException}
+              >
+                <Text style={styles.langButtonText}>Throw unhandled JS exception</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.langButton}
+                onPress={() =>
+                  Alert.alert(
+                    'Native crash',
+                    'This will hard-crash the app. Continue?',
+                    [
+                      { text: 'Cancel', style: 'cancel' },
+                      { text: 'Crash', style: 'destructive', onPress: triggerNativeCrash },
+                    ],
+                  )
+                }
+              >
+                <Text style={styles.langButtonText}>Force native crash</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

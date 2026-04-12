@@ -43,7 +43,11 @@
       "Bash(taskkill //F //PID 8068)",
       "Bash(npm uninstall:*)",
       "Bash(git add:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(java -version)",
+      "Bash(winget:*)",
+      "Read(//c/Program Files/Microsoft/**)",
+      "Bash(\"/c/Program Files/Microsoft/jdk-17.0.18.8-hotspot/bin/java.exe\" -version)"
     ]
   }
 }

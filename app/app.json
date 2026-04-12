@@ -18,7 +18,19 @@
     "plugins": [
       "expo-audio",
       "expo-speech-recognition",
-      "expo-sharing"
-    ]
+      "expo-sharing",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "note": "org/project/authToken are read from sentry.properties or env vars (SENTRY_ORG, SENTRY_PROJECT, SENTRY_AUTH_TOKEN). Do NOT commit them here."
+        }
+      ]
+    ],
+    "extra": {
+      "sentryDsn": "",
+      "sentryEnvironment": "development",
+      "sentryRelease": null
+    }
   }
 }

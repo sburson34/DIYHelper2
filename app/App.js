@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { NavigationContainer, DefaultTheme, DrawerActions } from '@react-navigation/native';
+import { NavigationContainer, DefaultTheme, DrawerActions, useNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { Ionicons as Icon } from '@expo/vector-icons';
@@ -10,6 +10,7 @@ import ResultScreen from './src/screens/ResultScreen';
 import SafetyScreen from './src/screens/SafetyScreen';
 import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
+import PaintMatchScreen from './src/screens/PaintMatchScreen';
 import HoneyDo from './src/screens/HoneyDo';
 import Contractors from './src/screens/Contractors';
 import Settings from './src/screens/Settings';
@@ -22,7 +23,9 @@ import Community from './src/screens/Community';
 import theme from './src/theme';
 import { I18nProvider, useTranslation } from './src/i18n/I18nContext';
 import { ThemeProvider } from './src/ThemeContext';
+import { FeaturesProvider } from './src/config/features';
 import { requestCaptureReset } from './src/utils/captureBus';
+import { wrap as sentryWrap, navigationIntegration } from './src/utils/sentry';
 
 // Helper used by both the logo header and the "New Project" drawer item.
 // Asks the Capture screen to reset (it decides whether to prompt) and pops
@@ -139,14 +142,28 @@ function CaptureStack() {
         component={WorkSteps}
         options={{ title: t('nav_workshop_mode') }}
       />
+      <Stack.Screen
+        name="PaintMatch"
+        component={PaintMatchScreen}
+        options={{ title: 'Paint Color Match' }}
+      />
     </Stack.Navigator>
   );
 }
 
 function AppContent() {
   const { t } = useTranslation();
+  // Ref is registered with the Sentry navigation integration so that
+  // route changes show up as breadcrumbs / transactions.
+  const navigationRef = useNavigationContainerRef();
   return (
-    <NavigationContainer theme={MyTheme}>
+    <NavigationContainer
+      theme={MyTheme}
+      ref={navigationRef}
+      onReady={() => {
+        navigationIntegration.registerNavigationContainer(navigationRef);
+      }}
+    >
       <Drawer.Navigator
         initialRouteName="NewProject"
         screenOptions={{
@@ -390,14 +407,20 @@ function AppContent() {
   );
 }
 
-export default function App() {
+function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         <I18nProvider>
-          <AppContent />
+          <FeaturesProvider>
+            <AppContent />
+          </FeaturesProvider>
         </I18nProvider>
       </ThemeProvider>
     </GestureHandlerRootView>
   );
 }
+
+// Sentry.wrap installs the JS error boundary + touch event tracking.
+// It is a no-op when Sentry was not initialized (no DSN configured).
+export default sentryWrap(App);

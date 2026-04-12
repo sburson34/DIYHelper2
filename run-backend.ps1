@@ -9,5 +9,5 @@ if ($portUsed) {
 
 Write-Host "Starting Backend..."
 # Move to the backend directory relative to the script location
-Set-Location -Path "$PSScriptRoot\backend\DIYHelper2.Api"
+Set-Location -Path "$PSScriptRoot\backend\LandscapeHelper.Api"
 dotnet run --launch-profile external

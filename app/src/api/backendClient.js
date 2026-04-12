@@ -130,6 +130,62 @@ const browseCommunityProjects = async (query = '') => {
   return response.json();
 };
 
+// ── External API integrations ─────────────────────────────────────
+
+const getFeatures = async () => {
+  try {
+    const response = await fetch(`${BASE_URL}/api/features`);
+    if (!response.ok) throw new Error(`features ${response.status}`);
+    return response.json();
+  } catch (e) {
+    // Sane defaults if the backend is unreachable or hasn't deployed yet
+    return { amazonPa: false, attom: false, paintColors: false, claudeFallback: false,
+             youtube: false, weather: false, reddit: true, pubchem: true, receiptOcr: false };
+  }
+};
+
+const getWeather = async (zip, days = 5) => {
+  const url = `${BASE_URL}/api/weather?zip=${encodeURIComponent(zip)}&days=${days}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Weather request failed: ${response.status}`);
+  return response.json();
+};
+
+const getRedditDiscussions = async (query) => {
+  const url = `${BASE_URL}/api/reddit-discussions?query=${encodeURIComponent(query)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Reddit request failed: ${response.status}`);
+  return response.json();
+};
+
+const getSafetyData = async (chemical) => {
+  const url = `${BASE_URL}/api/safety-data?chemical=${encodeURIComponent(chemical)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Safety data request failed: ${response.status}`);
+  return response.json();
+};
+
+const getPropertyValueImpact = async ({ zip, repairType, estimatedCost }) => {
+  const params = new URLSearchParams();
+  if (zip) params.append('zip', zip);
+  params.append('repairType', repairType || 'general');
+  params.append('estimatedCost', String(estimatedCost || 0));
+  const url = `${BASE_URL}/api/property-value-impact?${params.toString()}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Property value request failed: ${response.status}`);
+  return response.json();
+};
+
+const uploadReceipt = async ({ base64Image, mimeType, projectId }) => {
+  const url = `${BASE_URL}/api/receipt-ocr`;
+  return jsonFetch(url, { base64Image, mimeType, projectId });
+};
+
+const matchPaintColor = async ({ base64Image, mimeType }) => {
+  const url = `${BASE_URL}/api/paint-color-match`;
+  return jsonFetch(url, { base64Image, mimeType });
+};
+
 export {
   analyzeProject,
   askHelper,
@@ -142,4 +198,11 @@ export {
   listHelpRequests,
   submitCommunityProject,
   browseCommunityProjects,
+  getFeatures,
+  getWeather,
+  getRedditDiscussions,
+  getSafetyData,
+  getPropertyValueImpact,
+  uploadReceipt,
+  matchPaintColor,
 };

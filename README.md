@@ -18,7 +18,7 @@ A full native phone app for DIY project assistance.
 
 ### Backend
 
-1. Navigate to `backend/DIYHelper2.Api`.
+1. Navigate to `backend/LandscapeHelper.Api`.
 2. Set your `OPENAI_API_KEY` environment variable.
 3. Run `dotnet run`.
 4. The API will be available at `http://localhost:5206`.

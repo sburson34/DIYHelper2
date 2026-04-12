@@ -7,5 +7,5 @@ if %errorlevel% equ 0 (
 )
 
 echo Starting Backend...
-cd /d "%~dp0backend\DIYHelper2.Api"
+cd /d "%~dp0backend\LandscapeHelper.Api"
 dotnet run --launch-profile external

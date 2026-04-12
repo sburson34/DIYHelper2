@@ -12,18 +12,41 @@ const COMMUNITY_OPT_IN_KEY = '@community_opt_in';
 
 const generateId = () => Date.now().toString() + Math.floor(Math.random() * 1000);
 
+// ── Schema version ─────────────────────────────────────────────────
+// Bumped when the project shape gains new optional fields. Old records are
+// upgraded lazily as they're read; no destructive rewrites.
+export const PROJECT_SCHEMA_VERSION = 2;
+
+export const migrateProject = (project) => {
+  if (!project || typeof project !== 'object') return project;
+  if (project.schemaVersion === PROJECT_SCHEMA_VERSION) return project;
+  return {
+    ...project,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
+    weatherWindow: project.weatherWindow || null,
+    purchasedMaterials: project.purchasedMaterials || [],
+    paintColors: project.paintColors || [],
+    realYoutubeVideos: project.realYoutubeVideos || [],
+    amazonProducts: project.amazonProducts || [],
+    redditThreads: project.redditThreads || [],
+    pubchemSafety: project.pubchemSafety || [],
+    propertyValueImpact: project.propertyValueImpact || null,
+    scheduledReminderIds: project.scheduledReminderIds || [],
+  };
+};
+
 // ── Honey-Do List ───────────────────────────────────────────────────
 export const saveToHoneyDoList = async (project) => {
   try {
     const existing = await getHoneyDoList();
-    const newProject = {
+    const newProject = migrateProject({
       ...project,
       id: generateId(),
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
       photos: project.photos || [],
       stepNotes: project.stepNotes || {},
-    };
+    });
     const updated = [newProject, ...existing];
     await AsyncStorage.setItem(HONEY_DO_KEY, JSON.stringify(updated));
     return true;
@@ -37,7 +60,9 @@ export const getHoneyDoList = async () => {
   try {
     const value = await AsyncStorage.getItem(HONEY_DO_KEY);
     const list = value != null ? JSON.parse(value) : [];
-    return Array.isArray(list) ? list.filter(item => item && (item.id || item.title)) : [];
+    return Array.isArray(list)
+      ? list.filter(item => item && (item.id || item.title)).map(migrateProject)
+      : [];
   } catch (e) {
     console.error('Failed to fetch honey do list', e);
     return [];
@@ -73,14 +98,14 @@ export const removeFromHoneyDoList = async (id) => {
 export const saveToContractorList = async (project) => {
   try {
     const existing = await getContractorList();
-    const newProject = {
+    const newProject = migrateProject({
       ...project,
       id: generateId(),
       createdAt: new Date().toISOString(),
       lastActivityAt: new Date().toISOString(),
       photos: project.photos || [],
       quoteStatus: project.quoteStatus || 'sent',
-    };
+    });
     const updated = [newProject, ...existing];
     await AsyncStorage.setItem(CONTRACTOR_KEY, JSON.stringify(updated));
     return true;
@@ -94,7 +119,9 @@ export const getContractorList = async () => {
   try {
     const value = await AsyncStorage.getItem(CONTRACTOR_KEY);
     const list = value != null ? JSON.parse(value) : [];
-    return Array.isArray(list) ? list.filter(item => item && (item.id || item.title)) : [];
+    return Array.isArray(list)
+      ? list.filter(item => item && (item.id || item.title)).map(migrateProject)
+      : [];
   } catch (e) {
     console.error('Failed to fetch contractor list', e);
     return [];

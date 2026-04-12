@@ -11,7 +11,7 @@ DIYHelper2 is a full-stack mobile app for AI-powered DIY project assistance. Use
 **Monorepo with two independent projects:**
 
 - **`app/`** — React Native 0.83 + Expo SDK 55 mobile app (JavaScript, not TypeScript enforced)
-- **`backend/DIYHelper2.Api/`** — ASP.NET Core 10.0 minimal API (C#)
+- **`backend/LandscapeHelper.Api/`** — ASP.NET Core 10.0 minimal API (C#)
 
 The frontend sends base64-encoded images + text descriptions to the backend, which forwards them to OpenAI's GPT-4o vision model and returns structured JSON (title, steps, tools, difficulty, cost, YouTube links, shopping links, safety tips).
 
@@ -24,7 +24,7 @@ The frontend sends base64-encoded images + text descriptions to the backend, whi
 - **Theme:** Centralized design tokens in `src/theme.js` — colors (primary: #FCA004 orange, secondary: #0A4FA6 blue), spacing, border radius
 - **Media:** react-native-image-picker for photos/video, expo-speech-recognition for voice-to-text, expo-audio for recording, react-native-tts for text-to-speech
 
-### Backend Architecture (backend/DIYHelper2.Api/)
+### Backend Architecture (backend/LandscapeHelper.Api/)
 
 - **Single-file API:** `Program.cs` contains all route handlers (minimal API pattern, no separate controller classes for main routes)
 - **Endpoints:** `POST /api/analyze` (image+text → AI guide), `POST /api/ask-helper` (contextual follow-up questions), `GET /api/health`
@@ -44,7 +44,7 @@ npm test                       # run Jest tests
 npm run lint                   # run ESLint
 ```
 
-### Backend (run from `backend/DIYHelper2.Api/`)
+### Backend (run from `backend/LandscapeHelper.Api/`)
 
 ```bash
 dotnet run                     # start API on http://localhost:5206
