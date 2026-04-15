@@ -425,10 +425,10 @@ function AppContent() {
           name="ReportProblem"
           component={ReportProblem}
           options={({ navigation }) => ({
-            title: 'Report a Problem',
+            title: t('nav_report_problem'),
             headerShown: true,
             headerTitle: () => (
-              <LogoHeader onPress={() => goToFreshCapture(navigation)} title="Report a Problem" subtitle={t('app_title')} />
+              <LogoHeader onPress={() => goToFreshCapture(navigation)} title={t('nav_report_problem')} subtitle={t('app_title')} />
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
