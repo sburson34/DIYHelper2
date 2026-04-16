@@ -17,7 +17,7 @@ import { reportError, reportHandledError, reportWarning, addBreadcrumb } from '.
 import { Sentry } from '../services/sentry';
 import { useMLTranslation } from '../mlkit/TranslationProvider';
 
-export default function Settings() {
+export default function Settings({ navigation, showReportProblemLink }) {
   const { t, language, setLanguage, isTranslating, translationError } = useTranslation();
   const { isDark, toggleDark } = useAppTheme();
   const { available: translationAvailable, isModelReady, isDownloading, downloadModel } = useMLTranslation();
@@ -286,6 +286,19 @@ export default function Settings() {
             </View>
             <Text style={[styles.languageDesc, { color: '#78350F' }]}>{t('ai_disclosure_body')}</Text>
           </View>
+
+          {showReportProblemLink && navigation ? (
+            <TouchableOpacity
+              style={[styles.languageSection, { flexDirection: 'row', alignItems: 'center', gap: 12 }]}
+              onPress={() => navigation.navigate('ReportProblem')}
+              accessibilityRole="button"
+              accessibilityLabel={t('nav_report_problem')}
+            >
+              <Icon name="chatbubble-ellipses-outline" size={24} color={theme.colors.secondary} />
+              <Text style={[styles.languageTitle, { flex: 1 }]}>{t('nav_report_problem')}</Text>
+              <Icon name="chevron-forward" size={20} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+          ) : null}
 
           {/* Delete my data */}
           <View style={styles.languageSection}>

@@ -8,3 +8,4 @@
 *.db
 *.db-shm
 *.db-wal
+backend/DIYHelper2.Api/publish/
