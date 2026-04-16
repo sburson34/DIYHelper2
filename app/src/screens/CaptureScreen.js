@@ -495,6 +495,8 @@ export default function CaptureScreen({ navigation, route }) {
           <TouchableOpacity
              style={styles.resetButtonHome}
              onPress={resetAll}
+             accessibilityLabel={t('start_over')}
+             accessibilityRole="button"
            >
              <Icon name="refresh" size={16} color="#94A3B8" />
              <Text style={styles.resetButtonTextHome}>{t('start_over')}</Text>

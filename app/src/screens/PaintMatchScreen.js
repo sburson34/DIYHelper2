@@ -3,9 +3,11 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, ActivityIn
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { matchPaintColor } from '../api/backendClient';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function PaintMatchScreen({ navigation, route }) {
+  const { t } = useTranslation();
   const { base64Image, mimeType, previewUri } = route.params || {};
   const [loading, setLoading] = useState(true);
   const [result, setResult] = useState(null);
@@ -20,7 +22,7 @@ export default function PaintMatchScreen({ navigation, route }) {
         const r = await matchPaintColor({ base64Image, mimeType: mimeType || 'image/jpeg' });
         setResult(r);
       } catch (e) {
-        Alert.alert('Color match failed', e.message || 'Unknown error');
+        Alert.alert(t('paint_match_fail_title'), e.message || 'Unknown error');
       } finally {
         setLoading(false);
       }
@@ -30,29 +32,29 @@ export default function PaintMatchScreen({ navigation, route }) {
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>Paint Color Match</Text>
-        <Text style={styles.subtitle}>Closest named paint colors to what the camera saw.</Text>
+        <Text style={styles.title} accessibilityRole="header">{t('paint_match_title')}</Text>
+        <Text style={styles.subtitle}>{t('paint_match_subtitle')}</Text>
 
-        {previewUri ? <Image source={{ uri: previewUri }} style={styles.preview} /> : null}
+        {previewUri ? <Image source={{ uri: previewUri }} style={styles.preview} accessibilityLabel="Captured photo" /> : null}
 
         {loading ? (
           <View style={{ padding: 40, alignItems: 'center' }}>
             <ActivityIndicator color={theme.colors.primary} />
-            <Text style={{ marginTop: 10, color: theme.colors.textSecondary }}>Analyzing color…</Text>
+            <Text style={{ marginTop: 10, color: theme.colors.textSecondary }}>{t('paint_match_analyzing')}</Text>
           </View>
         ) : result ? (
           <View>
             <View style={styles.dominantRow}>
-              <View style={[styles.swatch, { backgroundColor: result.dominantHex }]} />
+              <View style={[styles.swatch, { backgroundColor: result.dominantHex }]} accessibilityLabel={`Dominant color ${result.dominantHex}`} />
               <View style={{ marginLeft: 12 }}>
-                <Text style={styles.dominantLabel}>Dominant color</Text>
+                <Text style={styles.dominantLabel}>{t('paint_match_dominant')}</Text>
                 <Text style={styles.dominantHex}>{result.dominantHex}</Text>
               </View>
             </View>
 
-            <Text style={styles.matchesTitle}>Nearest matches</Text>
+            <Text style={styles.matchesTitle} accessibilityRole="header">{t('paint_match_nearest')}</Text>
             {(result.matches || []).map((m, i) => (
-              <View key={i} style={styles.matchCard}>
+              <View key={i} style={styles.matchCard} accessibilityLabel={`${m.brand} ${m.name}, color code ${m.code}`}>
                 <View style={[styles.matchSwatch, { backgroundColor: m.hex }]} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.matchName}>{m.name}</Text>
@@ -64,18 +66,23 @@ export default function PaintMatchScreen({ navigation, route }) {
               </View>
             ))}
             <Text style={styles.sourceNote}>
-              Source: {result.source === 'bundled-palette' ? 'Bundled popular-color palette (no brand API configured)' : 'Brand API'}
+              {result.source === 'bundled-palette' ? t('paint_match_source_bundled') : t('paint_match_source_brand')}
             </Text>
           </View>
         ) : (
           <Text style={{ color: theme.colors.textSecondary, textAlign: 'center', marginTop: 40 }}>
-            No image was provided to analyze.
+            {t('paint_match_empty')}
           </Text>
         )}
 
-        <TouchableOpacity style={styles.button} onPress={() => navigation.goBack()}>
+        <TouchableOpacity
+          style={styles.button}
+          onPress={() => navigation.goBack()}
+          accessibilityRole="button"
+          accessibilityLabel={t('back')}
+        >
           <Icon name="arrow-back" size={18} color="#fff" />
-          <Text style={styles.buttonText}>Back</Text>
+          <Text style={styles.buttonText}>{t('back')}</Text>
         </TouchableOpacity>
       </ScrollView>
     </SafeAreaView>

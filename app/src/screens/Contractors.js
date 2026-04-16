@@ -159,6 +159,8 @@ export default function Contractors({ navigation }) {
             <TouchableOpacity
               style={styles.deleteIcon}
               onPress={() => handleDelete(item.id)}
+              accessibilityLabel={`Delete ${item.title}`}
+              accessibilityRole="button"
             >
               <Icon name="trash-outline" size={20} color={theme.colors.danger} />
             </TouchableOpacity>

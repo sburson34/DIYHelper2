@@ -5,6 +5,7 @@
     "name": "DIYHelper2",
     "slug": "diyhelper2",
     "version": "1.0.0",
+    "scheme": "diyhelper",
     "assetBundlePatterns": [
       "**/*"
     ],
@@ -22,7 +23,9 @@
     },
     "android": {
       "package": "com.diyhelper2",
-      "versionCode": 1
+      "versionCode": 1,
+      "allowBackup": false,
+      "blockedPermissions": ["android.permission.SYSTEM_ALERT_WINDOW"]
     },
     "extra": {
       "sentryDsn": "https://bf84aa0077ae0f4ccf5100632b3f1ed7@o4511185009049600.ingest.us.sentry.io/4511185011736576"

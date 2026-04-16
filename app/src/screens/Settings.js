@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, Switch } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, Switch, Modal, FlatList, ActivityIndicator } from 'react-native';
+import { GOOGLE_LANGUAGES } from '../i18n/googleLanguages';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import {
@@ -17,7 +18,7 @@ import { Sentry } from '../services/sentry';
 import { useMLTranslation } from '../mlkit/TranslationProvider';
 
 export default function Settings() {
-  const { t, language, setLanguage } = useTranslation();
+  const { t, language, setLanguage, isTranslating, translationError } = useTranslation();
   const { isDark, toggleDark } = useAppTheme();
   const { available: translationAvailable, isModelReady, isDownloading, downloadModel } = useMLTranslation();
   const [name, setName] = useState('');
@@ -28,6 +29,8 @@ export default function Settings() {
   const [reminders, setReminders] = useState(true);
   const [community, setCommunity] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const [langSearch, setLangSearch] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -205,18 +208,21 @@ export default function Settings() {
             <Text style={styles.saveButtonText}>{saved ? t('saved') : t('save_profile')}</Text>
           </TouchableOpacity>
 
-          {/* Language toggle */}
+          {/* Language picker — two hardcoded fast-paths + full Google list */}
           <View style={styles.languageSection}>
             <View style={styles.languageHeader}>
               <Icon name="language-outline" size={24} color={theme.colors.primary} />
               <Text style={styles.languageTitle}>{t('language')}</Text>
+              {isTranslating && (
+                <ActivityIndicator size="small" color={theme.colors.primary} style={{ marginLeft: 8 }} />
+              )}
             </View>
             <Text style={styles.languageDesc}>{t('language_desc')}</Text>
             <View style={styles.languageButtons}>
               <TouchableOpacity
                 style={[styles.langButton, language === 'en' && styles.langButtonActive]}
                 onPress={() => setLanguage('en')}
-                accessibilityLabel={`English language${language === 'en' ? ', selected' : ''}`}
+                accessibilityLabel={`English${language === 'en' ? ', selected' : ''}`}
                 accessibilityRole="button"
               >
                 <Text style={[styles.langButtonText, language === 'en' && styles.langButtonTextActive]}>
@@ -226,7 +232,7 @@ export default function Settings() {
               <TouchableOpacity
                 style={[styles.langButton, language === 'es' && styles.langButtonActive]}
                 onPress={() => setLanguage('es')}
-                accessibilityLabel={`Spanish language${language === 'es' ? ', selected' : ''}`}
+                accessibilityLabel={`Spanish${language === 'es' ? ', selected' : ''}`}
                 accessibilityRole="button"
               >
                 <Text style={[styles.langButtonText, language === 'es' && styles.langButtonTextActive]}>
@@ -234,6 +240,26 @@ export default function Settings() {
                 </Text>
               </TouchableOpacity>
             </View>
+
+            {/* More languages — opens a searchable modal over the full Google catalog */}
+            <TouchableOpacity
+              style={styles.moreLanguagesButton}
+              onPress={() => { setLangSearch(''); setLangPickerOpen(true); }}
+              accessibilityRole="button"
+              accessibilityLabel="Choose from all supported languages"
+            >
+              <Icon name="globe-outline" size={18} color={theme.colors.primary} />
+              <Text style={styles.moreLanguagesText}>
+                {language !== 'en' && language !== 'es'
+                  ? (GOOGLE_LANGUAGES.find(l => l.code === language)?.name || language)
+                  : 'More languages…'}
+              </Text>
+              <Icon name="chevron-down" size={18} color={theme.colors.textSecondary} />
+            </TouchableOpacity>
+            {translationError ? (
+              <Text style={styles.translationError}>Translation error: {translationError}</Text>
+            ) : null}
+
             {translationAvailable && (
               <TouchableOpacity
                 style={[styles.langButton, { marginTop: 12, flexDirection: 'row', gap: 6, alignItems: 'center' }]}
@@ -250,6 +276,15 @@ export default function Settings() {
                 </Text>
               </TouchableOpacity>
             )}
+          </View>
+
+          {/* AI content disclosure — required for app store submission */}
+          <View style={[styles.languageSection, { borderColor: '#F59E0B', backgroundColor: '#FFFBEB' }]}>
+            <View style={styles.languageHeader}>
+              <Icon name="information-circle-outline" size={24} color="#B45309" />
+              <Text style={[styles.languageTitle, { color: '#78350F' }]}>{t('ai_disclosure_title')}</Text>
+            </View>
+            <Text style={[styles.languageDesc, { color: '#78350F' }]}>{t('ai_disclosure_body')}</Text>
           </View>
 
           {/* Delete my data */}
@@ -384,6 +419,66 @@ export default function Settings() {
           ) : null}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Language picker modal — full Google Translate catalog with live search */}
+      <Modal
+        visible={langPickerOpen}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setLangPickerOpen(false)}
+      >
+        <View style={styles.pickerOverlay}>
+          <View style={styles.pickerCard}>
+            <View style={styles.pickerHeader}>
+              <Text style={styles.pickerTitle}>Choose a language</Text>
+              <TouchableOpacity
+                onPress={() => setLangPickerOpen(false)}
+                accessibilityLabel="Close language picker"
+                accessibilityRole="button"
+                hitSlop={{ top: 12, right: 12, bottom: 12, left: 12 }}
+              >
+                <Icon name="close" size={24} color={theme.colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            <TextInput
+              style={styles.pickerSearch}
+              value={langSearch}
+              onChangeText={setLangSearch}
+              placeholder="Search…"
+              placeholderTextColor={theme.colors.textSecondary}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            <FlatList
+              data={GOOGLE_LANGUAGES
+                // English and Spanish have their own dedicated buttons above,
+                // so exclude them from the "other languages" list to avoid
+                // duplication.
+                .filter(l => l.code !== 'en' && l.code !== 'es')
+                .filter(l =>
+                  !langSearch ||
+                  l.name.toLowerCase().includes(langSearch.toLowerCase()) ||
+                  l.code.toLowerCase().includes(langSearch.toLowerCase())
+                )}
+              keyExtractor={(item) => item.code}
+              keyboardShouldPersistTaps="handled"
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={[styles.pickerRow, language === item.code && styles.pickerRowActive]}
+                  onPress={() => { setLangPickerOpen(false); setLanguage(item.code); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${item.name}${language === item.code ? ', selected' : ''}`}
+                >
+                  <Text style={[styles.pickerRowText, language === item.code && styles.pickerRowTextActive]}>
+                    {item.name}
+                  </Text>
+                  <Text style={styles.pickerRowCode}>{item.code}</Text>
+                </TouchableOpacity>
+              )}
+            />
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -510,4 +605,42 @@ const styles = StyleSheet.create({
   },
   toggleLabel: { fontSize: 15, fontWeight: '700', color: theme.colors.text },
   toggleSub: { fontSize: 12, color: theme.colors.textSecondary, marginTop: 2 },
+  // More-languages dropdown trigger
+  moreLanguagesButton: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginTop: 12, padding: 12, borderRadius: theme.roundness.medium,
+    borderWidth: 1, borderColor: theme.colors.border,
+    backgroundColor: theme.colors.background,
+  },
+  moreLanguagesText: { flex: 1, color: theme.colors.text, fontWeight: '600', fontSize: 14 },
+  translationError: { color: theme.colors.danger, fontSize: 12, marginTop: 8, fontStyle: 'italic' },
+  // Language picker modal
+  pickerOverlay: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end',
+  },
+  pickerCard: {
+    backgroundColor: theme.colors.surface,
+    borderTopLeftRadius: theme.roundness.large, borderTopRightRadius: theme.roundness.large,
+    paddingTop: 20, paddingHorizontal: 16, maxHeight: '80%',
+  },
+  pickerHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 12,
+  },
+  pickerTitle: { fontSize: 18, fontWeight: '800', color: theme.colors.text },
+  pickerSearch: {
+    backgroundColor: theme.colors.background,
+    borderWidth: 1, borderColor: theme.colors.border,
+    borderRadius: theme.roundness.medium,
+    padding: 12, fontSize: 15, color: theme.colors.text, marginBottom: 12,
+  },
+  pickerRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 14, paddingHorizontal: 8,
+    borderBottomWidth: 1, borderBottomColor: theme.colors.border,
+  },
+  pickerRowActive: { backgroundColor: theme.colors.primary + '15' },
+  pickerRowText: { fontSize: 15, color: theme.colors.text },
+  pickerRowTextActive: { color: theme.colors.primary, fontWeight: '800' },
+  pickerRowCode: { fontSize: 12, color: theme.colors.textSecondary, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' },
 });

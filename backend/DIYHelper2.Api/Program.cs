@@ -168,6 +168,40 @@ string? openAiKey = null;
 string amazonAssociateTag = Environment.GetEnvironmentVariable("AMAZON_ASSOCIATE_TAG") ?? "diyhelper20-20";
 string homeDepotImpactId = Environment.GetEnvironmentVariable("HOMEDEPOT_IMPACT_ID") ?? "YOUR_IMPACT_ID";
 
+// Google Cloud API key (used by Google Translate v2). Resolved from the same
+// AWS Secrets Manager secret used for OPENAI_API_KEY, falling back to the
+// GOOGLE_API_KEY env var for local dev. Stored under key "GOOGLE_API_KEY"
+// (legacy "GOOGLE_TRANSLATE_API_KEY" is also accepted for back-compat).
+string? googleApiKey = null;
+{
+    string? secretArnForGoogle = Environment.GetEnvironmentVariable("SECRET_ARN");
+    if (!string.IsNullOrEmpty(secretArnForGoogle))
+    {
+        try
+        {
+            using var smClient = new AmazonSecretsManagerClient(Amazon.RegionEndpoint.USEast1);
+            var resp = await smClient.GetSecretValueAsync(new GetSecretValueRequest { SecretId = secretArnForGoogle });
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<JsonElement>(resp.SecretString);
+                if (parsed.TryGetProperty("GOOGLE_API_KEY", out var kp))
+                    googleApiKey = kp.GetString();
+                else if (parsed.TryGetProperty("GOOGLE_TRANSLATE_API_KEY", out var legacy))
+                    googleApiKey = legacy.GetString();
+            }
+            catch (JsonException) { }
+        }
+        catch { }
+    }
+    googleApiKey ??= Environment.GetEnvironmentVariable("GOOGLE_API_KEY");
+    googleApiKey ??= Environment.GetEnvironmentVariable("GOOGLE_TRANSLATE_API_KEY");
+}
+
+// In-memory cache keyed "source|target|text" → translated. Lives for the
+// process lifetime; per-device cache in AsyncStorage handles long-term reuse.
+var translationCache = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
+var translateHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+
 // Ensure SQLite database is created
 using (var scope = app.Services.CreateScope())
 {
@@ -1030,6 +1064,90 @@ app.MapPost("/api/paint-color-match", ([FromBody] PaintColorRequest req, PaintCo
     });
 });
 
+// ── Google Translate v2 proxy ────────────────────────────────────
+// Batches up to 100 strings per call, caches results in-memory, and preserves
+// response order so the client can map translated[i] back to its original key.
+app.MapPost("/api/translate", async ([FromBody] TranslateRequest req, ILogger<Program> logger) =>
+{
+    try
+    {
+        if (req.Q == null || req.Q.Length == 0 || string.IsNullOrWhiteSpace(req.Target))
+            return Results.Json(new { error = "Missing q[] or target." }, statusCode: 400);
+        if (string.IsNullOrEmpty(googleApiKey))
+            return Results.Json(new { error = "GOOGLE_API_KEY is not configured on the server." }, statusCode: 500);
+
+        string source = string.IsNullOrWhiteSpace(req.Source) ? "en" : req.Source!;
+        string target = req.Target!.ToLowerInvariant();
+
+        if (target == source.ToLowerInvariant())
+            return Results.Ok(new { translations = req.Q });
+
+        var results = new string[req.Q.Length];
+        var missingIndexes = new List<int>();
+        var missingTexts = new List<string>();
+
+        for (int i = 0; i < req.Q.Length; i++)
+        {
+            var key = $"{source}|{target}|{req.Q[i]}";
+            if (translationCache.TryGetValue(key, out var cached))
+                results[i] = cached;
+            else
+            {
+                missingIndexes.Add(i);
+                missingTexts.Add(req.Q[i] ?? "");
+            }
+        }
+
+        if (missingTexts.Count == 0)
+            return Results.Ok(new { translations = results });
+
+        const int BATCH_SIZE = 100;
+        for (int batchStart = 0; batchStart < missingTexts.Count; batchStart += BATCH_SIZE)
+        {
+            var batch = missingTexts.Skip(batchStart).Take(BATCH_SIZE).ToList();
+            var batchIndexes = missingIndexes.Skip(batchStart).Take(BATCH_SIZE).ToList();
+
+            var payload = new Dictionary<string, object>
+            {
+                ["q"] = batch,
+                ["source"] = source,
+                ["target"] = target,
+                ["format"] = "text",
+            };
+
+            using var googleReq = new HttpRequestMessage(HttpMethod.Post,
+                $"https://translation.googleapis.com/language/translate/v2?key={Uri.EscapeDataString(googleApiKey)}");
+            googleReq.Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
+
+            using var googleResponse = await translateHttpClient.SendAsync(googleReq);
+            string body = await googleResponse.Content.ReadAsStringAsync();
+            if (!googleResponse.IsSuccessStatusCode)
+            {
+                logger.LogError("Google Translate API error {Status}: {Body}", googleResponse.StatusCode, body);
+                return Results.Json(new { error = "Translation service error", details = body }, statusCode: 502);
+            }
+
+            var parsed = JsonSerializer.Deserialize<JsonElement>(body);
+            var translations = parsed.GetProperty("data").GetProperty("translations");
+            for (int j = 0; j < batch.Count; j++)
+            {
+                string translated = translations[j].GetProperty("translatedText").GetString() ?? batch[j];
+                int origIdx = batchIndexes[j];
+                results[origIdx] = translated;
+                var cacheKey = $"{source}|{target}|{batch[j]}";
+                translationCache[cacheKey] = translated;
+            }
+        }
+
+        return Results.Ok(new { translations = results });
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "translate error");
+        return Results.Json(new { error = ex.Message }, statusCode: 500);
+    }
+});
+
 app.Run();
 
 public record VerifyStepRequest(
@@ -1108,6 +1226,12 @@ public record ReceiptOcrRequest(
 public record PaintColorRequest(
     [property: JsonPropertyName("base64Image")] string? Base64Image,
     [property: JsonPropertyName("mimeType")] string? MimeType
+);
+
+public record TranslateRequest(
+    [property: JsonPropertyName("q")] string[]? Q,
+    [property: JsonPropertyName("target")] string? Target,
+    [property: JsonPropertyName("source")] string? Source
 );
 
 public record CreateFeedbackDto(

@@ -1,8 +1,16 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
 
-SplashScreen.preventAutoHideAsync();
+// Swallow any error from preventAutoHideAsync — if it fails, the OS hides
+// the splash on its own, which is strictly better than crashing at boot.
+try { SplashScreen.preventAutoHideAsync(); } catch {}
+
+// Safety net: no matter what happens during init (Sentry hanging, a provider
+// throwing async, a native module failing to register), hide the splash after
+// a hard timeout so the user always sees either the app or a red-box error.
+// Without this, any silent init failure leaves the phone stuck on the logo.
+setTimeout(() => { SplashScreen.hideAsync().catch(() => {}); }, 4000);
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer, DefaultTheme, DrawerActions } from '@react-navigation/native';
 import { navigationIntegration } from './src/services/sentry';
@@ -15,6 +23,7 @@ import SafetyScreen from './src/screens/SafetyScreen';
 import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
 import PaintMatchScreen from './src/screens/PaintMatchScreen';
+import OnboardingScreen from './src/screens/OnboardingScreen';
 import AnnotateScreen from './src/screens/AnnotateScreen';
 import WorkshopARScreen from './src/screens/WorkshopARScreen';
 import HoneyDo from './src/screens/HoneyDo';
@@ -33,6 +42,7 @@ import { ThemeProvider } from './src/ThemeContext';
 import { FeaturesProvider } from './src/config/features';
 import { TranslationProvider } from './src/mlkit/TranslationProvider';
 import { requestCaptureReset } from './src/utils/captureBus';
+import { getOnboardingSeen, setOnboardingSeen } from './src/utils/storage';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
 // Helper used by both the logo header and the "New Project" drawer item.
@@ -95,6 +105,28 @@ const DiagnoseWithBoundary = (props) => (
   </ScreenErrorBoundary>
 );
 
+// Deep linking: diyhelper://project/<id> and https://diyhelper.org/project/<id>
+// both open ProjectDetail with the given id. Anything else falls through to the
+// default initial route.
+const linking = {
+  prefixes: ['diyhelper://', 'https://diyhelper.org'],
+  config: {
+    screens: {
+      NewProject: {
+        screens: {
+          ProjectDetail: 'project/:id',
+          Result: 'result',
+          Capture: '',
+        },
+      },
+      HoneyDoList: 'honey-do',
+      ContractorList: 'contractors',
+      Emergency: 'emergency',
+      Settings: 'settings',
+    },
+  },
+};
+
 const MyTheme = {
   ...DefaultTheme,
   colors: {
@@ -140,6 +172,8 @@ function CaptureStack() {
               onPress={() => navigation.dispatch(DrawerActions.openDrawer())}
               hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
               style={{ marginRight: 15, padding: 10 }}
+              accessibilityLabel="Open navigation menu"
+              accessibilityRole="button"
             >
               <Icon name="menu" size={30} color="#FFFFFF" />
             </TouchableOpacity>
@@ -195,13 +229,14 @@ function AppContent() {
     <NavigationContainer
       theme={MyTheme}
       ref={navigationRef}
+      linking={linking}
       onReady={() => {
         try {
           navigationIntegration.registerNavigationContainer(navigationRef);
         } catch {
           // Sentry not initialized (no DSN) — safe to ignore.
         }
-        SplashScreen.hideAsync();
+        SplashScreen.hideAsync().catch(() => {});
       }}
     >
       <Drawer.Navigator
@@ -272,7 +307,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -297,7 +337,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -318,7 +363,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -337,7 +387,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -356,7 +411,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -375,7 +435,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -394,7 +459,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -413,7 +483,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -432,7 +507,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -455,7 +535,12 @@ function AppContent() {
             ),
             headerTitleAlign: 'left',
             headerRight: () => (
-              <TouchableOpacity onPress={() => navigation.openDrawer()} style={{ marginRight: 15 }}>
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
                 <Icon name="menu" size={30} color="#FFFFFF" />
               </TouchableOpacity>
             ),
@@ -470,6 +555,20 @@ function AppContent() {
   );
 }
 
+// Wrapper that decides whether to show onboarding (first launch) or the main app.
+// Lives inside I18nProvider so onboarding copy can be translated.
+function OnboardingGate() {
+  const [seen, setSeen] = React.useState(null); // null = loading
+  React.useEffect(() => {
+    getOnboardingSeen().then(setSeen);
+  }, []);
+  if (seen === null) return null; // brief loading — splash is still up
+  if (!seen) {
+    return <OnboardingScreen onFinish={() => { setOnboardingSeen(); setSeen(true); }} />;
+  }
+  return <AppContent />;
+}
+
 export default function App() {
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
@@ -477,7 +576,7 @@ export default function App() {
         <I18nProvider>
           <FeaturesProvider>
             <TranslationProvider targetLang="es">
-              <AppContent />
+              <OnboardingGate />
             </TranslationProvider>
           </FeaturesProvider>
         </I18nProvider>

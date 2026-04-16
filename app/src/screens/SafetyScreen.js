@@ -118,6 +118,8 @@ export default function SafetyScreen({ navigation, route }) {
         <TouchableOpacity
           style={styles.button}
           onPress={() => navigation.replace('WorkshopSteps', { project })}
+          accessibilityLabel={t('workshop_ready')}
+          accessibilityRole="button"
         >
           <Icon name="checkmark-circle" size={24} color="#fff" style={{ marginRight: 10 }} />
           <Text style={styles.buttonText}>{t('workshop_ready')}</Text>

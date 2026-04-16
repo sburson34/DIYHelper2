@@ -9,6 +9,18 @@ const APP_PREFS_KEY = '@app_prefs';
 const ANALYZE_CACHE_KEY = '@analyze_cache';
 const HELP_REQUESTS_KEY = '@help_requests_local';
 const COMMUNITY_OPT_IN_KEY = '@community_opt_in';
+const ONBOARDING_SEEN_KEY = '@onboarding_seen';
+
+export const getOnboardingSeen = async () => {
+  try {
+    const v = await AsyncStorage.getItem(ONBOARDING_SEEN_KEY);
+    return v === 'true';
+  } catch { return false; }
+};
+
+export const setOnboardingSeen = async () => {
+  try { await AsyncStorage.setItem(ONBOARDING_SEEN_KEY, 'true'); } catch {}
+};
 
 const generateId = () => Date.now().toString() + Math.floor(Math.random() * 1000);
 

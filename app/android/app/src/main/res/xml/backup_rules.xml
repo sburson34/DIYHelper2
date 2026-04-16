@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Legacy full-backup rules for API 23-30. We opt out of auto-backup for
+  everything because the app stores OpenAI-analyzed project data and cached
+  base64 photos that should not be uploaded to Google Drive without explicit
+  user action. Users can always export/share their projects manually.
+-->
+<full-backup-content>
+  <exclude domain="sharedpref" path="." />
+  <exclude domain="database" path="." />
+  <exclude domain="file" path="." />
+  <exclude domain="root" path="." />
+</full-backup-content>

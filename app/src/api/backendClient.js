@@ -280,6 +280,15 @@ const matchPaintColor = async ({ base64Image, mimeType }) => {
   return jsonPost(`${BASE_URL}/api/paint-color-match`, { base64Image, mimeType });
 };
 
+// Batch-translate an array of strings through the backend's Google Translate
+// proxy. Used by I18nContext to dynamically translate the entire UI string
+// table when the user picks a non-hardcoded language.
+const translateStrings = async (texts, target, source = 'en') => {
+  addBreadcrumb('translate: batch', 'external', { count: texts.length, target, source });
+  const data = await jsonPost(`${BASE_URL}/api/translate`, { q: texts, target, source });
+  return data.translations || [];
+};
+
 export {
   analyzeProject,
   askHelper,
@@ -299,4 +308,5 @@ export {
   getPropertyValueImpact,
   uploadReceipt,
   matchPaintColor,
+  translateStrings,
 };
