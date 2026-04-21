@@ -1,11 +1,12 @@
 using System.Diagnostics;
 using System.Text.Json;
+using DIYHelper2.Api.AI;
 using OpenAI.Chat;
 
 namespace DIYHelper2.Api;
 
 /// <summary>
-/// Wraps OpenAI ChatCompletion calls with structured logging for diagnosability.
+/// Wraps AI provider calls with structured logging for diagnosability.
 /// Captures: action name, model, duration, correlation ID, image/description
 /// metadata, and classified error outcomes. Never logs prompts, API keys,
 /// raw user content, or image payloads.
@@ -13,8 +14,53 @@ namespace DIYHelper2.Api;
 public static class AiWorkflow
 {
     /// <summary>
-    /// Execute an OpenAI chat completion with full observability.
-    /// Returns the raw text content from the first choice.
+    /// Execute a vision chat completion against any IAIVisionClient (prefer
+    /// this overload — it goes through DI and is stubbable in tests). Returns
+    /// the raw text body; callers should use <see cref="ParseJsonResponse"/>
+    /// to extract structured fields.
+    /// </summary>
+    public static async Task<string> CompleteAsync(
+        IAIVisionClient client,
+        AIChatRequest request,
+        AiCallContext ctx,
+        ILogger logger,
+        CancellationToken cancellationToken = default)
+    {
+        var correlationId = ctx.CorrelationId;
+        var sw = Stopwatch.StartNew();
+
+        logger.LogInformation(
+            "AI call started: {Action} provider={Provider} descLen={DescriptionLength} images={ImageCount} lang={Language} correlationId={CorrelationId}",
+            ctx.Action, client.ProviderName, ctx.DescriptionLength, ctx.ImageCount, ctx.Language ?? "en", correlationId);
+
+        try
+        {
+            var text = await client.CompleteAsync(request, cancellationToken);
+            sw.Stop();
+
+            logger.LogInformation(
+                "AI call succeeded: {Action} durationMs={DurationMs} responseLen={ResponseLength} correlationId={CorrelationId}",
+                ctx.Action, sw.ElapsedMilliseconds, text.Length, correlationId);
+
+            return text;
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            var errorCategory = ClassifyError(ex);
+
+            logger.LogError(ex,
+                "AI call failed: {Action} error={ErrorCategory} durationMs={DurationMs} exceptionType={ExceptionType} correlationId={CorrelationId}",
+                ctx.Action, errorCategory, sw.ElapsedMilliseconds, ex.GetType().Name, correlationId);
+
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Legacy overload against a raw OpenAI ChatClient. Kept for endpoints
+    /// that have not yet been migrated to the <see cref="IAIVisionClient"/>
+    /// abstraction. Prefer the IAIVisionClient overload above.
     /// </summary>
     public static async Task<string> CompleteAsync(
         ChatClient client,

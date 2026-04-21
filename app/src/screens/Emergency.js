@@ -3,70 +3,76 @@ import React from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Linking, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
-const SCENARIOS = [
-  {
-    id: 'water',
-    label: 'Active leak / burst pipe',
-    icon: 'water',
-    color: '#0EA5E9',
-    instructions: [
-      "Shut off your home's main water valve immediately.",
-      'Open the lowest faucet to drain remaining pressure.',
-      'Move valuables, electronics, and rugs away from water.',
-      'Call a plumber.',
-    ],
-    callType: 'plumber near me',
-  },
-  {
-    id: 'electric',
-    label: 'Sparking outlet / shock hazard',
-    icon: 'flash',
-    color: '#F59E0B',
-    instructions: [
-      'Do NOT touch the affected outlet, switch, or appliance.',
-      'Trip the breaker for that circuit at your panel.',
-      'Once safe, unplug nearby devices.',
-      'Call an electrician.',
-    ],
-    callType: 'electrician near me',
-  },
-  {
-    id: 'gas',
-    label: 'Gas smell',
-    icon: 'cloud',
-    color: '#A855F7',
-    instructions: [
-      'Leave the building immediately. Do not light a flame.',
-      'Do NOT flip light switches or use phones inside.',
-      'Once outside, call your gas utility and 911.',
-      'Do not re-enter until cleared by professionals.',
-    ],
-    callType: '911',
-  },
-  {
-    id: 'fire',
-    label: 'Active fire',
-    icon: 'flame',
-    color: '#DC2626',
-    instructions: [
-      'Get out. Stay out. Call 911.',
-      'Use stairs, never elevators.',
-      'Crawl low under smoke.',
-    ],
-    callType: '911',
-  },
-];
-
 export default function Emergency() {
+  const { t } = useTranslation();
+
+  const SCENARIOS = [
+    {
+      id: 'water',
+      label: t('emergency_water_label'),
+      icon: 'water',
+      color: '#0EA5E9',
+      instructions: [
+        t('emergency_water_1'),
+        t('emergency_water_2'),
+        t('emergency_water_3'),
+        t('emergency_water_4'),
+      ],
+      callType: 'plumber near me',
+      buttonLabel: t('emergency_find_plumber'),
+    },
+    {
+      id: 'electric',
+      label: t('emergency_electric_label'),
+      icon: 'flash',
+      color: '#F59E0B',
+      instructions: [
+        t('emergency_electric_1'),
+        t('emergency_electric_2'),
+        t('emergency_electric_3'),
+        t('emergency_electric_4'),
+      ],
+      callType: 'electrician near me',
+      buttonLabel: t('emergency_find_electrician'),
+    },
+    {
+      id: 'gas',
+      label: t('emergency_gas_label'),
+      icon: 'cloud',
+      color: '#A855F7',
+      instructions: [
+        t('emergency_gas_1'),
+        t('emergency_gas_2'),
+        t('emergency_gas_3'),
+        t('emergency_gas_4'),
+      ],
+      callType: '911',
+      buttonLabel: t('emergency_call_911'),
+    },
+    {
+      id: 'fire',
+      label: t('emergency_fire_label'),
+      icon: 'flame',
+      color: '#DC2626',
+      instructions: [
+        t('emergency_fire_1'),
+        t('emergency_fire_2'),
+        t('emergency_fire_3'),
+      ],
+      callType: '911',
+      buttonLabel: t('emergency_call_911'),
+    },
+  ];
+
   const callPro = (callType) => {
     if (callType === '911') {
       Linking.openURL('tel:911').catch(() =>
-        Alert.alert('Cannot call', 'Dial 911 manually.')
+        Alert.alert(t('emergency_cannot_call'), t('emergency_dial_manually'))
       );
     } else {
-      // Open a map search for nearest pro
       const query = encodeURIComponent(callType);
       Linking.openURL(`https://www.google.com/maps/search/${query}`).catch(() => {});
     }
@@ -77,11 +83,16 @@ export default function Emergency() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.banner}>
           <Icon name="warning" size={40} color="#fff" />
-          <Text style={styles.bannerTitle}>Emergency Mode</Text>
-          <Text style={styles.bannerSubtitle}>If life is in danger, call 911 immediately.</Text>
-          <TouchableOpacity style={styles.call911} onPress={() => callPro('911')} accessibilityLabel="Call 911 emergency services" accessibilityRole="button">
+          <Text style={styles.bannerTitle}>{t('emergency_mode')}</Text>
+          <Text style={styles.bannerSubtitle}>{t('emergency_life_danger')}</Text>
+          <TouchableOpacity
+            style={styles.call911}
+            onPress={() => callPro('911')}
+            accessibilityLabel={t('emergency_call_911')}
+            accessibilityRole="button"
+          >
             <Icon name="call" size={20} color="#fff" />
-            <Text style={styles.call911Text}>Call 911</Text>
+            <Text style={styles.call911Text}>{t('emergency_call_911')}</Text>
           </TouchableOpacity>
         </View>
 
@@ -100,13 +111,12 @@ export default function Emergency() {
             <TouchableOpacity
               style={[styles.callBtn, { backgroundColor: s.color }]}
               onPress={() => callPro(s.callType)}
-              accessibilityLabel={s.callType === '911' ? `Call 911 for ${s.label}` : `Find a ${s.callType.replace(' near me', '')} near you`}
+              accessibilityLabel={s.buttonLabel}
+              accessibilityHint={s.label}
               accessibilityRole="button"
             >
               <Icon name="call" size={18} color="#fff" />
-              <Text style={styles.callBtnText}>
-                {s.callType === '911' ? 'Call 911' : `Find a ${s.callType.replace(' near me', '')}`}
-              </Text>
+              <Text style={styles.callBtnText}>{s.buttonLabel}</Text>
             </TouchableOpacity>
           </View>
         ))}

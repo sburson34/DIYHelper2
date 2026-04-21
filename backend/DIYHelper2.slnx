@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="DIYHelper2.Api/DIYHelper2.Api.csproj" />
+  <Project Path="DIYHelper2.Tests/DIYHelper2.Tests.csproj" />
+</Solution>

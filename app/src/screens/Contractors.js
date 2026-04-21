@@ -135,7 +135,7 @@ export default function Contractors({ navigation }) {
           <View style={styles.itemContainer}>
             <TouchableOpacity
               style={styles.item}
-              onPress={() => navigation.navigate('ProjectDetail', { project: item, listType: 'contractor' })}
+              onPress={() => navigation.navigate('NewProject', { screen: 'ProjectDetail', params: { project: item, listType: 'contractor' } })}
             >
               <View style={styles.itemHeader}>
                 <Text style={styles.itemTitle}>{item.title}</Text>

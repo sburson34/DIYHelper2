@@ -115,10 +115,6 @@ export default function DrawingCanvas({ width, height, strokeColor = '#FF3B30', 
       )}
     </View>
   );
-
-  // Expose imperative methods
-  DrawingCanvas.undo = undo;
-  DrawingCanvas.clear = clear;
 }
 
 // Static methods for external control

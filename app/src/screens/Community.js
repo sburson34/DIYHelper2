@@ -4,9 +4,11 @@ import { View, Text, StyleSheet, FlatList, TextInput, TouchableOpacity, Activity
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { browseCommunityProjects } from '../api/backendClient';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function Community({ navigation }) {
+  const { t } = useTranslation();
   const [items, setItems] = useState([]);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -30,18 +32,19 @@ export default function Community({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Community</Text>
-        <Text style={styles.subtitle}>Projects shared by other DIYers.</Text>
+        <Text style={styles.title}>{t('community_title')}</Text>
+        <Text style={styles.subtitle}>{t('community_subtitle')}</Text>
         <View style={styles.searchRow}>
           <Icon name="search" size={18} color={theme.colors.textSecondary} />
           <TextInput
             style={styles.search}
-            placeholder="Search projects..."
+            placeholder={t('community_search_placeholder')}
             placeholderTextColor={theme.colors.textSecondary}
             value={query}
             onChangeText={setQuery}
             onSubmitEditing={() => load(query)}
             returnKeyType="search"
+            accessibilityLabel={t('community_search_placeholder')}
           />
         </View>
       </View>
@@ -55,7 +58,7 @@ export default function Community({ navigation }) {
           !loading && (
             <View style={styles.empty}>
               <Icon name="people-outline" size={64} color={theme.colors.border} />
-              <Text style={styles.emptyText}>No community projects yet. Be the first to share one!</Text>
+              <Text style={styles.emptyText}>{t('community_empty')}</Text>
             </View>
           )
         }
@@ -63,6 +66,8 @@ export default function Community({ navigation }) {
           <TouchableOpacity
             style={styles.card}
             onPress={() => navigation.navigate('NewProject', { screen: 'Result', params: { project: item } })}
+            accessibilityLabel={item.title}
+            accessibilityRole="button"
           >
             <Text style={styles.cardTitle}>{item.title}</Text>
             {item.description ? <Text style={styles.cardDesc} numberOfLines={2}>{item.description}</Text> : null}

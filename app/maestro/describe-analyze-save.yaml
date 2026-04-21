@@ -1,0 +1,46 @@
+# Golden path: user types a description (no photo — camera perms are too
+# painful to automate on emulators), fires analyze, lands on the Result
+# screen, saves the project, and confirms it appears on the Honey Do list.
+#
+# Requires:
+#   • Backend running at api.diyhelper.org OR adb reverse tcp:5206 to a
+#     local backend. The call goes through backendClient which talks to
+#     the configured API_BASE_URL.
+#   • A live OpenAI key, OR the backend running with OPENAI_API_KEY set
+#     so /api/analyze returns real JSON. For hermetic CI runs, point the
+#     mobile app at a backend started from ApiFactory or mock-server.
+#
+# This flow is intentionally network-dependent. It runs in the manual/
+# nightly workflow, not on every PR.
+appId: com.diyhelper2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Capture the Issue"
+
+# Scroll to reveal the description input if it's below the fold.
+- scroll
+
+# Type a short, unambiguous description so the clarify flow doesn't open.
+- tapOn:
+    id: "project-description-input"
+    optional: true
+- inputText: "Kitchen faucet drips from the spout base, needs a new cartridge."
+
+# Tap the Analyze button. Text matches the t('analyze') translation key
+# resolved to "Analyze" in English.
+- tapOn: "Analyze"
+
+# Wait up to 90s for the AI call — OpenAI can be slow under load.
+- extendedWaitUntil:
+    visible: "Project Blueprint"
+    timeout: 90000
+
+# Save to Honey Do list.
+- tapOn: "Save"
+- tapOn: "Honey Do"
+
+# Confirm it landed.
+- extendedWaitUntil:
+    visible: "Honey Do List"
+    timeout: 10000

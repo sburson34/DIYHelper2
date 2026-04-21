@@ -1,0 +1,28 @@
+{
+  "extends": "./node_modules/@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "baseUrl": "./",
+    "paths": {
+      "*": ["src/*"]
+    }
+  },
+  "include": [
+    "src/**/*",
+    "index.js",
+    "App.js",
+    "jest.setup.js",
+    "babel.config.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "android",
+    "ios",
+    "**/Pods/**",
+    "coverage",
+    "dist"
+  ]
+}

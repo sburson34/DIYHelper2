@@ -111,7 +111,7 @@ export default function HoneyDo({ navigation }) {
           <View style={styles.itemContainer}>
             <TouchableOpacity
               style={styles.item}
-              onPress={() => navigation.navigate('ProjectDetail', { project: item, listType: 'honey-do' })}
+              onPress={() => navigation.navigate('NewProject', { screen: 'ProjectDetail', params: { project: item, listType: 'honey-do' } })}
               accessibilityLabel={`Project: ${item.title}, ${item.difficulty}, ${item.estimated_time}`}
               accessibilityRole="button"
             >

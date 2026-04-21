@@ -8,6 +8,7 @@ import { Ionicons as Icon } from '@expo/vector-icons';
 import { useNavigation, useNavigationState } from '@react-navigation/native';
 import { submitFeedback } from '../services/feedback';
 import { APP_INFO } from '../config/appInfo';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 // Walk the nested navigation state to find the deepest focused route name.
@@ -21,6 +22,7 @@ function getActiveRouteName(state) {
 export default function ReportProblem() {
   const navigation = useNavigation();
   const navState = useNavigationState((s) => s);
+  const { t } = useTranslation();
 
   const [description, setDescription] = useState('');
   const [whatDoing, setWhatDoing] = useState('');
@@ -30,7 +32,7 @@ export default function ReportProblem() {
 
   const handleSubmit = async () => {
     if (!description.trim()) {
-      Alert.alert('Required', 'Please describe the problem you ran into.');
+      Alert.alert(t('report_required'), t('report_required_msg'));
       return;
     }
 
@@ -48,7 +50,7 @@ export default function ReportProblem() {
 
       setSubmitted(true);
     } catch {
-      Alert.alert('Error', 'Could not submit feedback. Please try again.');
+      Alert.alert(t('error'), t('report_error_msg'));
     } finally {
       setSubmitting(false);
     }
@@ -69,12 +71,15 @@ export default function ReportProblem() {
           <View style={styles.successIcon}>
             <Icon name="checkmark-circle" size={64} color={theme.colors.success} />
           </View>
-          <Text style={styles.successTitle}>Thank you!</Text>
-          <Text style={styles.successBody}>
-            Your feedback has been recorded. It helps us make DIYHelper better.
-          </Text>
-          <TouchableOpacity style={styles.doneButton} onPress={handleDone}>
-            <Text style={styles.doneButtonText}>Done</Text>
+          <Text style={styles.successTitle}>{t('report_success_title')}</Text>
+          <Text style={styles.successBody}>{t('report_success_body')}</Text>
+          <TouchableOpacity
+            style={styles.doneButton}
+            onPress={handleDone}
+            accessibilityLabel={t('report_done')}
+            accessibilityRole="button"
+          >
+            <Text style={styles.doneButtonText}>{t('report_done')}</Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -90,48 +95,49 @@ export default function ReportProblem() {
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.header}>
             <Icon name="chatbubble-ellipses-outline" size={48} color={theme.colors.primary} />
-            <Text style={styles.title}>Report a Problem</Text>
-            <Text style={styles.subtitle}>
-              Found a bug or something not working right? Let us know and we'll look into it.
-            </Text>
+            <Text style={styles.title}>{t('report_title')}</Text>
+            <Text style={styles.subtitle}>{t('report_subtitle')}</Text>
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>What went wrong? *</Text>
+            <Text style={styles.label}>{t('report_label_what')}</Text>
             <TextInput
               style={[styles.input, styles.inputTall]}
               value={description}
               onChangeText={setDescription}
-              placeholder="Describe the problem..."
+              placeholder={t('report_placeholder_what')}
               placeholderTextColor={theme.colors.textSecondary}
               multiline
               maxLength={500}
+              accessibilityLabel={t('report_label_what')}
             />
             <Text style={styles.charCount}>{description.length}/500</Text>
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>What were you trying to do?</Text>
+            <Text style={styles.label}>{t('report_label_doing')}</Text>
             <TextInput
               style={styles.input}
               value={whatDoing}
               onChangeText={setWhatDoing}
-              placeholder="e.g. Taking a photo of a leaky faucet"
+              placeholder={t('report_placeholder_doing')}
               placeholderTextColor={theme.colors.textSecondary}
               maxLength={200}
+              accessibilityLabel={t('report_label_doing')}
             />
           </View>
 
           <View style={styles.field}>
-            <Text style={styles.label}>Steps to reproduce (optional)</Text>
+            <Text style={styles.label}>{t('report_label_steps')}</Text>
             <TextInput
               style={[styles.input, styles.inputTall]}
               value={reproSteps}
               onChangeText={setReproSteps}
-              placeholder={"1. Open the app\n2. Tap ...\n3. See the error"}
+              placeholder={t('report_placeholder_steps')}
               placeholderTextColor={theme.colors.textSecondary}
               multiline
               maxLength={500}
+              accessibilityLabel={t('report_label_steps')}
             />
           </View>
 
@@ -139,28 +145,29 @@ export default function ReportProblem() {
             style={[styles.submitButton, submitting && styles.submitButtonDisabled]}
             onPress={handleSubmit}
             disabled={submitting}
+            accessibilityLabel={t('report_submit')}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: submitting, busy: submitting }}
           >
             {submitting ? (
               <ActivityIndicator color="#FFF" />
             ) : (
               <>
                 <Icon name="send" size={18} color="#FFF" />
-                <Text style={styles.submitButtonText}>Submit Report</Text>
+                <Text style={styles.submitButtonText}>{t('report_submit')}</Text>
               </>
             )}
           </TouchableOpacity>
 
           <View style={styles.metaSection}>
-            <Text style={styles.metaTitle}>Automatically included</Text>
-            <Text style={styles.metaItem}>App version: {APP_INFO.appVersion}+{APP_INFO.buildNumber}</Text>
-            <Text style={styles.metaItem}>Platform: {APP_INFO.platform} {APP_INFO.osVersion}</Text>
-            <Text style={styles.metaItem}>Environment: {APP_INFO.environment}</Text>
+            <Text style={styles.metaTitle}>{t('report_meta_title')}</Text>
+            <Text style={styles.metaItem}>{t('report_meta_version')}: {APP_INFO.appVersion}+{APP_INFO.buildNumber}</Text>
+            <Text style={styles.metaItem}>{t('report_meta_platform')}: {APP_INFO.platform} {APP_INFO.osVersion}</Text>
+            <Text style={styles.metaItem}>{t('report_meta_environment')}: {APP_INFO.environment}</Text>
             {APP_INFO.gitCommit ? (
-              <Text style={styles.metaItem}>Build: {APP_INFO.gitCommit}</Text>
+              <Text style={styles.metaItem}>{t('report_meta_build')}: {APP_INFO.gitCommit}</Text>
             ) : null}
-            <Text style={styles.metaNote}>
-              No photos, passwords, or personal data are sent with this report.
-            </Text>
+            <Text style={styles.metaNote}>{t('report_meta_note')}</Text>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>

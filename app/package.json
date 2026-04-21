@@ -11,7 +11,14 @@
     "build:beta": "bash scripts/load-env.sh bash android/gradlew -p android assembleRelease",
     "build:beta:bundle": "bash scripts/load-env.sh bash android/gradlew -p android bundleRelease",
     "lint": "eslint .",
-    "test": "jest"
+    "lint:nav": "node scripts/check-navigation.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:fast": "jest --testPathIgnorePatterns=screens.smoke",
+    "test:coverage": "jest --coverage",
+    "test:unit": "jest --testPathIgnorePatterns=nav.test --testPathIgnorePatterns=screens.smoke",
+    "test:nav": "jest --testPathPattern=\"(nav.test|navigation-scan)\"",
+    "test:smoke": "jest --testPathPattern=screens.smoke"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.1.0",
@@ -53,6 +60,8 @@
     "@react-native/eslint-config": "0.83.0",
     "@react-native/metro-config": "0.83.0",
     "@react-native/typescript-config": "0.83.0",
+    "@testing-library/react-native": "13.3.3",
+    "@types/react": "^19.2.14",
     "babel-jest": "^29.6.3",
     "babel-preset-expo": "~55.0.8",
     "eslint": "^8.19.0",

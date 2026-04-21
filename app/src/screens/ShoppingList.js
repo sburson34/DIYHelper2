@@ -6,9 +6,11 @@ import { Ionicons as Icon } from '@expo/vector-icons';
 import { useCameraPermissions } from 'expo-camera';
 import { getHoneyDoList, getShoppingBought, setShoppingBought, getToolInventory, findInventoryByBarcode } from '../utils/storage';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function ShoppingList({ navigation }) {
+  const { t } = useTranslation();
   const [items, setItems] = useState([]);
   const [bought, setBought] = useState({});
   const [scannerVisible, setScannerVisible] = useState(false);
@@ -57,7 +59,7 @@ export default function ShoppingList({ navigation }) {
     if (!cameraPermission?.granted) {
       const { granted } = await requestCameraPermission();
       if (!granted) {
-        Alert.alert('Permission denied', 'Camera permission is needed to scan barcodes.');
+        Alert.alert(t('permission_denied'), t('inventory_camera_denied_msg'));
         return;
       }
     }
@@ -74,7 +76,7 @@ export default function ShoppingList({ navigation }) {
       if (match && !bought[match.key]) {
         setBought({ ...bought, [match.key]: true });
         await setShoppingBought(match.key, true);
-        Alert.alert('Checked off', `"${match.name}" matched via barcode and marked as bought.`);
+        Alert.alert(t('shopping_checked_title'), t('shopping_checked_barcode_msg').replace('{name}', match.name));
         return;
       }
     }
@@ -83,10 +85,10 @@ export default function ShoppingList({ navigation }) {
     if (fuzzy) {
       setBought({ ...bought, [fuzzy.key]: true });
       await setShoppingBought(fuzzy.key, true);
-      Alert.alert('Checked off', `"${fuzzy.name}" marked as bought.`);
+      Alert.alert(t('shopping_checked_title'), t('shopping_checked_msg').replace('{name}', fuzzy.name));
       return;
     }
-    Alert.alert('No match', `Barcode "${data}" didn't match any item on your list.`);
+    Alert.alert(t('shopping_no_match_title'), t('shopping_no_match_msg').replace('{data}', data));
   };
 
   const remaining = items.filter(i => !bought[i.key]).length;
@@ -95,13 +97,17 @@ export default function ShoppingList({ navigation }) {
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text style={styles.title}>Shopping List</Text>
-          <TouchableOpacity onPress={openScanner} style={styles.scanBtn} accessibilityLabel="Scan barcode to check off item" accessibilityRole="button">
+          <Text style={styles.title}>{t('shopping_title')}</Text>
+          <TouchableOpacity onPress={openScanner} style={styles.scanBtn} accessibilityLabel={t('shopping_scan_btn')} accessibilityRole="button">
             <Icon name="barcode-outline" size={20} color={theme.colors.secondary} />
-            <Text style={styles.scanBtnText}>Scan</Text>
+            <Text style={styles.scanBtnText}>{t('shopping_scan_btn')}</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.subtitle}>{remaining} item{remaining === 1 ? '' : 's'} remaining across all projects</Text>
+        <Text style={styles.subtitle}>
+          {remaining === 1
+            ? t('shopping_remaining_one')
+            : t('shopping_remaining_many').replace('{n}', remaining)}
+        </Text>
       </View>
       <FlatList
         data={items}
@@ -110,12 +116,20 @@ export default function ShoppingList({ navigation }) {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Icon name="cart-outline" size={64} color={theme.colors.border} />
-            <Text style={styles.emptyText}>No items yet. Save a project to your Honey-Do list and its materials will appear here.</Text>
+            <Text style={styles.emptyText}>{t('shopping_empty')}</Text>
           </View>
         }
         renderItem={({ item }) => (
           <View style={[styles.row, bought[item.key] && styles.rowDone]}>
-            <TouchableOpacity onPress={() => toggle(item.key)} style={styles.checkBtn} accessibilityLabel={`${item.name}, ${bought[item.key] ? 'purchased' : 'not purchased'}`} accessibilityRole="checkbox" accessibilityState={{ checked: !!bought[item.key] }}>
+            <TouchableOpacity
+              onPress={() => toggle(item.key)}
+              style={styles.checkBtn}
+              accessibilityLabel={t('shopping_check_a11y')
+                .replace('{name}', item.name)
+                .replace('{status}', bought[item.key] ? t('shopping_status_purchased') : t('shopping_status_not_purchased'))}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: !!bought[item.key] }}
+            >
               <Icon
                 name={bought[item.key] ? 'checkmark-circle' : 'ellipse-outline'}
                 size={26}
@@ -124,7 +138,7 @@ export default function ShoppingList({ navigation }) {
             </TouchableOpacity>
             <View style={{ flex: 1 }}>
               <Text style={[styles.itemName, bought[item.key] && styles.itemNameDone]}>{item.name}</Text>
-              <Text style={styles.itemMeta}>For: {item.projects.join(', ')}</Text>
+              <Text style={styles.itemMeta}>{t('shopping_for')}: {item.projects.join(', ')}</Text>
             </View>
             {item.amazon && (
               <TouchableOpacity onPress={() => Linking.openURL(item.amazon)} style={styles.linkBtn}>

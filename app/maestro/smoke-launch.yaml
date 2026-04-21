@@ -1,0 +1,15 @@
+# Smoke: app launches, renders first screen, no crash screen appears.
+# This is the canary for build-time regressions (bad native module linkage,
+# missing assets, JS bundle errors) — if this fails nothing else will run.
+appId: com.diyhelper2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Capture the Issue"
+# Hamburger menu is visible on the main screen.
+- assertVisible:
+    id: "open-drawer"
+    optional: true
+# If testIDs aren't wired yet, fall back to visible drawer-opener text. The
+# optional flag above means Maestro won't fail if the id isn't present.
+- assertNotVisible: "Something went wrong"

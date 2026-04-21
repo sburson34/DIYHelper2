@@ -1,7 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Image, ActivityIndicator, Alert, RefreshControl, KeyboardAvoidingView, Platform, Modal } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+// Guarded import — native module may not be available on every device.
+let _useSpeechRecognitionEvent = () => {};
+let _ExpoSpeechRecognitionModule = null;
+try {
+  const speech = require('expo-speech-recognition');
+  _useSpeechRecognitionEvent = speech.useSpeechRecognitionEvent;
+  _ExpoSpeechRecognitionModule = speech.ExpoSpeechRecognitionModule;
+} catch { /* native module unavailable */ }
+const useSpeechRecognitionEvent = _useSpeechRecognitionEvent;
+const ExpoSpeechRecognitionModule = _ExpoSpeechRecognitionModule;
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { analyzeProject, submitHelpRequest, getClarifyingQuestions } from '../api/backendClient';
 import { reportError, reportHandledError, addBreadcrumb } from '../services/monitoring';
@@ -192,7 +201,7 @@ export default function CaptureScreen({ navigation, route }) {
 
   const startRecording = async () => {
     try {
-      const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      const result = await ExpoSpeechRecognitionModule?.requestPermissionsAsync();
       if (!result.granted) {
         Alert.alert(t('permission_denied'), t('speech_perm_msg'));
         return;
@@ -200,7 +209,7 @@ export default function CaptureScreen({ navigation, route }) {
 
       setTranscript('');
       setIsRecording(true);
-      ExpoSpeechRecognitionModule.start({
+      ExpoSpeechRecognitionModule?.start({
         lang: language === 'es' ? 'es-US' : 'en-US',
         interimResults: true,
       });
@@ -211,13 +220,13 @@ export default function CaptureScreen({ navigation, route }) {
   };
 
   const stopRecording = () => {
-    ExpoSpeechRecognitionModule.stop();
+    ExpoSpeechRecognitionModule?.stop();
   };
 
   const runAnalyze = async (extraDescription = '') => {
     // Make sure the mic isn't still capturing in the background — that keeps
     // the JS thread busy and can lock up the next screen.
-    try { ExpoSpeechRecognitionModule.stop(); } catch {}
+    try { ExpoSpeechRecognitionModule?.stop(); } catch {}
     setIsRecording(false);
 
     setIsAnalyzing(true);
@@ -442,6 +451,7 @@ export default function CaptureScreen({ navigation, route }) {
           </TouchableOpacity>
 
           <TextInput
+            testID="project-description-input"
             style={styles.inputHome}
             placeholder={t('type_description_placeholder')}
             placeholderTextColor={theme.colors.textSecondary}
@@ -465,6 +475,7 @@ export default function CaptureScreen({ navigation, route }) {
           <ExtractedEntitiesBar entities={extractedEntities} />
 
           <TouchableOpacity
+            testID="analyze-button"
             style={[styles.analyzeButtonHome, (isAnalyzing || isClarifying || (!description && media.length === 0)) && styles.disabledButton]}
             onPress={handleAnalyze}
             disabled={isAnalyzing || isClarifying || (!description && media.length === 0)}

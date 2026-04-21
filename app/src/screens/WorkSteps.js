@@ -12,8 +12,21 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import Tts from 'react-native-tts';
-import { useSpeechRecognitionEvent, ExpoSpeechRecognitionModule } from 'expo-speech-recognition';
+// Guarded imports — these native modules may not be available on every device.
+// A failed top-level import would prevent AppRegistry.registerComponent from
+// running, causing "main has not been registered" fatal crashes (REACT-NATIVE-7).
+let Tts = null;
+try { Tts = require('react-native-tts').default; } catch { /* native module unavailable */ }
+
+let _useSpeechRecognitionEvent = () => {};
+let _ExpoSpeechRecognitionModule = null;
+try {
+  const speech = require('expo-speech-recognition');
+  _useSpeechRecognitionEvent = speech.useSpeechRecognitionEvent;
+  _ExpoSpeechRecognitionModule = speech.ExpoSpeechRecognitionModule;
+} catch { /* native module unavailable */ }
+const useSpeechRecognitionEvent = _useSpeechRecognitionEvent;
+const ExpoSpeechRecognitionModule = _ExpoSpeechRecognitionModule;
 import * as ImagePicker from 'expo-image-picker';
 import theme from '../theme';
 import { askHelper, verifyStep } from '../api/backendClient';
@@ -72,37 +85,46 @@ export default function WorkSteps({ navigation, route }) {
   useEffect(() => { checkedStepsRef.current = checkedSteps; }, [checkedSteps]);
 
   useEffect(() => {
-    Tts.addEventListener('tts-start', () => {
+    Tts?.addEventListener('tts-start', () => {
       setIsSpeaking(true);
       isSpeakingRef.current = true;
     });
-    Tts.addEventListener('tts-finish', () => {
+    Tts?.addEventListener('tts-finish', () => {
       setIsSpeaking(false);
       isSpeakingRef.current = false;
       if (isAudioModeRef.current) {
         startListening();
       }
     });
-    Tts.addEventListener('tts-cancel', () => {
+    Tts?.addEventListener('tts-cancel', () => {
       setIsSpeaking(false);
       isSpeakingRef.current = false;
     });
 
     return () => {
-      Tts.stop();
-      ExpoSpeechRecognitionModule.stop();
+      Tts?.stop();
+      ExpoSpeechRecognitionModule?.stop();
     };
+    // TTS listeners are attached once per mount. `startListening` is accessed
+    // through isAudioModeRef / isSpeakingRef inside the callback, not as a
+    // direct closure, so re-attaching on every render (what the linter wants)
+    // would double-fire events and duplicate listeners.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (isAudioMode) {
       readCurrentStep();
     } else {
-      Tts.stop();
-      ExpoSpeechRecognitionModule.stop();
+      Tts?.stop();
+      ExpoSpeechRecognitionModule?.stop();
       setIsListening(false);
       setAwaitingQuestion(false);
     }
+    // `readCurrentStep` is a stable function that reads from refs; including
+    // it as a dep would re-run this effect on every render (since it's not
+    // wrapped in useCallback) and restart TTS mid-sentence.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAudioMode]);
 
   const readCurrentStep = () => {
@@ -110,10 +132,10 @@ export default function WorkSteps({ navigation, route }) {
     if (idx < project.steps.length) {
       const prefix = language === 'es' ? 'Paso' : 'Step';
       const stepText = `${prefix} ${idx + 1}: ${getStepText(project.steps[idx])}`;
-      Tts.stop();
-      Tts.speak(stepText);
+      Tts?.stop();
+      Tts?.speak(stepText);
     } else {
-      Tts.speak(language === 'es'
+      Tts?.speak(language === 'es'
         ? '¡Felicidades! Has completado todos los pasos del plano del proyecto.'
         : 'Congratulations! You have completed all steps in the project blueprint.');
       setIsAudioMode(false);
@@ -122,11 +144,11 @@ export default function WorkSteps({ navigation, route }) {
 
   const startListening = async () => {
     try {
-      const result = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+      const result = await ExpoSpeechRecognitionModule?.requestPermissionsAsync();
       if (!result.granted) return;
 
       setIsListening(true);
-      ExpoSpeechRecognitionModule.start({
+      ExpoSpeechRecognitionModule?.start({
         lang: language === 'es' ? 'es-US' : 'en-US',
         interimResults: false,
       });
@@ -159,7 +181,7 @@ export default function WorkSteps({ navigation, route }) {
       if (command.trim()) {
         handleAskHelper(command.trim());
       } else {
-        Tts.speak(language === 'es'
+        Tts?.speak(language === 'es'
           ? 'No te escuché. Di Hey Helper y luego tu pregunta.'
           : "I didn't catch that. Say Hey Helper and then your question.");
       }
@@ -190,7 +212,7 @@ export default function WorkSteps({ navigation, route }) {
         // Just said "Hey Helper" — wait for the follow-up question
         setAwaitingQuestion(true);
         awaitingQuestionRef.current = true;
-        Tts.speak(language === 'es'
+        Tts?.speak(language === 'es'
           ? 'Estoy escuchando. ¿Cuál es tu pregunta?'
           : "I'm listening. What is your question?");
       }
@@ -233,15 +255,15 @@ export default function WorkSteps({ navigation, route }) {
   const handleAskHelper = async (question) => {
     setIsAskingHelper(true);
     isAskingHelperRef.current = true;
-    ExpoSpeechRecognitionModule.stop();
+    ExpoSpeechRecognitionModule?.stop();
 
     try {
-      Tts.speak(language === 'es' ? 'Déjame revisarlo.' : 'Let me check on that.');
+      Tts?.speak(language === 'es' ? 'Déjame revisarlo.' : 'Let me check on that.');
       const result = await askHelper(question, project, language);
-      Tts.stop();
-      Tts.speak(result.answer);
+      Tts?.stop();
+      Tts?.speak(result.answer);
     } catch (error) {
-      Tts.speak(language === 'es'
+      Tts?.speak(language === 'es'
         ? 'Lo siento, no pude obtener una respuesta ahora mismo.'
         : "Sorry, I couldn't get an answer right now.");
       console.error(error);

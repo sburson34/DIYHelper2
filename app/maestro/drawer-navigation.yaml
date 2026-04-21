@@ -1,0 +1,31 @@
+# Exercises the drawer so we catch regressions in route wiring or screen
+# mount-time crashes (drawer was the source of the "showing raw translation
+# keys for 7 routes" bug two months ago — keep it covered).
+appId: com.diyhelper2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Capture the Issue"
+
+# Open the drawer.
+- swipe:
+    from: { x: 2%, y: 50% }
+    to: { x: 80%, y: 50% }
+- assertVisible: "Honey Do List"
+- assertVisible: "Contractor List"
+- assertVisible: "Settings"
+
+# Navigate to Settings and back.
+- tapOn: "Settings"
+- assertVisible: "Your contact info"
+- back
+- assertVisible: "Capture the Issue"
+
+# Navigate to Honey Do List and back.
+- swipe:
+    from: { x: 2%, y: 50% }
+    to: { x: 80%, y: 50% }
+- tapOn: "Honey Do List"
+# Empty state or populated — the assertion is just "didn't crash".
+- assertNotVisible: "Something went wrong"
+- back

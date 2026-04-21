@@ -27,7 +27,7 @@ export default function PaintMatchScreen({ navigation, route }) {
         setLoading(false);
       }
     })();
-  }, [base64Image]);
+  }, [base64Image, mimeType, t]);
 
   return (
     <SafeAreaView style={styles.container}>

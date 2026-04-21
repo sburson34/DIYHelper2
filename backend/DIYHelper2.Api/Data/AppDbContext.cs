@@ -9,4 +9,5 @@ public class AppDbContext : DbContext
 
     public DbSet<HelpRequest> HelpRequests => Set<HelpRequest>();
     public DbSet<BetaFeedback> BetaFeedback => Set<BetaFeedback>();
+    public DbSet<DataDeletionRequest> DataDeletionRequests => Set<DataDeletionRequest>();
 }

@@ -59,3 +59,10 @@ app/app_apk_content/
 *.suo
 *.sln.docstates
 .vs/
+backend/*/publish/
+backend/*/publish-*/
+backend/*/TestResults/
+
+# Test coverage output
+app/coverage/
+coverage/

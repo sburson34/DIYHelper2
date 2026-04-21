@@ -7,9 +7,11 @@ import { Ionicons as Icon } from '@expo/vector-icons';
 import { useCameraPermissions } from 'expo-camera';
 import { getToolInventory, addToInventory, removeFromInventory } from '../utils/storage';
 import BarcodeScannerModal from '../components/BarcodeScannerModal';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function Inventory({ navigation }) {
+  const { t } = useTranslation();
   const [items, setItems] = useState([]);
   const [text, setText] = useState('');
   const [scannerVisible, setScannerVisible] = useState(false);
@@ -31,9 +33,9 @@ export default function Inventory({ navigation }) {
   };
 
   const remove = (id) => {
-    Alert.alert('Remove?', 'Remove this item from your inventory?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: async () => { await removeFromInventory(id); load(); } },
+    Alert.alert(t('inventory_remove_title'), t('inventory_remove_msg'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('remove'), style: 'destructive', onPress: async () => { await removeFromInventory(id); load(); } },
     ]);
   };
 
@@ -41,7 +43,7 @@ export default function Inventory({ navigation }) {
     if (!cameraPermission?.granted) {
       const { granted } = await requestCameraPermission();
       if (!granted) {
-        Alert.alert('Permission denied', 'Camera permission is needed to scan barcodes.');
+        Alert.alert(t('permission_denied'), t('inventory_camera_denied_msg'));
         return;
       }
     }
@@ -52,8 +54,8 @@ export default function Inventory({ navigation }) {
     setScannerVisible(false);
     Alert.prompt
       ? Alert.prompt(
-          'Add to inventory',
-          `Scanned ${format}: ${data}\n\nWhat is this item called?`,
+          t('inventory_add_scanned_title'),
+          t('inventory_add_scanned_msg').replace('{format}', format).replace('{data}', data),
           async (name) => {
             if (name && name.trim()) {
               await addToInventory({ name: name.trim(), barcode: data });
@@ -64,31 +66,31 @@ export default function Inventory({ navigation }) {
       : (async () => {
           await addToInventory({ name: data, barcode: data });
           load();
-          Alert.alert('Added', `Saved barcode ${data}. Tap it in the list to rename.`);
+          Alert.alert(t('inventory_added_title'), t('inventory_added_msg').replace('{data}', data));
         })();
   };
 
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>My Tools & Materials</Text>
-        <Text style={styles.subtitle}>Items you already own — the AI will skip these in shopping lists.</Text>
+        <Text style={styles.title}>{t('inventory_title')}</Text>
+        <Text style={styles.subtitle}>{t('inventory_subtitle')}</Text>
       </View>
       <View style={styles.addRow}>
         <TextInput
           style={styles.input}
-          placeholder="e.g. cordless drill, 1/2 in copper pipe"
+          placeholder={t('inventory_add_placeholder')}
           placeholderTextColor={theme.colors.textSecondary}
           value={text}
           onChangeText={setText}
           onSubmitEditing={add}
-          accessibilityLabel="Add a tool or material"
+          accessibilityLabel={t('inventory_add_a11y')}
           accessibilityRole="text"
         />
-        <TouchableOpacity style={styles.addBtn} onPress={add} accessibilityLabel="Add tool to inventory" accessibilityRole="button">
+        <TouchableOpacity style={styles.addBtn} onPress={add} accessibilityLabel={t('inventory_add_btn_a11y')} accessibilityRole="button">
           <Icon name="add" size={22} color="#fff" />
         </TouchableOpacity>
-        <TouchableOpacity style={styles.scanBtn} onPress={scanBarcode} accessibilityLabel="Scan barcode to add tool" accessibilityRole="button">
+        <TouchableOpacity style={styles.scanBtn} onPress={scanBarcode} accessibilityLabel={t('inventory_scan_btn_a11y')} accessibilityRole="button">
           <Icon name="barcode-outline" size={22} color={theme.colors.secondary} />
         </TouchableOpacity>
       </View>
@@ -99,14 +101,14 @@ export default function Inventory({ navigation }) {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Icon name="construct-outline" size={64} color={theme.colors.border} />
-            <Text style={styles.emptyText}>No tools added yet. Add a few and the AI will skip them in shopping lists.</Text>
+            <Text style={styles.emptyText}>{t('inventory_empty')}</Text>
           </View>
         }
         renderItem={({ item }) => (
           <View style={styles.row}>
             <Icon name="checkmark-circle" size={22} color={theme.colors.success} />
             <Text style={styles.rowText}>{item.name}</Text>
-            <TouchableOpacity onPress={() => remove(item.id)} style={styles.removeBtn} accessibilityLabel={`Remove ${item.name} from inventory`} accessibilityRole="button">
+            <TouchableOpacity onPress={() => remove(item.id)} style={styles.removeBtn} accessibilityLabel={t('inventory_remove_item_a11y').replace('{name}', item.name)} accessibilityRole="button">
               <Icon name="trash-outline" size={20} color={theme.colors.danger} />
             </TouchableOpacity>
           </View>

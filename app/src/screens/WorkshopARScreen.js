@@ -8,6 +8,7 @@ import { Ionicons as Icon } from '@expo/vector-icons';
 import PoseOverlay from '../components/PoseOverlay';
 import ARGuideOverlay from '../components/ARGuideOverlay';
 import { usePoseDetection } from '../mlkit/poseDetection';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 let Camera;
@@ -20,6 +21,7 @@ try {
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function WorkshopARScreen({ navigation, route }) {
+  const { t } = useTranslation();
   const { stepText, stepIndex, projectTitle } = route.params || {};
   const { pose, onFrame, start, stop, available } = usePoseDetection(3);
 
@@ -32,11 +34,14 @@ export default function WorkshopARScreen({ navigation, route }) {
     return (
       <SafeAreaView style={styles.fallback}>
         <Icon name="body-outline" size={64} color={theme.colors.textSecondary} />
-        <Text style={styles.fallbackText}>
-          AR guides require a camera with pose detection support.
-        </Text>
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()}>
-          <Text style={styles.backBtnText}>Go Back</Text>
+        <Text style={styles.fallbackText}>{t('ar_unsupported')}</Text>
+        <TouchableOpacity
+          style={styles.backBtn}
+          onPress={() => navigation.goBack()}
+          accessibilityLabel={t('go_back')}
+          accessibilityRole="button"
+        >
+          <Text style={styles.backBtnText}>{t('go_back')}</Text>
         </TouchableOpacity>
       </SafeAreaView>
     );
@@ -65,24 +70,31 @@ export default function WorkshopARScreen({ navigation, route }) {
 
       {/* Step text bar */}
       <View style={styles.stepBar}>
-        <Text style={styles.stepLabel}>Step {(stepIndex || 0) + 1}</Text>
+        <Text style={styles.stepLabel}>{t('ar_step_label').replace('{n}', (stepIndex || 0) + 1)}</Text>
         <Text style={styles.stepText} numberOfLines={3}>{stepText}</Text>
       </View>
 
       {/* Controls */}
       <View style={styles.controls}>
-        <TouchableOpacity style={styles.controlBtn} onPress={() => navigation.goBack()}>
+        <TouchableOpacity
+          style={styles.controlBtn}
+          onPress={() => navigation.goBack()}
+          accessibilityLabel={t('ar_close')}
+          accessibilityRole="button"
+        >
           <Icon name="close" size={24} color="#fff" />
-          <Text style={styles.controlText}>Close</Text>
+          <Text style={styles.controlText}>{t('ar_close')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.controlBtn, styles.doneBtn]}
           onPress={() => {
             navigation.navigate('WorkshopSteps', { completedStepIndex: stepIndex });
           }}
+          accessibilityLabel={t('ar_done')}
+          accessibilityRole="button"
         >
           <Icon name="checkmark" size={24} color="#fff" />
-          <Text style={styles.controlText}>Done</Text>
+          <Text style={styles.controlText}>{t('ar_done')}</Text>
         </TouchableOpacity>
       </View>
     </View>

@@ -1,0 +1,116 @@
+name: Full validation (coverage)
+
+# Broader pipeline. Runs on merge to main and on-demand. Produces coverage
+# artifacts for both frontend and backend. Expected to take 10-20 minutes.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: full-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend-coverage:
+    name: Frontend coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - run: npm ci
+
+      - name: Jest with coverage
+        # Timeout guard: screens.smoke exercises every screen, which is slow
+        # with istanbul instrumentation. 30 min is generous; raise only if
+        # the suite legitimately grows past it.
+        timeout-minutes: 30
+        run: npm run test:coverage -- --ci
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-coverage
+          path: |
+            app/coverage/lcov.info
+            app/coverage/cobertura-coverage.xml
+            app/coverage/coverage-summary.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  backend-coverage:
+    name: Backend coverage
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - run: dotnet restore DIYHelper2.slnx
+
+      - name: Build
+        run: dotnet build DIYHelper2.slnx --no-restore --configuration Release
+
+      - name: Test with coverage
+        run: >
+          dotnet test DIYHelper2.slnx
+          --no-build
+          --configuration Release
+          --collect:"XPlat Code Coverage"
+          --logger "trx;LogFileName=test-results.trx"
+          --results-directory TestResults
+
+      - name: Upload coverage + results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-coverage
+          path: |
+            backend/TestResults/**/coverage.cobertura.xml
+            backend/TestResults/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14
+
+  build-verify-backend:
+    name: Publish-build verify (backend)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/DIYHelper2.Api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Publish (release)
+        # Proves the API still packages cleanly for Elastic Beanstalk deploy.
+        # Catches issues like missing Content/CopyToPublish references that
+        # unit tests cannot see.
+        run: dotnet publish -c Release -o publish-ci
+
+      - name: Smoke artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-publish
+          path: backend/DIYHelper2.Api/publish-ci/
+          retention-days: 3

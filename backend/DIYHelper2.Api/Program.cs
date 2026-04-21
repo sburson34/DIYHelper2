@@ -15,6 +15,8 @@ using DIYHelper2.Api.Models;
 using DIYHelper2.Api.Middleware;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Integrations;
+using Microsoft.AspNetCore.RateLimiting;
+using System.Threading.RateLimiting;
 using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -126,6 +128,70 @@ builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();
 
+// ── AI vision client DI wiring ─────────────────────────────────────
+// AiKeyStore is a mutable holder populated after AWS Secrets Manager
+// resolution (below). IAIVisionClient is registered as a singleton that
+// reads from the store on first access — this lets us keep the existing
+// post-build key-fetch pattern while still exposing a stubbable seam for
+// integration tests (ApiFactory can replace the IAIVisionClient registration).
+builder.Services.AddSingleton<AiKeyStore>();
+builder.Services.AddSingleton<IAIVisionClient>(sp =>
+{
+    var store = sp.GetRequiredService<AiKeyStore>();
+    var provider = Environment.GetEnvironmentVariable("AI_PROVIDER")?.ToLowerInvariant() ?? "openai";
+
+    var openAi = new OpenAIVisionClient(
+        apiKey: store.OpenAiKey ?? string.Empty,
+        logger: sp.GetRequiredService<ILogger<OpenAIVisionClient>>());
+
+    IAIVisionClient? anthropic = null;
+    if (!string.IsNullOrEmpty(store.AnthropicKey))
+    {
+        anthropic = new AnthropicVisionClient(
+            http: new HttpClient { Timeout = TimeSpan.FromMinutes(2) },
+            apiKey: store.AnthropicKey,
+            logger: sp.GetRequiredService<ILogger<AnthropicVisionClient>>());
+    }
+
+    return new AIClientFactory(
+        openAi: openAi,
+        anthropic: anthropic,
+        mode: provider,
+        logger: sp.GetRequiredService<ILogger<AIClientFactory>>());
+});
+
+// Per-IP rate limiting protects the OpenAI key from a single abusive client
+// burning through quota. "ai" is applied to the GPT-4o-backed endpoints
+// (analyze / ask-helper / verify-step / diagnose / clarify). "translate"
+// gets its own bucket because batched translations are legitimately chatty.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    static string IpKey(HttpContext ctx) =>
+        ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
+        ?? ctx.Connection.RemoteIpAddress?.ToString()
+        ?? "unknown";
+
+    options.AddPolicy("ai", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(IpKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 20,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true,
+        }));
+
+    options.AddPolicy("translate", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(IpKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 120,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true,
+        }));
+});
+
 var app = builder.Build();
 
 // Fetch OpenAI API key from AWS Secrets Manager (or fall back to env var for local dev)
@@ -161,6 +227,12 @@ string? openAiKey = null;
         startupLogger.LogWarning("OPENAI_API_KEY is not configured. Set SECRET_ARN or OPENAI_API_KEY env var.");
     else
         startupLogger.LogInformation("Backend starting up. Listening for requests...");
+
+    // Propagate the key into the DI-registered AiKeyStore so IAIVisionClient
+    // (registered in builder.Services) resolves with a usable credential.
+    var aiKeys = app.Services.GetRequiredService<AiKeyStore>();
+    aiKeys.OpenAiKey = openAiKey;
+    aiKeys.AnthropicKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
 }
 
 // Affiliate program configuration
@@ -207,6 +279,32 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.EnsureCreated();
+
+    // EnsureCreated() skips tables when the DB file already exists, so newer
+    // tables added after the initial deploy (e.g. DataDeletionRequests) would
+    // never appear in the prod SQLite file. Create them idempotently here.
+    db.Database.ExecuteSqlRaw(@"
+        CREATE TABLE IF NOT EXISTS ""DataDeletionRequests"" (
+            ""Id"" INTEGER NOT NULL CONSTRAINT ""PK_DataDeletionRequests"" PRIMARY KEY AUTOINCREMENT,
+            ""RequestId"" TEXT NOT NULL,
+            ""Name"" TEXT NULL,
+            ""Email"" TEXT NULL,
+            ""Phone"" TEXT NULL,
+            ""Status"" TEXT NOT NULL,
+            ""CreatedAt"" TEXT NOT NULL,
+            ""VerifiedAt"" TEXT NULL,
+            ""CompletedAt"" TEXT NULL,
+            ""Notes"" TEXT NULL,
+            ""ClientIp"" TEXT NULL,
+            ""CorrelationId"" TEXT NULL,
+            ""AppVersion"" TEXT NULL
+        );");
+    db.Database.ExecuteSqlRaw(@"
+        CREATE INDEX IF NOT EXISTS ""IX_DataDeletionRequests_Email_CreatedAt""
+            ON ""DataDeletionRequests"" (""Email"", ""CreatedAt"");");
+    db.Database.ExecuteSqlRaw(@"
+        CREATE INDEX IF NOT EXISTS ""IX_DataDeletionRequests_ClientIp_CreatedAt""
+            ON ""DataDeletionRequests"" (""ClientIp"", ""CreatedAt"");");
 }
 
 // Configure the HTTP request pipeline.
@@ -219,6 +317,8 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 
 app.UseCors("MobilePolicy");
+
+app.UseRateLimiter();
 
 // Observability middleware — order matters:
 // 1. CorrelationId: assigns/reads the ID and pushes it into the log scope
@@ -256,10 +356,12 @@ catch
     hazardousChemicals = new HashSet<string>();
 }
 
-app.MapPost("/api/analyze", async (
+app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     [FromBody] AnalyzeProjectRequest request,
     HttpContext context,
     ILogger<Program> logger,
+    IAIVisionClient aiClient,
+    AiKeyStore aiKeys,
     YouTubeClient youTube,
     PubChemClient pubChem,
     AmazonPaClient amazonPa,
@@ -267,25 +369,10 @@ app.MapPost("/api/analyze", async (
 {
     try
     {
-        if (string.IsNullOrEmpty(openAiKey))
+        if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
             return ApiError.NotConfigured(context, "OpenAI API key");
 
         var correlationId = context.Items["CorrelationId"] as string;
-
-        OpenAIClientOptions clientOptions = new();
-        clientOptions.NetworkTimeout = TimeSpan.FromMinutes(2); // Wait up to 2 minutes for long uploads/analysis
-
-        ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(openAiKey), clientOptions);
-
-        ChatCompletionOptions options = new()
-        {
-            EndUserId = "diy-helper-app"
-        };
-
-        // Increase timeout for large image uploads
-        // The SDK doesn't expose a direct timeout on ChatClient easily without custom Pipeline
-        // but we can try to set it via OpenAIClient if we used that,
-        // however ChatClient is what we have here.
 
         // Count images so GPT-4o can reference them by number
         int imageCount = 0;
@@ -400,66 +487,52 @@ IMPORTANT for outdoor / weather_sensitive / repair_type:
             ? " IMPORTANT: All text fields in the JSON response (title, steps, tools_and_materials, difficulty, estimated_time, estimated_cost, safety_tips, when_to_call_pro, image_annotations descriptions and overviews) MUST be written in Spanish. URLs, JSON keys, and search query parameters should remain in English."
             : "";
 
-        var messages = new List<ChatMessage>
-        {
-            new SystemChatMessage("You are a helpful DIY project assistant. Analyze any provided photos carefully. Provide a detailed step-by-step guide with image annotations referencing the user's photos and suggest reference image searches. Return valid JSON only." + languageInstruction)
-        };
+        string systemPrompt = "You are a helpful DIY project assistant. Analyze any provided photos carefully. Provide a detailed step-by-step guide with image annotations referencing the user's photos and suggest reference image searches. Return valid JSON only." + languageInstruction;
 
-        var userMessageParts = new List<ChatMessageContentPart>
-        {
-            ChatMessageContentPart.CreateTextPart(textContent)
-        };
-
-        bool hasValidImages = false;
+        // Decode base64 media into provider-agnostic image parts. Video items
+        // and URL-based images are not supported by the IAIVisionClient
+        // abstraction (OpenAI accepts URLs, Anthropic wants bytes; the mobile
+        // app always sends base64 anyway) — log and skip.
+        var images = new List<AIImagePart>();
         if (request.Media != null)
         {
             foreach (var item in request.Media)
             {
                 if (item.Type == "video")
                 {
-                    logger.LogInformation("Skipping video item as OpenAI Chat Completion SDK for images doesn't support direct video parts yet.");
+                    logger.LogInformation("Skipping video item — vision SDKs do not accept video parts.");
                     continue;
                 }
-
-                if (!string.IsNullOrEmpty(item.Base64))
+                if (string.IsNullOrEmpty(item.Base64))
                 {
-                    try
-                    {
-                        byte[] data = Convert.FromBase64String(item.Base64);
-                        logger.LogInformation("Processing image part. Size: {Size} bytes, Mime: {Mime}", data.Length, item.MimeType ?? "image/jpeg");
-                        userMessageParts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), item.MimeType ?? "image/jpeg"));
-                        hasValidImages = true;
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Failed to decode base64 image.");
-                    }
+                    if (!string.IsNullOrEmpty(item.Url))
+                        logger.LogWarning("Skipping URL-only media item; backend requires base64-encoded images.");
+                    continue;
                 }
-                else if (!string.IsNullOrEmpty(item.Url))
+                try
                 {
-                    if (Uri.TryCreate(item.Url, UriKind.Absolute, out var uri))
-                    {
-                        if (uri.Scheme == "http" || uri.Scheme == "https")
-                        {
-                            userMessageParts.Add(ChatMessageContentPart.CreateImagePart(uri));
-                            hasValidImages = true;
-                        }
-                        else
-                        {
-                            logger.LogWarning("Skipping non-HTTP(S) media URL: {Url}", item.Url);
-                        }
-                    }
+                    byte[] data = Convert.FromBase64String(item.Base64);
+                    logger.LogInformation("Processing image part. Size: {Size} bytes, Mime: {Mime}", data.Length, item.MimeType ?? "image/jpeg");
+                    images.Add(new AIImagePart(data, item.MimeType ?? "image/jpeg"));
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to decode base64 image.");
                 }
             }
         }
 
-        if (!hasValidImages && string.IsNullOrEmpty(request.Description))
+        if (images.Count == 0 && string.IsNullOrEmpty(request.Description))
             return ApiError.BadRequest(context, "Please provide a project description or a valid image.");
 
-        messages.Add(new UserChatMessage(userMessageParts));
+        var aiRequest = new AIChatRequest(
+            System: systemPrompt,
+            User: textContent,
+            Images: images,
+            Timeout: TimeSpan.FromMinutes(2));
 
-        var aiCtx = new AiCallContext("analyze", "gpt-4o", request.Description?.Length ?? 0, imageCount, request.Language, correlationId);
-        string rawContent = await AiWorkflow.CompleteAsync(client, messages, options, aiCtx, logger);
+        var aiCtx = new AiCallContext("analyze", aiClient.ProviderName, request.Description?.Length ?? 0, imageCount, request.Language, correlationId);
+        string rawContent = await AiWorkflow.CompleteAsync(aiClient, aiRequest, aiCtx, logger);
 
         var resultDict = AiWorkflow.ParseJsonResponse(rawContent, aiCtx, logger);
         if (resultDict == null)
@@ -615,7 +688,7 @@ IMPORTANT for outdoor / weather_sensitive / repair_type:
     }
 });
 
-app.MapPost("/api/ask-helper", async ([FromBody] AskHelperRequest request, HttpContext context, ILogger<Program> logger) =>
+app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async ([FromBody] AskHelperRequest request, HttpContext context, ILogger<Program> logger) =>
 {
     if (string.IsNullOrEmpty(openAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
@@ -719,8 +792,91 @@ app.MapDelete("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
     return Results.NoContent();
 });
 
+// ── Privacy: server-side data deletion ──────────────────────────────
+// Contract: docs/backend-deletion-endpoint.md. Records a verified deletion
+// request; the actual wipe (help_requests rows + stored media + backups) is
+// driven out-of-band once the contact on file confirms the request.
+app.MapPost("/api/delete-user-data", async (
+    [FromBody] DeleteUserDataDto dto,
+    HttpContext context,
+    AppDbContext db,
+    ILogger<Program> logger) =>
+{
+    var name = (dto.Name ?? "").Trim();
+    var email = (dto.Email ?? "").Trim();
+    var phone = (dto.Phone ?? "").Trim();
+
+    if (string.IsNullOrEmpty(email) && string.IsNullOrEmpty(phone))
+        return Results.Json(new { error = "email or phone required" }, statusCode: 400);
+
+    var correlationId = context.Items["CorrelationId"] as string;
+    var appVersion = context.Request.Headers["X-App-Version"].ToString();
+    var clientIp = context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
+                   ?? context.Connection.RemoteIpAddress?.ToString();
+
+    // Rate limit: silently accept and drop once a threshold is crossed so the
+    // client cannot tell whether a given email is in our system — this prevents
+    // using the endpoint as a "does this address exist?" oracle.
+    const int PerEmailPerDay = 3;
+    const int PerIpPerDay = 20;
+    var since = DateTime.UtcNow.AddHours(-24);
+
+    int emailCount = 0;
+    if (!string.IsNullOrEmpty(email))
+        emailCount = await db.DataDeletionRequests.CountAsync(r => r.Email == email && r.CreatedAt >= since);
+
+    int ipCount = 0;
+    if (!string.IsNullOrEmpty(clientIp))
+        ipCount = await db.DataDeletionRequests.CountAsync(r => r.ClientIp == clientIp && r.CreatedAt >= since);
+
+    var fakeRequestId = Guid.NewGuid().ToString();
+
+    if (emailCount >= PerEmailPerDay)
+    {
+        logger.LogWarning("delete-user-data: per-email rate limit hit. email={EmailHash} ip={Ip} correlationId={CorrelationId}",
+            Hash(email), clientIp, correlationId);
+        return Results.Ok(new { status = "queued", requestId = fakeRequestId });
+    }
+    if (ipCount >= PerIpPerDay)
+    {
+        logger.LogWarning("delete-user-data: per-IP rate limit hit. ip={Ip} correlationId={CorrelationId}",
+            clientIp, correlationId);
+        return Results.Ok(new { status = "queued", requestId = fakeRequestId });
+    }
+
+    var record = new DataDeletionRequest
+    {
+        RequestId = Guid.NewGuid().ToString(),
+        Name = string.IsNullOrEmpty(name) ? null : name,
+        Email = string.IsNullOrEmpty(email) ? null : email,
+        Phone = string.IsNullOrEmpty(phone) ? null : phone,
+        Status = "pending_verification",
+        CreatedAt = DateTime.UtcNow,
+        ClientIp = clientIp,
+        CorrelationId = correlationId,
+        AppVersion = string.IsNullOrEmpty(appVersion) ? null : appVersion,
+    };
+    db.DataDeletionRequests.Add(record);
+    await db.SaveChangesAsync();
+
+    // Audit trail — intentionally does not log raw email/phone.
+    logger.LogInformation(
+        "delete-user-data: queued. requestId={RequestId} emailHash={EmailHash} phoneHash={PhoneHash} correlationId={CorrelationId}",
+        record.RequestId, Hash(email), Hash(phone), correlationId);
+
+    return Results.Ok(new { status = "queued", requestId = record.RequestId });
+
+    static string Hash(string? s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(s.ToLowerInvariant()));
+        return Convert.ToHexString(bytes).Substring(0, 12).ToLowerInvariant();
+    }
+});
+
 // ── #9 verify-step ─────────────────────────────────────────────────
-app.MapPost("/api/verify-step", async ([FromBody] VerifyStepRequest req, HttpContext context, ILogger<Program> logger) =>
+app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async ([FromBody] VerifyStepRequest req, HttpContext context, ILogger<Program> logger) =>
 {
     if (string.IsNullOrEmpty(openAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
@@ -774,7 +930,7 @@ Return JSON only:
 });
 
 // ── #10 diagnose ───────────────────────────────────────────────────
-app.MapPost("/api/diagnose", async ([FromBody] AnalyzeProjectRequest req, HttpContext context, ILogger<Program> logger) =>
+app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async ([FromBody] AnalyzeProjectRequest req, HttpContext context, ILogger<Program> logger) =>
 {
     if (string.IsNullOrEmpty(openAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
@@ -829,7 +985,7 @@ Return JSON only:
 });
 
 // ── #11 clarifying questions ───────────────────────────────────────
-app.MapPost("/api/clarify", async ([FromBody] AnalyzeProjectRequest req, HttpContext context, ILogger<Program> logger) =>
+app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async ([FromBody] AnalyzeProjectRequest req, HttpContext context, ILogger<Program> logger) =>
 {
     if (string.IsNullOrEmpty(openAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
@@ -1067,7 +1223,7 @@ app.MapPost("/api/paint-color-match", ([FromBody] PaintColorRequest req, PaintCo
 // ── Google Translate v2 proxy ────────────────────────────────────
 // Batches up to 100 strings per call, caches results in-memory, and preserves
 // response order so the client can map translated[i] back to its original key.
-app.MapPost("/api/translate", async ([FromBody] TranslateRequest req, ILogger<Program> logger) =>
+app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody] TranslateRequest req, ILogger<Program> logger) =>
 {
     try
     {
@@ -1150,6 +1306,11 @@ app.MapPost("/api/translate", async ([FromBody] TranslateRequest req, ILogger<Pr
 
 app.Run();
 
+// Expose the implicit Program type for WebApplicationFactory<Program> in tests.
+// Top-level statements generate an internal Program class by default; the
+// partial declaration promotes it to public without changing runtime behavior.
+public partial class Program { }
+
 public record VerifyStepRequest(
     [property: JsonPropertyName("stepText")] string StepText,
     [property: JsonPropertyName("projectTitle")] string ProjectTitle,
@@ -1186,6 +1347,12 @@ public record UpdateHelpRequestDto(
     [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("notes")] string? Notes,
     [property: JsonPropertyName("followUpDate")] DateTime? FollowUpDate
+);
+
+public record DeleteUserDataDto(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("email")] string? Email,
+    [property: JsonPropertyName("phone")] string? Phone
 );
 
 public record AskHelperRequest(

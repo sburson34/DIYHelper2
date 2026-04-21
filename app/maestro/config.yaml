@@ -1,0 +1,7 @@
+# Maestro runtime config shared by every flow.
+# See https://maestro.mobile.dev/cli/configuration.
+appId: com.diyhelper2
+---
+# Flows are discovered in this directory. Keep flow files small and focused —
+# one user intent per file. Prefer text-based matchers over index-based so
+# tests survive minor layout changes.

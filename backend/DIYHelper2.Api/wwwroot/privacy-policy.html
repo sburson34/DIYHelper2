@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DIY Helper - Privacy Policy</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 820px; margin: 0 auto; padding: 20px; color: #222; line-height: 1.6; }
+    h1 { color: #0A4FA6; }
+    h2 { color: #0A4FA6; margin-top: 2em; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.25em; }
+    h3 { color: #1f2937; margin-top: 1.2em; }
+    .updated { color: #666; font-style: italic; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.95em; }
+    th, td { border: 1px solid #d1d5db; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; }
+    code { background: #f3f4f6; padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>DIY Helper Privacy Policy</h1>
+  <p class="updated">Last updated: April 17, 2026</p>
+
+  <h2>Introduction</h2>
+  <p>DIY Helper ("we," "our," or "the app") is a mobile app that helps you plan and complete home repair projects using AI-generated repair guides. This Privacy Policy explains what information we collect, how we use and share it, who processes it on our behalf, and the choices you have. Using DIY Helper means you accept this policy.</p>
+
+  <h2>Information We Collect</h2>
+
+  <h3>Information you provide</h3>
+  <ul>
+    <li><strong>Contact information:</strong> Name, email address, and phone number. You enter these in Settings and they are included when you request help from a professional.</li>
+    <li><strong>Approximate location:</strong> U.S. ZIP code, entered manually. Used for weather forecasts on outdoor projects, property-value-impact estimates, and nearby-store searches. We do not collect precise GPS location.</li>
+    <li><strong>Photos and videos:</strong> Images and videos you capture through the app's camera feature or select from your photo library. Used to generate AI repair guides.</li>
+    <li><strong>Audio recordings and transcripts:</strong> Audio captured when you use voice description or hands-free workshop mode. The device converts audio to text using your operating system's speech-recognition service; the resulting text is sent to the app.</li>
+    <li><strong>Text you enter:</strong> Project descriptions, clarifying-question answers, step notes, feedback, and help-request details.</li>
+    <li><strong>Tool inventory and shopping progress:</strong> Tools you add to your inventory (by typing or barcode scan) and items you mark as purchased on the shopping list.</li>
+    <li><strong>Project data you save:</strong> AI-generated repair guides you save to your Honey-Do List or Contractor List, including any step-completion checkmarks, step photos, and receipt images you attach.</li>
+  </ul>
+
+  <h3>Information collected automatically</h3>
+  <ul>
+    <li><strong>Crash and error reports:</strong> When the app crashes or hits an unexpected error, we collect a stack trace plus a short event timeline ("breadcrumbs") via Sentry. Breadcrumbs can include the names of screens you navigated through and touch events you triggered shortly before the error, so in rare cases they may contain limited context you entered (for example, a screen route that includes a project title). Breadcrumbs do not include your photos, videos, audio, or contact information.</li>
+    <li><strong>Device information:</strong> Device model, operating system version, and app version, included in crash reports to help us reproduce bugs.</li>
+  </ul>
+
+  <h3>On-device processing (information we do <em>not</em> collect)</h3>
+  <p>Some features run entirely on your device using Google ML Kit and never send data to our servers or any third party:</p>
+  <ul>
+    <li>Barcode scanning for the tool inventory</li>
+    <li>Image labeling to suggest relevant tags on photos you capture</li>
+    <li>Entity extraction on text you type (for auto-suggestions)</li>
+    <li>Pose detection for the AR workshop-guide view</li>
+    <li>Offline translation of user-facing strings (when you download a language model)</li>
+  </ul>
+
+  <h2>How We Use Your Information</h2>
+  <ul>
+    <li><strong>AI analysis:</strong> Your photos, videos, and text descriptions are sent to our backend at <code>api.diyhelper.org</code>, which forwards them to OpenAI's GPT-4o model to produce a step-by-step repair guide. The generated guide is returned to your device and saved locally if you choose. Our backend may retain a copy of the submitted photos, videos, audio, and text after processing — see <em>Data Storage and Retention</em> below.</li>
+    <li><strong>Professional help:</strong> When you tap "Get Pro Help," your contact info, project title, description, and (optionally) one photo are sent to our backend, which relays the request to a vetted home-repair professional.</li>
+    <li><strong>Community library:</strong> If (and only if) you enable community sharing in Settings, anonymized repair guides you complete may be published to the community library for other users to browse. Your name, contact info, and photos are never shared.</li>
+    <li><strong>Diagnostic mode, property-value estimates, weather, and Reddit discussions:</strong> Short text queries (problem description, repair type + ZIP, ZIP alone, or project title) are sent to our backend to fetch the corresponding result. No photos or contact info are included.</li>
+    <li><strong>Reliability and bug fixes:</strong> Crash reports and device info help us identify and repair defects.</li>
+  </ul>
+
+  <h2>Data Storage and Retention</h2>
+  <ul>
+    <li><strong>On your device:</strong> Your projects, tool inventory, shopping list, profile, preferences, and step progress are stored locally using the operating system's encrypted app-storage area. They remain on your device until you tap <em>Settings → Delete My Data</em> or uninstall the app.</li>
+    <li><strong>On our backend:</strong> Photos, videos, audio, text descriptions, help-request details, and anything else you submit for processing by <code>api.diyhelper.org</code> may be retained on our servers indefinitely — we do not automatically delete this data on a schedule. We keep it to support debugging, investigate service issues, and improve the app. You can request permanent deletion of all server-side data associated with your contact information at any time by emailing the address at the bottom of this policy; we will delete it within 30 days of receiving a verified request.</li>
+    <li><strong>OpenAI:</strong> Content forwarded to OpenAI is subject to OpenAI's <a href="https://openai.com/policies/api-data-usage-policies">API data usage policy</a>. OpenAI has confirmed that API inputs and outputs are not used to train their models by default and are retained only for abuse monitoring (currently up to 30 days) before deletion. This is independent of our own backend retention described above.</li>
+    <li><strong>Sentry:</strong> Crash reports are retained for up to 90 days and then automatically deleted.</li>
+  </ul>
+
+  <h2>Who Processes Your Data</h2>
+  <p>We use the following third-party service providers. Each receives only the minimum data needed to perform its function:</p>
+  <table>
+    <thead>
+      <tr><th>Provider</th><th>Purpose</th><th>Data received</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>OpenAI (USA)</td>
+        <td>AI repair-guide generation</td>
+        <td>Photos, videos, text descriptions, ZIP (optional)</td>
+      </tr>
+      <tr>
+        <td>Sentry (USA)</td>
+        <td>Crash and error reporting</td>
+        <td>Stack traces, breadcrumbs, device info, app version</td>
+      </tr>
+      <tr>
+        <td>Our own backend <code>api.diyhelper.org</code> (USA)</td>
+        <td>Request routing to OpenAI, help-request dispatch, community library, property-value estimates, weather, Reddit discussions</td>
+        <td>Everything you submit for the above features</td>
+      </tr>
+      <tr>
+        <td>Google ML Kit (on-device)</td>
+        <td>Barcode, image labeling, entity extraction, pose detection, offline translation</td>
+        <td>Processed entirely on your device; no data leaves the device</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>When you tap an outbound link in the app (a YouTube video suggestion, a shopping link to Amazon, Home Depot, or Lowe's, a phone number in Emergency mode, or a Google Maps search), you leave the app and are subject to that destination's privacy policy.</p>
+
+  <h2>We Do Not Sell Your Personal Information</h2>
+  <p>We do not and will not sell your personal information, and we do not share it with advertising networks or data brokers. We have not done so in the past twelve months.</p>
+
+  <h2>U.S. State Privacy Rights</h2>
+  <p>If you reside in California, Colorado, Connecticut, Delaware, Florida, Indiana, Iowa, Kentucky, Maryland, Minnesota, Montana, Nebraska, New Hampshire, New Jersey, Oregon, Rhode Island, Tennessee, Texas, Utah, or Virginia, you have rights under your state's privacy law regarding your personal information.</p>
+
+  <h3>Categories of personal information we collect</h3>
+  <table>
+    <thead>
+      <tr><th>Category (CCPA/CPRA)</th><th>Examples</th><th>Collected?</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>A. Identifiers</td><td>Name, email, phone</td><td>Yes</td></tr>
+      <tr><td>B. California Customer Records information</td><td>Name, contact information</td><td>Yes (same as above)</td></tr>
+      <tr><td>C. Protected classification characteristics</td><td>Race, religion, gender, etc.</td><td>No</td></tr>
+      <tr><td>D. Commercial information</td><td>Purchase history, transactions</td><td>No</td></tr>
+      <tr><td>E. Biometric information</td><td>Fingerprints, voiceprints</td><td>No</td></tr>
+      <tr><td>F. Internet or network activity</td><td>Browsing history, tracking data</td><td>No</td></tr>
+      <tr><td>G. Geolocation data</td><td>Approximate location via ZIP code (user-entered)</td><td>Yes (approximate only)</td></tr>
+      <tr><td>H. Audio, electronic, visual information</td><td>Photos, videos, and audio you capture through the app</td><td>Yes</td></tr>
+      <tr><td>I. Professional or employment information</td><td>Job title, work history</td><td>No</td></tr>
+      <tr><td>J. Education information</td><td>Student records</td><td>No</td></tr>
+      <tr><td>K. Inferences from collected data</td><td>Advertising profiles, psychographics</td><td>No</td></tr>
+      <tr><td>L. Sensitive personal information</td><td>Social Security number, precise geolocation, financial account, health, etc.</td><td>No</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Your rights</h3>
+  <ul>
+    <li><strong>Right to know</strong> what personal information we process about you.</li>
+    <li><strong>Right to access</strong> a copy of your data.</li>
+    <li><strong>Right to correct</strong> inaccurate information.</li>
+    <li><strong>Right to delete</strong> your personal information. Tap <em>Settings → Delete My Data</em> — the button wipes everything stored on your device and (if you have entered contact info) also submits a deletion request to our servers. Server-side copies are permanently removed within 30 days. If the app cannot reach our servers at the time you tap, it opens a pre-filled email you can send to us instead. You can also email the deletion request directly to the address at the bottom of this policy.</li>
+    <li><strong>Right to non-discrimination</strong> for exercising your rights.</li>
+    <li><strong>Right to opt out</strong> of the sale or sharing of your personal information. DIY Helper does not sell or share personal information, so this opt-out has no additional effect.</li>
+  </ul>
+  <p>To exercise any right, email the contact address at the bottom of this policy. We will respond within the time required by your state's law (usually 45 days).</p>
+
+  <h2>International Users</h2>
+  <p>Our servers and third-party processors (OpenAI, Sentry) are located in the United States. If you use DIY Helper from outside the United States, your information will be transferred to and processed in the U.S. By using the app you consent to that transfer. We rely on appropriate legal mechanisms (including Standard Contractual Clauses where applicable) for transfers from the EEA, UK, or Switzerland.</p>
+
+  <h2>Your Choices and Controls</h2>
+  <ul>
+    <li><strong>Delete all your data:</strong> <em>Settings → Delete My Data</em> wipes everything stored on your device, and — if you have entered contact info — also submits a deletion request to our servers in the same action. Server-side copies are removed within 30 days. If the app is offline or the backend is unreachable, it opens a pre-filled email so you can still send the request.</li>
+    <li><strong>Community sharing:</strong> Toggle on or off any time in Settings. Past shared guides can be removed on request.</li>
+    <li><strong>Notifications:</strong> Toggle project reminders on or off in Settings.</li>
+    <li><strong>Camera, microphone, speech-recognition, and photo-library permissions:</strong> Revocable any time through your device's system settings. Some features will not function without the relevant permission.</li>
+    <li><strong>Do Not Track:</strong> DIY Helper does not use web cookies or track you across apps or websites, so browser DNT signals do not apply.</li>
+  </ul>
+
+  <h2>Children's Privacy</h2>
+  <p>DIY Helper is not directed at children under 13. We do not knowingly collect personal information from children under 13. If you believe a child has provided us with personal information, contact us and we will delete it.</p>
+
+  <h2>Security</h2>
+  <p>Data in transit between the app and our servers is encrypted with HTTPS/TLS. Data on your device is protected by your operating system's app-storage sandbox and (on supported devices) hardware-backed encryption. No security measure is perfect; use the app within a reasonable security posture (up-to-date OS, device passcode, etc.).</p>
+
+  <h2>Changes to This Policy</h2>
+  <p>We may update this Privacy Policy as the app evolves or as legal requirements change. Material changes will be announced in the app on next launch and the "Last updated" date at the top of this document will be revised.</p>
+
+  <h2>Contact Us</h2>
+  <p>Questions about this policy, or want to exercise a privacy right? Email:</p>
+  <p><a href="mailto:bursonproperties@gmail.com">bursonproperties@gmail.com</a></p>
+</body>
+</html>

@@ -8,14 +8,14 @@ import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 export default function Diagnose() {
-  const { language } = useTranslation();
+  const { t, language } = useTranslation();
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
   const run = async () => {
     if (!description.trim()) {
-      Alert.alert('Describe the issue', 'Tell me what you\'re seeing or hearing — e.g., "water under sink", "dishwasher won\'t drain".');
+      Alert.alert(t('diagnose_describe_title'), t('diagnose_describe_msg'));
       return;
     }
     setLoading(true);
@@ -24,7 +24,7 @@ export default function Diagnose() {
       const r = await diagnoseProblem({ description, media: [], language });
       setResult(r);
     } catch (e) {
-      Alert.alert('Diagnosis failed', e.message);
+      Alert.alert(t('diagnose_failed'), e.message);
     } finally {
       setLoading(false);
     }
@@ -40,22 +40,30 @@ export default function Diagnose() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.header}>
           <Icon name="search" size={36} color={theme.colors.secondary} />
-          <Text style={styles.title}>What's wrong?</Text>
-          <Text style={styles.subtitle}>Describe a symptom and I'll list likely causes ranked by probability.</Text>
+          <Text style={styles.title}>{t('diagnose_title')}</Text>
+          <Text style={styles.subtitle}>{t('diagnose_subtitle')}</Text>
         </View>
         <TextInput
           style={styles.input}
           multiline
-          placeholder="e.g. I hear a humming noise from the water heater, especially at night."
+          placeholder={t('diagnose_placeholder')}
           placeholderTextColor={theme.colors.textSecondary}
           value={description}
           onChangeText={setDescription}
+          accessibilityLabel={t('diagnose_title')}
         />
-        <TouchableOpacity style={styles.runBtn} onPress={run} disabled={loading}>
+        <TouchableOpacity
+          style={styles.runBtn}
+          onPress={run}
+          disabled={loading}
+          accessibilityLabel={t('diagnose_button')}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: loading, busy: loading }}
+        >
           {loading ? <ActivityIndicator color="#fff" /> : (
             <>
               <Icon name="sparkles" size={18} color="#fff" />
-              <Text style={styles.runBtnText}>Diagnose</Text>
+              <Text style={styles.runBtnText}>{t('diagnose_button')}</Text>
             </>
           )}
         </TouchableOpacity>
@@ -66,7 +74,7 @@ export default function Diagnose() {
               <View style={[styles.urgencyBadge, { backgroundColor: urgencyColor(result.urgency) + '20' }]}>
                 <Icon name="warning" size={16} color={urgencyColor(result.urgency)} />
                 <Text style={[styles.urgencyText, { color: urgencyColor(result.urgency) }]}>
-                  Urgency: {result.urgency.toUpperCase()}
+                  {t('diagnose_urgency')}: {result.urgency.toUpperCase()}
                 </Text>
               </View>
             )}
@@ -83,7 +91,7 @@ export default function Diagnose() {
                 {c.next_check && (
                   <View style={styles.nextCheck}>
                     <Icon name="arrow-forward-circle" size={16} color={theme.colors.primary} />
-                    <Text style={styles.nextCheckText}>Next: {c.next_check}</Text>
+                    <Text style={styles.nextCheckText}>{t('diagnose_next')}: {c.next_check}</Text>
                   </View>
                 )}
               </View>

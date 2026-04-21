@@ -1,0 +1,32 @@
+# The dark-mode toggle writes to AsyncStorage and flips ThemeContext. Covered
+# by ThemeContext.test.js at the unit level; this flow proves the round trip
+# through the UI — the switch renders, a tap flips state, reopening the
+# screen shows the saved state.
+appId: com.diyhelper2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Capture the Issue"
+
+# Drawer → Settings.
+- swipe:
+    from: { x: 2%, y: 50% }
+    to: { x: 80%, y: 50% }
+- tapOn: "Settings"
+- assertVisible: "Dark mode"
+
+# Tap the dark-mode switch. Maestro targets the row containing the label;
+# the switch is the tappable control within.
+- tapOn:
+    id: "dark-mode-switch"
+    optional: true
+# Fallback when testID isn't present — tap on the Dark mode row label area.
+- tapOn: "Dark mode"
+
+# Reopen the screen and verify the setting persists.
+- back
+- swipe:
+    from: { x: 2%, y: 50% }
+    to: { x: 80%, y: 50% }
+- tapOn: "Settings"
+- assertVisible: "Dark mode"

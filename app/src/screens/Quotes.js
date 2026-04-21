@@ -4,10 +4,10 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity } from 'react-native
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
 import { getLocalHelpRequests, updateLocalHelpRequest } from '../utils/storage';
+import { useTranslation } from '../i18n/I18nContext';
 import theme from '../theme';
 
 const STATUSES = ['sent', 'quoted', 'scheduled', 'done'];
-const STATUS_LABEL = { sent: 'Sent', quoted: 'Quoted', scheduled: 'Scheduled', done: 'Done' };
 const STATUS_COLOR = {
   sent: '#0EA5E9',
   quoted: '#F59E0B',
@@ -16,6 +16,13 @@ const STATUS_COLOR = {
 };
 
 export default function Quotes({ navigation }) {
+  const { t } = useTranslation();
+  const STATUS_LABEL = {
+    sent: t('quotes_status_sent'),
+    quoted: t('quotes_status_quoted'),
+    scheduled: t('quotes_status_scheduled'),
+    done: t('quotes_status_done'),
+  };
   const [items, setItems] = useState([]);
 
   const load = async () => setItems(await getLocalHelpRequests());
@@ -35,8 +42,8 @@ export default function Quotes({ navigation }) {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Quote Tracker</Text>
-        <Text style={styles.subtitle}>Track requests sent to professionals.</Text>
+        <Text style={styles.title}>{t('quotes_title')}</Text>
+        <Text style={styles.subtitle}>{t('quotes_subtitle')}</Text>
       </View>
       <FlatList
         data={items}
@@ -45,7 +52,7 @@ export default function Quotes({ navigation }) {
         ListEmptyComponent={
           <View style={styles.empty}>
             <Icon name="chatbox-ellipses-outline" size={64} color={theme.colors.border} />
-            <Text style={styles.emptyText}>No requests yet. Tap "Get Pro Help" on a project to send one.</Text>
+            <Text style={styles.emptyText}>{t('quotes_empty')}</Text>
           </View>
         }
         renderItem={({ item }) => {
@@ -53,7 +60,7 @@ export default function Quotes({ navigation }) {
           return (
             <View style={styles.card}>
               <View style={styles.cardHeader}>
-                <Text style={styles.itemTitle}>{item.projectTitle || 'Untitled project'}</Text>
+                <Text style={styles.itemTitle}>{item.projectTitle || t('quotes_untitled')}</Text>
                 <View style={[styles.statusPill, { backgroundColor: STATUS_COLOR[status] + '20' }]}>
                   <Text style={[styles.statusText, { color: STATUS_COLOR[status] }]}>{STATUS_LABEL[status]}</Text>
                 </View>
@@ -70,11 +77,20 @@ export default function Quotes({ navigation }) {
                   );
                 })}
               </View>
-              {status !== 'done' && (
-                <TouchableOpacity style={styles.advanceBtn} onPress={() => advance(item)}>
-                  <Text style={styles.advanceText}>Mark as {STATUS_LABEL[STATUSES[STATUSES.indexOf(status) + 1]]}</Text>
-                </TouchableOpacity>
-              )}
+              {status !== 'done' && (() => {
+                const nextLabel = STATUS_LABEL[STATUSES[STATUSES.indexOf(status) + 1]];
+                const buttonText = t('quotes_mark_as').replace('{status}', nextLabel);
+                return (
+                  <TouchableOpacity
+                    style={styles.advanceBtn}
+                    onPress={() => advance(item)}
+                    accessibilityLabel={buttonText}
+                    accessibilityRole="button"
+                  >
+                    <Text style={styles.advanceText}>{buttonText}</Text>
+                  </TouchableOpacity>
+                );
+              })()}
             </View>
           );
         }}

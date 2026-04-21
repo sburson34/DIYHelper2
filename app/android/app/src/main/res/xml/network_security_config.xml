@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Forbid cleartext HTTP traffic by default. Release builds of DIYHelper only
+  talk to https://api.diyhelper.org, so any accidental http:// URL (or a
+  downgrade attack) is blocked before the request leaves the device.
+
+  The localhost/emulator exceptions are only needed for Metro + the local
+  .NET backend during development. Production builds never use those hosts.
+-->
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false">
+    <trust-anchors>
+      <certificates src="system"/>
+    </trust-anchors>
+  </base-config>
+
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">localhost</domain>
+    <!-- Android emulator loopback to the host machine. -->
+    <domain includeSubdomains="false">10.0.2.2</domain>
+    <!-- Expo / Metro dev server. -->
+    <domain includeSubdomains="false">127.0.0.1</domain>
+  </domain-config>
+</network-security-config>

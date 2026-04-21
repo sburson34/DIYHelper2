@@ -50,7 +50,7 @@ export default function ResultScreen({ navigation, route }) {
         }
       }
     })();
-  }, []);
+  }, [project?.title, project?.repair_type, project?.estimated_cost]);
 
   // Case-insensitive name match against inventory
   const findOwned = (name) => {
@@ -72,6 +72,27 @@ export default function ResultScreen({ navigation, route }) {
   const [checkedSteps, setCheckedSteps] = useState(
     new Array(project?.steps?.length || 0).fill(false)
   );
+
+  // These image-caching memos must be declared BEFORE the early return below —
+  // React hooks must be called in the same order on every render, and if we
+  // dropped out early on first render but not subsequent ones the order would
+  // drift and React would log "Rendered fewer hooks than expected".
+  //
+  // The `|| []` fallback would produce a fresh array every render, invalidating
+  // the useMemo below; memoize it so the array identity is stable when
+  // originalRequest.mediaUrls doesn't change.
+  const mediaUrls = useMemo(
+    () => originalRequest?.mediaUrls || [],
+    [originalRequest?.mediaUrls],
+  );
+  const sourceCache = useMemo(() => {
+    const map = new Map();
+    for (const uri of mediaUrls) {
+      if (uri) map.set(uri, { uri });
+    }
+    return map;
+  }, [mediaUrls]);
+  const sourceFor = useCallback((uri) => sourceCache.get(uri) || { uri }, [sourceCache]);
 
   if (!project) {
     return (
@@ -370,21 +391,6 @@ export default function ResultScreen({ navigation, route }) {
       )}
     </View>
   );
-
-  const mediaUrls = originalRequest?.mediaUrls || [];
-
-  // Stable Image source objects keyed by uri. Recreating {uri: ...} on every
-  // re-render forces Android to re-decode the file, which blocks the JS thread
-  // and makes taps on tabs / "I own this" feel laggy. Caching by uri keeps the
-  // same prop reference across renders so RN's image cache hits cleanly.
-  const sourceCache = useMemo(() => {
-    const map = new Map();
-    for (const uri of mediaUrls) {
-      if (uri) map.set(uri, { uri });
-    }
-    return map;
-  }, [mediaUrls.join('|')]);
-  const sourceFor = useCallback((uri) => sourceCache.get(uri) || { uri }, [sourceCache]);
 
   const getStepText = (step) => typeof step === 'string' ? step : step.text;
   const getStepAnnotations = (step) => typeof step === 'string' ? [] : (step.image_annotations || []);

@@ -1,0 +1,88 @@
+name: PR validation
+
+# Fast-feedback pipeline. Runs on every push and PR. Target: under 5 minutes
+# so developers get a pass/fail while the change is still fresh. Coverage and
+# the slower full-smoke tests run in `full.yml` (on merge to main) instead.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # One run per ref — cancel older runs of the same branch when a new push arrives.
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (lint + unit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        # Hard gate: errors fail the job. Warnings are surfaced but don't
+        # block (the codebase has a baseline of ~160 pre-existing warnings,
+        # mostly stylistic, to work down over time). Raise --max-warnings
+        # once the warning baseline drops.
+        run: npm run lint -- --max-warnings=200
+
+      - name: Test
+        run: npm test -- --ci --reporters=default --reporters=github-actions
+        env:
+          CI: 'true'
+
+  backend:
+    name: Backend (build + test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          # Repo targets net10.0 which is still in preview channels during
+          # the 2026 window. If this step fails with "SDK not found", bump
+          # to the latest 10.0.x-rc or use dotnet-version: '10.x' once GA.
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Restore
+        run: dotnet restore DIYHelper2.slnx
+
+      - name: Build (no restore)
+        run: dotnet build DIYHelper2.slnx --no-restore --configuration Release
+
+      - name: Test
+        run: >
+          dotnet test DIYHelper2.slnx
+          --no-build
+          --configuration Release
+          --logger "trx;LogFileName=test-results.trx"
+          --logger "console;verbosity=normal"
+          --results-directory TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-test-results
+          path: backend/TestResults/**/*.trx
+          if-no-files-found: warn
+          retention-days: 14

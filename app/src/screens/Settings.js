@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, Switch, Modal, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, KeyboardAvoidingView, Platform, ScrollView, Switch, Modal, FlatList, ActivityIndicator, Linking } from 'react-native';
 import { GOOGLE_LANGUAGES } from '../i18n/googleLanguages';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
@@ -16,6 +16,13 @@ import theme from '../theme';
 import { reportError, reportHandledError, reportWarning, addBreadcrumb } from '../services/monitoring';
 import { Sentry } from '../services/sentry';
 import { useMLTranslation } from '../mlkit/TranslationProvider';
+import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from '../config/appInfo';
+import { requestServerSideDeletion } from '../api/backendClient';
+
+// Privacy-policy SLA: server-side deletion within 30 days of a verified request.
+// Falls back to a pre-filled mailto: when the backend is unreachable so the user
+// always has a path to submit the request and we honor the commitment.
+const PRIVACY_CONTACT_EMAIL = 'bursonproperties@gmail.com';
 
 export default function Settings() {
   const { t, language, setLanguage, isTranslating, translationError } = useTranslation();
@@ -169,7 +176,7 @@ export default function Settings() {
               <Text style={styles.toggleLabel}>Dark mode</Text>
               <Text style={styles.toggleSub}>Use a dark color scheme.</Text>
             </View>
-            <Switch value={isDark} onValueChange={toggleDark} accessibilityLabel="Dark mode" accessibilityRole="switch" accessibilityState={{ checked: isDark }} />
+            <Switch testID="dark-mode-switch" value={isDark} onValueChange={toggleDark} accessibilityLabel="Dark mode" accessibilityRole="switch" accessibilityState={{ checked: isDark }} />
           </View>
 
           <View style={styles.toggleRow}>
@@ -287,6 +294,50 @@ export default function Settings() {
             <Text style={[styles.languageDesc, { color: '#78350F' }]}>{t('ai_disclosure_body')}</Text>
           </View>
 
+          {/* Privacy Policy */}
+          <View style={styles.languageSection}>
+            <View style={styles.languageHeader}>
+              <Icon name="shield-checkmark-outline" size={24} color={theme.colors.primary} />
+              <Text style={styles.languageTitle}>{t('privacy_policy')}</Text>
+            </View>
+            <Text style={styles.languageDesc}>{t('privacy_policy_desc')}</Text>
+            <TouchableOpacity
+              style={styles.langButton}
+              onPress={() => {
+                Linking.openURL(PRIVACY_POLICY_URL).catch((e) => {
+                  reportHandledError('PrivacyPolicyOpenFailed', e, { url: PRIVACY_POLICY_URL });
+                  Alert.alert(t('privacy_policy'), PRIVACY_POLICY_URL);
+                });
+              }}
+              accessibilityRole="link"
+              accessibilityLabel={t('open_privacy_policy')}
+            >
+              <Text style={styles.langButtonText}>{t('open_privacy_policy')}</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Terms of Service */}
+          <View style={styles.languageSection}>
+            <View style={styles.languageHeader}>
+              <Icon name="document-text-outline" size={24} color={theme.colors.primary} />
+              <Text style={styles.languageTitle}>{t('terms_of_service')}</Text>
+            </View>
+            <Text style={styles.languageDesc}>{t('terms_of_service_desc')}</Text>
+            <TouchableOpacity
+              style={styles.langButton}
+              onPress={() => {
+                Linking.openURL(TERMS_OF_SERVICE_URL).catch((e) => {
+                  reportHandledError('TermsOfServiceOpenFailed', e, { url: TERMS_OF_SERVICE_URL });
+                  Alert.alert(t('terms_of_service'), TERMS_OF_SERVICE_URL);
+                });
+              }}
+              accessibilityRole="link"
+              accessibilityLabel={t('open_terms_of_service')}
+            >
+              <Text style={styles.langButtonText}>{t('open_terms_of_service')}</Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Delete my data */}
           <View style={styles.languageSection}>
             <View style={styles.languageHeader}>
@@ -315,6 +366,28 @@ export default function Settings() {
                               text: t('delete_everything'),
                               style: 'destructive',
                               onPress: async () => {
+                                // Snapshot profile BEFORE wiping — we need it to ask the
+                                // backend to delete any server-side copies.
+                                const profileForDeletion = await getUserProfile().catch(() => null);
+                                const hasContact = !!(profileForDeletion?.email || profileForDeletion?.phone);
+
+                                let serverStatus = 'skipped'; // 'ok' | 'failed' | 'skipped'
+                                if (hasContact) {
+                                  try {
+                                    await requestServerSideDeletion({
+                                      name: profileForDeletion?.name || '',
+                                      email: profileForDeletion?.email || '',
+                                      phone: profileForDeletion?.phone || '',
+                                    });
+                                    serverStatus = 'ok';
+                                  } catch (e) {
+                                    reportHandledError('ServerSideDeletionFailed', e, {
+                                      source: 'Settings.deleteAllData',
+                                    });
+                                    serverStatus = 'failed';
+                                  }
+                                }
+
                                 await clearAllUserData();
                                 setName('');
                                 setEmail('');
@@ -323,7 +396,43 @@ export default function Settings() {
                                 setSkillLevel('intermediate');
                                 setReminders(true);
                                 setCommunity(false);
-                                Alert.alert(t('data_deleted'), t('data_deleted_msg'));
+
+                                if (serverStatus === 'ok') {
+                                  Alert.alert(
+                                    t('data_deleted'),
+                                    'Local data deleted. A deletion request has been submitted to our servers — your data will be permanently removed within 30 days.',
+                                  );
+                                } else if (serverStatus === 'failed') {
+                                  const body =
+                                    'Please delete all server-side data associated with:\n\n' +
+                                    `Name: ${profileForDeletion?.name || ''}\n` +
+                                    `Email: ${profileForDeletion?.email || ''}\n` +
+                                    `Phone: ${profileForDeletion?.phone || ''}`;
+                                  const mailto =
+                                    `mailto:${PRIVACY_CONTACT_EMAIL}` +
+                                    `?subject=${encodeURIComponent('Delete my data')}` +
+                                    `&body=${encodeURIComponent(body)}`;
+                                  Alert.alert(
+                                    t('data_deleted'),
+                                    'Local data deleted. We could not reach our servers to submit a deletion request automatically — tap "Email request" to send it yourself.',
+                                    [
+                                      { text: 'OK', style: 'cancel' },
+                                      {
+                                        text: 'Email request',
+                                        onPress: () => {
+                                          Linking.openURL(mailto).catch(() => {
+                                            Alert.alert('Email', `${PRIVACY_CONTACT_EMAIL}\n\n${body}`);
+                                          });
+                                        },
+                                      },
+                                    ],
+                                  );
+                                } else {
+                                  Alert.alert(
+                                    t('data_deleted'),
+                                    'Local data deleted. You had not entered contact info, so we had nothing to match against server-side records — nothing to delete on our servers.',
+                                  );
+                                }
                               },
                             },
                           ],
@@ -402,7 +511,7 @@ export default function Settings() {
                             try {
                               Sentry.nativeCrash();
                             } catch (e) {
-                              captureException(e);
+                              Sentry.captureException(e);
                             }
                           },
                         },

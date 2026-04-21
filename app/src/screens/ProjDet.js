@@ -9,6 +9,11 @@ import { getWeather, uploadReceipt } from '../api/backendClient';
 import { cancelForProject } from '../utils/notifications';
 import * as ImagePicker from 'expo-image-picker';
 
+// Steps from the AI analyzer are either plain strings (older projects, simple
+// responses) or objects like { text, image_annotations, reference_image_search }.
+// Rendering the object directly crashes with "Objects are not valid as a React child".
+const getStepText = (step) => (typeof step === 'string' ? step : step?.text || '');
+
 export default function ProjDet({ navigation, route }) {
   const { t } = useTranslation();
   const TABS = [
@@ -38,7 +43,7 @@ export default function ProjDet({ navigation, route }) {
         setWeather(data);
       } catch {}
     })();
-  }, []);
+  }, [initialProject?.outdoor]);
 
   useEffect(() => {
     // Update local storage when checkedSteps change
@@ -49,6 +54,10 @@ export default function ProjDet({ navigation, route }) {
       updateContractorList(updatedProject);
     }
     setProject(updatedProject);
+    // `project` is intentionally omitted — this effect calls setProject, so
+    // including it would cause an infinite loop. `listType` is stable from
+    // route params for the lifetime of this screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [checkedSteps]);
 
   const openLink = (url) => {
@@ -190,7 +199,7 @@ export default function ProjDet({ navigation, route }) {
           <Text style={[
             styles.stepText,
             checkedSteps[index] && styles.stepTextCompleted
-          ]}>{step}</Text>
+          ]}>{getStepText(step)}</Text>
         </TouchableOpacity>
       ))}
     </View>
