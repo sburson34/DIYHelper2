@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as SecureStore from 'expo-secure-store';
 import {
   saveToHoneyDoList,
   getHoneyDoList,
@@ -32,6 +33,7 @@ import {
 beforeEach(() => {
   jest.clearAllMocks();
   AsyncStorage._reset();
+  SecureStore._reset();
 });
 
 // ── migrateProject ──────────────────────────────────────────────

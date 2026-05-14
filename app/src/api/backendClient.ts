@@ -1,9 +1,35 @@
 import { API_BASE_URL } from '../config/api';
-import { getCachedAnalysis, setCachedAnalysis, getAppPrefs, getToolInventory } from '../utils/storage';
+import { getCachedAnalysis, setCachedAnalysis, getAppPrefs, getToolInventory, getAiConsent, getOrCreateDeviceId } from '../utils/storage';
 import { reportError, reportHandledError, addBreadcrumb } from '../services/monitoring';
+import { requestIntegrityToken } from '../services/playIntegrity';
 import { RELEASE } from '../config/appInfo';
 
+// Endpoints that warrant the extra latency of a Play Integrity attestation.
+// Keep this tight — every integrity call takes ~1–3s on a cold fetch, so
+// apply only where bot abuse is expensive ($$/OpenAI tokens).
+const INTEGRITY_PATHS = ['/api/analyze', '/api/ask-helper', '/api/live-diy/analyze'];
+
 const BASE_URL = API_BASE_URL;
+
+// Shared-secret header. Inlined at build time via EXPO_PUBLIC_APP_KEY so release
+// builds carry it without it being editable at runtime. Undefined in local dev,
+// in which case the backend middleware is also a no-op (matched pair).
+const APP_KEY: string | undefined = process.env.EXPO_PUBLIC_APP_KEY;
+
+// Thrown when an AI-using code path is invoked but the user declined the
+// AI consent disclosure. Callers should catch and surface a message rather
+// than treating it as a network error.
+export class AiConsentRequiredError extends Error {
+  constructor() {
+    super('AI features are disabled. Enable them in Settings to continue.');
+    this.name = 'AiConsentRequiredError';
+  }
+}
+
+const ensureAiConsent = async (): Promise<void> => {
+  const c = await getAiConsent();
+  if (!c || !c.granted) throw new AiConsentRequiredError();
+};
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -35,6 +61,26 @@ export interface AnalysisResult {
   _fromCache?: boolean;
   _cachedAt?: string;
   [extra: string]: unknown;
+}
+
+export interface LiveAnalysisRequest {
+  taskDescription?: string;
+  currentStep?: number;
+  userQuestion?: string;
+  imageBase64?: string;
+  mimeType?: string;
+  sessionId?: string;
+}
+
+export interface LiveAnalysisResult {
+  currentAssessment: string;
+  nextInstruction: string;
+  safetyWarnings: string[];
+  confidenceScore: number;
+  shouldEscalateToProfessional: boolean;
+  escalationReason?: string;
+  suggestedTools: string[];
+  sessionId: string;
 }
 
 export interface DiagnoseResult {
@@ -81,15 +127,29 @@ const generateCorrelationId = (): string => {
 
 // ── Instrumented fetch ────────────────────────────────────────────────
 // Every outbound request gets a correlation ID, timing, and breadcrumbs.
+// A client-side timeout is essential: without it, a stalled TCP connection
+// (cell handoff, captive portal) leaves the upload spinner hanging forever.
+// Backend's 2-minute OpenAI timeout bounds happy-path latency, so we match it.
+const DEFAULT_TIMEOUT_MS = 120_000;
+
 const apiFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
   const correlationId = generateCorrelationId();
   const method = options.method || 'GET';
   const path = url.replace(BASE_URL, '');
+  const deviceId = await getOrCreateDeviceId();
+
+  let integrityToken: string | null = null;
+  if (INTEGRITY_PATHS.some(p => path.startsWith(p))) {
+    integrityToken = await requestIntegrityToken(correlationId);
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'X-Correlation-ID': correlationId,
     'X-App-Version': RELEASE,
+    'X-Device-Id': deviceId,
+    ...(APP_KEY ? { 'X-App-Key': APP_KEY } : {}),
+    ...(integrityToken ? { 'X-Play-Integrity-Token': integrityToken } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
 
@@ -99,10 +159,13 @@ const apiFetch = async (url: string, options: RequestInit = {}): Promise<Respons
     correlationId,
   });
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+
   const start = Date.now();
   let status: number | undefined;
   try {
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(url, { ...options, headers, signal: controller.signal });
     status = response.status;
     const durationMs = Date.now() - start;
 
@@ -132,18 +195,24 @@ const apiFetch = async (url: string, options: RequestInit = {}): Promise<Respons
   } catch (error) {
     const durationMs = Date.now() - start;
     const apiErr = error as ApiError;
-    // Network-level failure (no response at all)
+    // Network-level failure (no response at all) or client-side timeout.
     if (!status) {
-      addBreadcrumb(`${method} ${path} network error`, 'http', {
+      const isAbort = (apiErr as { name?: string })?.name === 'AbortError';
+      addBreadcrumb(`${method} ${path} ${isAbort ? 'timed out' : 'network error'}`, 'http', {
         url: path, method, durationMs, correlationId,
         error: apiErr.message,
       });
+      if (isAbort) {
+        apiErr.message = 'Request timed out. Please check your connection and try again.';
+      }
     }
     if (!apiErr.correlationId) {
       apiErr.correlationId = correlationId;
       apiErr.durationMs = durationMs;
     }
     throw apiErr;
+  } finally {
+    clearTimeout(timeout);
   }
 };
 
@@ -178,6 +247,7 @@ const analyzeProject = async (
   mediaItems: MediaItem[] = [],
   language: Language = 'en',
 ): Promise<AnalysisResult> => {
+  await ensureAiConsent();
   const url = `${BASE_URL}/api/analyze`;
   const prefs = await getAppPrefs().catch(() => ({} as Partial<{ skillLevel: string; zip: string }>));
   const inventory = await getToolInventory().catch(() => []);
@@ -202,7 +272,10 @@ const analyzeProject = async (
     return result;
   } catch (error) {
     const apiErr = error as ApiError;
-    console.error('Error in analyzeProject detail:', apiErr);
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.error('Error in analyzeProject detail:', apiErr);
+    }
     const cached = await getCachedAnalysis(description, mediaItems.length);
     if (cached) {
       reportHandledError('AnalysisFallbackToCache', apiErr, {
@@ -218,7 +291,10 @@ const analyzeProject = async (
         operation: 'analyzeProject',
         extra: { url, mediaCount: mediaItems.length, correlationId: apiErr.correlationId },
       });
-      throw new Error(`Network error! Hit ${url} and it failed. Check adb reverse tcp:5206 tcp:5206 and that backend is running.`);
+      // Dev builds get the adb-reverse hint; prod users get a user-facing message.
+      throw new Error(__DEV__
+        ? `Network error! Hit ${url} and it failed. Check adb reverse tcp:5206 tcp:5206 and that backend is running.`
+        : 'Unable to reach DIY Helper. Please check your internet connection and try again.');
     }
     reportError(apiErr, {
       source: 'backendClient',
@@ -229,11 +305,28 @@ const analyzeProject = async (
   }
 };
 
+// Live DIY Coach — single-turn realtime coaching. Each call is one camera frame
+// + the surrounding session context (task, current step, user's question). The
+// backend does all safety filtering and may force shouldEscalateToProfessional
+// for high-risk categories regardless of what the model returned.
+const analyzeLive = async (input: LiveAnalysisRequest): Promise<LiveAnalysisResult> => {
+  await ensureAiConsent();
+  addBreadcrumb('AI: live diy', 'ai', {
+    action: 'live-diy-analyze',
+    hasImage: !!input.imageBase64,
+    hasQuestion: !!input.userQuestion,
+    currentStep: input.currentStep,
+    sessionId: input.sessionId,
+  });
+  return jsonPost<LiveAnalysisResult>(`${BASE_URL}/api/live-diy/analyze`, input);
+};
+
 const askHelper = async (
   question: string,
   project: unknown,
   language: Language = 'en',
 ): Promise<unknown> => {
+  await ensureAiConsent();
   addBreadcrumb('AI: ask helper', 'ai', {
     action: 'ask-helper',
     questionLength: question?.length ?? 0,
@@ -251,6 +344,7 @@ interface VerifyStepArgs {
 }
 
 const verifyStep = async ({ stepText, projectTitle, base64Image, mimeType, language = 'en' }: VerifyStepArgs): Promise<unknown> => {
+  await ensureAiConsent();
   addBreadcrumb('AI: verify step', 'ai', {
     action: 'verify-step',
     hasImage: !!base64Image,
@@ -266,6 +360,7 @@ interface DiagnoseArgs {
 }
 
 const diagnoseProblem = async ({ description, media = [], language = 'en' }: DiagnoseArgs): Promise<DiagnoseResult> => {
+  await ensureAiConsent();
   addBreadcrumb('AI: diagnose', 'ai', {
     action: 'diagnose',
     descriptionLength: description?.length ?? 0,
@@ -276,6 +371,7 @@ const diagnoseProblem = async ({ description, media = [], language = 'en' }: Dia
 };
 
 const getClarifyingQuestions = async ({ description, media = [], language = 'en' }: DiagnoseArgs): Promise<unknown> => {
+  await ensureAiConsent();
   addBreadcrumb('AI: clarify', 'ai', {
     action: 'clarify',
     descriptionLength: description?.length ?? 0,
@@ -460,8 +556,16 @@ const requestServerSideDeletion = async ({ name, email, phone }: DeletionArgs): 
   });
 };
 
+// Second half of the verified deletion flow. User enters the 6-digit code
+// emailed by the backend; server marks the deletion request verified.
+const confirmServerSideDeletion = async (requestId: string, code: string): Promise<DeletionResponse> => {
+  addBreadcrumb('privacy: confirm server-side deletion', 'user.action', { requestId });
+  return jsonPost<DeletionResponse>(`${BASE_URL}/api/confirm-deletion`, { requestId, code });
+};
+
 export {
   analyzeProject,
+  analyzeLive,
   askHelper,
   verifyStep,
   diagnoseProblem,
@@ -481,4 +585,5 @@ export {
   matchPaintColor,
   translateStrings,
   requestServerSideDeletion,
+  confirmServerSideDeletion,
 };

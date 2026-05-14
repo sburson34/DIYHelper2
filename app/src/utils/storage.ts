@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { secureGet, secureSet, secureDelete } from './secureStorage';
 
 const HONEY_DO_KEY = '@honey_do_list';
 const CONTRACTOR_KEY = '@contractor_list';
@@ -10,6 +11,8 @@ const ANALYZE_CACHE_KEY = '@analyze_cache';
 const HELP_REQUESTS_KEY = '@help_requests_local';
 const COMMUNITY_OPT_IN_KEY = '@community_opt_in';
 const ONBOARDING_SEEN_KEY = '@onboarding_seen';
+const AI_CONSENT_KEY = '@ai_consent';
+const DEVICE_ID_KEY = '@device_id';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -104,7 +107,61 @@ export const setOnboardingSeen = async (): Promise<void> => {
   try { await AsyncStorage.setItem(ONBOARDING_SEEN_KEY, 'true'); } catch {}
 };
 
+// ── AI consent ─────────────────────────────────────────────────────
+// Disclosed to users before any image or description is sent to OpenAI /
+// Anthropic for AI analysis. The record is intentionally local-only — revoking
+// consent simply means the mobile app stops initiating AI calls.
+
+export interface AiConsent {
+  granted: boolean;
+  grantedAt?: string;
+  version: number;
+}
+
+// Bump when the consent copy materially changes (e.g. new processor added).
+// Forces returning users to re-accept the updated disclosure.
+export const AI_CONSENT_VERSION = 1;
+
+export const getAiConsent = async (): Promise<AiConsent | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(AI_CONSENT_KEY);
+    return raw ? (JSON.parse(raw) as AiConsent) : null;
+  } catch { return null; }
+};
+
+export const setAiConsent = async (granted: boolean): Promise<void> => {
+  try {
+    const record: AiConsent = {
+      granted,
+      grantedAt: granted ? new Date().toISOString() : undefined,
+      version: AI_CONSENT_VERSION,
+    };
+    await AsyncStorage.setItem(AI_CONSENT_KEY, JSON.stringify(record));
+  } catch {}
+};
+
 const generateId = (): string => Date.now().toString() + Math.floor(Math.random() * 1000);
+
+// Stable opaque install ID used by the backend's per-device daily AI quota.
+// Not personally identifying — a random UUID minted on first launch and kept
+// in AsyncStorage. Clearing app data resets it (which also resets the quota,
+// consistent with a fresh install).
+export const getOrCreateDeviceId = async (): Promise<string> => {
+  try {
+    const existing = await AsyncStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const bytes = new Uint8Array(16);
+    for (let i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    await AsyncStorage.setItem(DEVICE_ID_KEY, uuid);
+    return uuid;
+  } catch {
+    return 'unknown';
+  }
+};
 
 // ── Schema version ─────────────────────────────────────────────────
 // Bumped when the project shape gains new optional fields. Old records are
@@ -256,9 +313,12 @@ export const removeFromContractorList = async (id: string): Promise<boolean> => 
 };
 
 // ── User profile ────────────────────────────────────────────────────
+// Contact fields (name / email / phone) live in the OS keystore via
+// expo-secure-store rather than AsyncStorage. Legacy plaintext entries are
+// migrated lazily on first read by secureGet.
 export const saveUserProfile = async (profile: UserProfile): Promise<boolean> => {
   try {
-    await AsyncStorage.setItem(USER_PROFILE_KEY, JSON.stringify(profile));
+    await secureSet(USER_PROFILE_KEY, JSON.stringify(profile));
     return true;
   } catch (e) {
     console.error('Failed to save user profile', e);
@@ -268,7 +328,7 @@ export const saveUserProfile = async (profile: UserProfile): Promise<boolean> =>
 
 export const getUserProfile = async (): Promise<UserProfile | null> => {
   try {
-    const value = await AsyncStorage.getItem(USER_PROFILE_KEY);
+    const value = await secureGet(USER_PROFILE_KEY);
     return value != null ? (JSON.parse(value) as UserProfile) : null;
   } catch (e) {
     console.error('Failed to fetch user profile', e);
@@ -481,7 +541,6 @@ export const clearAllUserData = async (): Promise<void> => {
   const allKeys = [
     HONEY_DO_KEY,
     CONTRACTOR_KEY,
-    USER_PROFILE_KEY,
     TOOL_INVENTORY_KEY,
     SHOPPING_BOUGHT_KEY,
     APP_PREFS_KEY,
@@ -490,4 +549,5 @@ export const clearAllUserData = async (): Promise<void> => {
     COMMUNITY_OPT_IN_KEY,
   ];
   await AsyncStorage.multiRemove(allKeys);
+  await secureDelete(USER_PROFILE_KEY);
 };

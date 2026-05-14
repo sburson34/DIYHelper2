@@ -36,7 +36,7 @@ public class DeleteUserDataEndpointTests : IClassFixture<ApiFactory>
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
         var body = await resp.Content.ReadAsStringAsync();
-        Assert.Contains("\"status\":\"queued\"", body);
+        Assert.Contains("\"status\":\"pending_verification\"", body);
         Assert.Contains("\"requestId\":", body);
     }
 
@@ -69,6 +69,6 @@ public class DeleteUserDataEndpointTests : IClassFixture<ApiFactory>
         var overflowResp = await client.PostAsJsonAsync("/api/delete-user-data", new { email });
         Assert.Equal(HttpStatusCode.OK, overflowResp.StatusCode);
         var body = await overflowResp.Content.ReadAsStringAsync();
-        Assert.Contains("\"status\":\"queued\"", body);
+        Assert.Contains("\"status\":\"pending_verification\"", body);
     }
 }

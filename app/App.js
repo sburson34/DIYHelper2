@@ -24,8 +24,10 @@ import ProjDet from './src/screens/ProjDet';
 import WorkSteps from './src/screens/WorkSteps';
 import PaintMatchScreen from './src/screens/PaintMatchScreen';
 import OnboardingScreen from './src/screens/OnboardingScreen';
+import AiConsentScreen from './src/screens/AiConsentScreen';
 import AnnotateScreen from './src/screens/AnnotateScreen';
 import WorkshopARScreen from './src/screens/WorkshopARScreen';
+import LiveHelpScreen from './src/screens/LiveHelpScreen';
 import HoneyDo from './src/screens/HoneyDo';
 import Contractors from './src/screens/Contractors';
 import Settings from './src/screens/Settings';
@@ -42,7 +44,7 @@ import { ThemeProvider } from './src/ThemeContext';
 import { FeaturesProvider } from './src/config/features';
 import { TranslationProvider } from './src/mlkit/TranslationProvider';
 import { requestCaptureReset } from './src/utils/captureBus';
-import { getOnboardingSeen, setOnboardingSeen } from './src/utils/storage';
+import { getOnboardingSeen, setOnboardingSeen, getAiConsent, AI_CONSENT_VERSION } from './src/utils/storage';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
 // Helper used by both the logo header and the "New Project" drawer item.
@@ -215,6 +217,11 @@ function CaptureStack() {
         name="WorkshopAR"
         component={WorkshopARScreen}
         options={{ title: 'AR Guide', headerShown: false }}
+      />
+      <Stack.Screen
+        name="LiveHelp"
+        component={LiveHelpScreen}
+        options={{ title: 'Live DIY Coach' }}
       />
     </Stack.Navigator>
   );
@@ -425,6 +432,30 @@ function AppContent() {
           })}
         />
         <Drawer.Screen
+          name="LiveCoach"
+          component={LiveHelpScreen}
+          options={({ navigation }) => ({
+            title: t('nav_live_coach') || 'Live DIY Coach',
+            headerShown: true,
+            headerTitle: () => (
+              <LogoHeader onPress={() => navigation.navigate('NewProject')} title={t('nav_live_coach') || 'Live DIY Coach'} subtitle={t('app_title')} />
+            ),
+            headerTitleAlign: 'left',
+            headerRight: () => (
+              <TouchableOpacity
+                onPress={() => navigation.openDrawer()}
+                style={{ marginRight: 15 }}
+                accessibilityLabel="Open navigation menu"
+                accessibilityRole="button"
+              >
+                <Icon name="menu" size={30} color="#FFFFFF" />
+              </TouchableOpacity>
+            ),
+            headerLeft: () => null,
+            drawerIcon: ({ color, size }) => <Icon name="videocam-outline" size={size} color={color} />,
+          })}
+        />
+        <Drawer.Screen
           name="Quotes"
           component={Quotes}
           options={({ navigation }) => ({
@@ -555,16 +586,31 @@ function AppContent() {
   );
 }
 
-// Wrapper that decides whether to show onboarding (first launch) or the main app.
-// Lives inside I18nProvider so onboarding copy can be translated.
+// Wrapper that decides whether to show onboarding (first launch), the AI
+// consent gate (first AI-enabled launch or after version bump), or the main
+// app. Lives inside I18nProvider so onboarding copy can be translated.
 function OnboardingGate() {
   const [seen, setSeen] = React.useState(null); // null = loading
+  const [consentOk, setConsentOk] = React.useState(null); // null = loading
   React.useEffect(() => {
     getOnboardingSeen().then(setSeen);
+    getAiConsent().then(c => {
+      // Treat as answered once the user has responded to the current consent
+      // version. A bump of AI_CONSENT_VERSION re-prompts returning users.
+      setConsentOk(!!(c && c.version === AI_CONSENT_VERSION));
+    });
   }, []);
-  if (seen === null) return null; // brief loading — splash is still up
+  if (seen === null || consentOk === null) return null;
   if (!seen) {
     return <OnboardingScreen onFinish={() => { setOnboardingSeen(); setSeen(true); }} />;
+  }
+  if (!consentOk) {
+    return (
+      <AiConsentScreen
+        onAccept={() => setConsentOk(true)}
+        onDecline={() => setConsentOk(true)}
+      />
+    );
   }
   return <AppContent />;
 }

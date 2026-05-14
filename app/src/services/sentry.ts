@@ -56,6 +56,23 @@ const SENSITIVE_KEYS = [
 // app sends to /api/analyze). These are large and privacy-sensitive — strip.
 const MEDIA_KEYS = ['media', 'image', 'images', 'photo', 'photos', 'video', 'videos', 'base64', 'data'];
 
+// Free-text user input and contact fields. Breadcrumbs already log only length
+// for these, but this scrubs any future code path that ends up routing a body
+// through beforeSend so raw user text never reaches Sentry.
+const USER_TEXT_KEYS = [
+  'description',
+  'userdescription',
+  'question',
+  'steptext',
+  'prompt',
+  'customername',
+  'customeremail',
+  'customerphone',
+  'name',
+  'email',
+  'phone',
+];
+
 const REDACTED = '[redacted]';
 
 const isSensitiveKey = (key: string): boolean => {
@@ -68,6 +85,11 @@ const isMediaKey = (key: string): boolean => {
   if (typeof key !== 'string') return false;
   const k = key.toLowerCase();
   return MEDIA_KEYS.includes(k);
+};
+
+const isUserTextKey = (key: string): boolean => {
+  if (typeof key !== 'string') return false;
+  return USER_TEXT_KEYS.includes(key.toLowerCase());
 };
 
 // Recursively scrub an arbitrary object. Bounded depth so we never blow the
@@ -90,6 +112,8 @@ const scrub = (value: unknown, depth = 0): unknown => {
       out[k] = REDACTED;
     } else if (isMediaKey(k)) {
       out[k] = Array.isArray(v) ? `${REDACTED}:media[${v.length}]` : REDACTED;
+    } else if (isUserTextKey(k) && typeof v === 'string') {
+      out[k] = `${REDACTED}:text(${v.length}c)`;
     } else {
       out[k] = scrub(v, depth + 1);
     }

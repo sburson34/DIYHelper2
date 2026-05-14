@@ -12,6 +12,7 @@ jest.mock('../services/monitoring', () => ({
 
 const {
   analyzeProject,
+  analyzeLive,
   askHelper,
   verifyStep,
   diagnoseProblem,
@@ -33,10 +34,13 @@ const {
 
 const { reportError, reportHandledError, addBreadcrumb } = require('../services/monitoring');
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
   AsyncStorage._reset();
   global.fetch.mockReset();
+  // AI-using endpoints short-circuit without stored consent. Grant it
+  // implicitly for the test suite (the consent flow has its own tests).
+  await AsyncStorage.setItem('@ai_consent', JSON.stringify({ granted: true, version: 1 }));
 });
 
 const mockJsonResponse = (data, status = 200) => {
@@ -103,6 +107,79 @@ describe('analyzeProject', () => {
       mediaCount: 1,
       language: 'es',
     }));
+  });
+});
+
+// ── analyzeLive ─────────────────────────────────────────────────
+describe('analyzeLive', () => {
+  it('posts task, step, question, and image to /api/live-diy/analyze', async () => {
+    mockJsonResponse({
+      currentAssessment: 'Faucet base',
+      nextInstruction: 'Turn off water',
+      safetyWarnings: [],
+      confidenceScore: 0.8,
+      shouldEscalateToProfessional: false,
+      suggestedTools: ['wrench'],
+      sessionId: 'session-1',
+    });
+
+    const result = await analyzeLive({
+      taskDescription: 'Replace faucet',
+      currentStep: 2,
+      userQuestion: 'Where is the shutoff?',
+      imageBase64: 'abc',
+      mimeType: 'image/jpeg',
+      sessionId: 'session-1',
+    });
+
+    expect(result.nextInstruction).toBe('Turn off water');
+    expect(result.shouldEscalateToProfessional).toBe(false);
+
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://test-api:5206/api/live-diy/analyze');
+    expect(opts.method).toBe('POST');
+    const body = JSON.parse(opts.body);
+    expect(body.taskDescription).toBe('Replace faucet');
+    expect(body.currentStep).toBe(2);
+    expect(body.userQuestion).toBe('Where is the shutoff?');
+    expect(body.imageBase64).toBe('abc');
+    expect(body.mimeType).toBe('image/jpeg');
+    expect(body.sessionId).toBe('session-1');
+  });
+
+  it('passes through escalation result without modification', async () => {
+    mockJsonResponse({
+      currentAssessment: 'Looks like a gas line',
+      nextInstruction: 'Stop and call a licensed plumber.',
+      safetyWarnings: ['Gas work requires a professional.'],
+      confidenceScore: 0.95,
+      shouldEscalateToProfessional: true,
+      escalationReason: 'gas hazard',
+      suggestedTools: [],
+      sessionId: 's',
+    });
+
+    const result = await analyzeLive({ taskDescription: 'fix gas valve' });
+    expect(result.shouldEscalateToProfessional).toBe(true);
+    expect(result.safetyWarnings).toHaveLength(1);
+  });
+
+  it('emits ai breadcrumb with action live-diy-analyze', async () => {
+    mockJsonResponse({});
+    await analyzeLive({ taskDescription: 'x', imageBase64: 'b' });
+    expect(addBreadcrumb).toHaveBeenCalledWith('AI: live diy', 'ai', expect.objectContaining({
+      action: 'live-diy-analyze',
+      hasImage: true,
+    }));
+  });
+
+  it('surfaces backend error message on non-OK response', async () => {
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: () => Promise.resolve({ error: 'AI features are temporarily unavailable.' }),
+    });
+    await expect(analyzeLive({ taskDescription: 'x' })).rejects.toThrow('AI features are temporarily unavailable.');
   });
 });
 

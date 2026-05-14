@@ -30,4 +30,11 @@ public class DataDeletionRequest
     public string? ClientIp { get; set; }
     public string? CorrelationId { get; set; }
     public string? AppVersion { get; set; }
+
+    // SHA-256 (hex) of the 6-digit verification code sent to the email/phone on
+    // file. Constant-time compared against the user-submitted code by the
+    // /api/confirm-deletion endpoint. Never log the raw code.
+    public string? VerificationCodeHash { get; set; }
+    public DateTime? VerificationCodeExpiresAt { get; set; }
+    public int VerificationAttempts { get; set; }
 }

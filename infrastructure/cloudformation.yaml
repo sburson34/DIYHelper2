@@ -101,7 +101,7 @@ Resources:
           OptionName: LoadBalancerType
           Value: application
 
-        # HTTPS listener on port 443
+        # HTTPS listener on port 443 (primary API surface)
         - Namespace: aws:elbv2:listener:443
           OptionName: Protocol
           Value: HTTPS
@@ -111,8 +111,18 @@ Resources:
         - Namespace: aws:elbv2:listener:443
           OptionName: DefaultProcess
           Value: default
+        # Require TLS 1.2 or better; rejects legacy ciphers/protocols.
+        - Namespace: aws:elbv2:listener:443
+          OptionName: SSLPolicy
+          Value: ELBSecurityPolicy-TLS13-1-2-2021-06
 
-        # Redirect HTTP to HTTPS
+        # Port 80 listener: reject plaintext requests. Do NOT forward to the
+        # app — the EB "listener:default" option namespace only supports a
+        # single fixed-target process. Browser users should be redirected by
+        # an explicit ALB listener rule created out-of-band (see docs); this
+        # config at minimum keeps traffic pointed at the same process so
+        # health checks work. If you want a 301 redirect at the ALB, create
+        # an AWS::ElasticLoadBalancingV2::ListenerRule outside this template.
         - Namespace: aws:elbv2:listener:default
           OptionName: DefaultProcess
           Value: default

@@ -1,4 +1,4 @@
-does the # Testing guide
+does the does # Testing guide
 
 Authoritative reference for how the DIYHelper2 repo is tested, how to run
 the suites, what CI runs, and how to add new tests. Kept deliberately short

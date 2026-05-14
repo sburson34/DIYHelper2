@@ -24,6 +24,14 @@ public class FeatureFlags
     public bool EntityExtraction { get; }
     public bool PoseDetection { get; }
 
+    // Emergency kill-switch. When true, all /api/analyze, /api/ask-helper,
+    // /api/diagnose, /api/clarify, and /api/verify-step endpoints return 503.
+    // Flip via the AI_KILL_SWITCH env var (Elastic Beanstalk → Configuration →
+    // Software → Environment properties) for an immediate rollout without a
+    // redeploy. Use when an abuse wave or provider outage is draining the
+    // OpenAI budget faster than per-device quotas can contain.
+    public bool AiKillSwitch { get; }
+
     public FeatureFlags()
     {
         AmazonPa = ReadBool("FEATURES_AMAZON_PA");
@@ -43,6 +51,7 @@ public class FeatureFlags
         DigitalInk = ReadBool("FEATURES_DIGITAL_INK");
         EntityExtraction = ReadBool("FEATURES_ENTITY_EXTRACTION");
         PoseDetection = ReadBool("FEATURES_POSE_DETECTION");
+        AiKillSwitch = ReadBool("AI_KILL_SWITCH");
     }
 
     private static bool ReadBool(string name, bool defaultValue = false)
@@ -69,5 +78,6 @@ public class FeatureFlags
         digitalInk = DigitalInk,
         entityExtraction = EntityExtraction,
         poseDetection = PoseDetection,
+        aiKillSwitch = AiKillSwitch,
     };
 }

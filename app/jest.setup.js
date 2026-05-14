@@ -41,6 +41,29 @@ jest.mock('react-native/Libraries/Utilities/Platform', () => {
   return { __esModule: true, default: platform, ...platform };
 });
 
+// expo-secure-store mock — in-memory; tests exercise secureGet/secureSet paths
+// the same way they exercise AsyncStorage. `virtual: true` so the mock
+// resolves even if the package isn't installed (useful before `npm install`
+// has picked up the new dependency).
+jest.mock('expo-secure-store', () => {
+  const store = {};
+  return {
+    __esModule: true,
+    getItemAsync: jest.fn((key) => Promise.resolve(store[key] ?? null)),
+    setItemAsync: jest.fn((key, value) => {
+      store[key] = value;
+      return Promise.resolve();
+    }),
+    deleteItemAsync: jest.fn((key) => {
+      delete store[key];
+      return Promise.resolve();
+    }),
+    _reset: () => {
+      Object.keys(store).forEach((key) => delete store[key]);
+    },
+  };
+}, { virtual: true });
+
 // Expo Constants mock
 jest.mock('expo-constants', () => ({
   __esModule: true,
