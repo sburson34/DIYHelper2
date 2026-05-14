@@ -465,6 +465,10 @@ app.MapControllers();
 app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
+// Simple liveness probe for Docker / Caddy upstream healthcheck. Distinct
+// from /api/health so the container shows healthy even before any DB work.
+app.MapGet("/healthz", () => Results.Ok());
+
 // RFC 9116 responsible-disclosure contact. Intentionally public — bypassed
 // by AppKeyMiddleware so security researchers can reach it without the key.
 app.MapGet("/.well-known/security.txt", () =>

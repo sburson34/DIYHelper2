@@ -76,6 +76,8 @@ public class AppKeyMiddleware
             return true;
         if (path.Equals("/api/health", StringComparison.OrdinalIgnoreCase))
             return true;
+        if (path.Equals("/healthz", StringComparison.OrdinalIgnoreCase))
+            return true;
         if (path.StartsWith("/.well-known/", StringComparison.OrdinalIgnoreCase))
             return true;
         return false;
