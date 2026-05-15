@@ -83,21 +83,6 @@ def jscFlavor = 'io.github.react-native-community:jsc-android:2026004.+'
 
 apply from: new File(["node", "--print", "require('path').dirname(require.resolve('@sentry/react-native/package.json'))"].execute().text.trim(), "sentry.gradle")
 
-// Configure the Sentry Gradle plugin applied above. Uploads the R8 / ProGuard
-// mapping and the native debug symbols produced by the release build so crash
-// reports deobfuscate automatically. Auth credentials come from
-// android/sentry.properties (gitignored) or SENTRY_AUTH_TOKEN env var.
-sentry {
-    autoUploadProguardMapping = true
-    uploadNativeSymbols = true
-    includeNativeSources = false
-    includeProguardMapping = true
-    autoUploadNativeSymbols = true
-    tracingInstrumentation {
-        enabled = true
-    }
-}
-
 android {
     ndkVersion rootProject.ext.ndkVersion
 
