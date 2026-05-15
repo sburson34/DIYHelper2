@@ -1,0 +1,25 @@
+diff --git a/node_modules/react-native-mlkit-entity-extraction/MLKitEntityExtraction.js b/node_modules/react-native-mlkit-entity-extraction/MLKitEntityExtraction.js
+new file mode 100644
+index 0000000..370bfa9
+--- /dev/null
++++ b/node_modules/react-native-mlkit-entity-extraction/MLKitEntityExtraction.js
+@@ -0,0 +1,19 @@
++// Vendored JS bridge. yaaliuzhipeng/react-native-mlkit-entity-extraction's
++// npm tarball ships native code (android/, ios/) but the package.json `files`
++// array omits this JS file that index.js imports — and the upstream GitHub
++// repo has been deleted. This bridge is the minimum surface that the existing
++// callers in src/mlkit/entityExtraction.js exercise (extractEntities(text)).
++//
++// Applied at install time via patch-package (patches/ folder).
++import { NativeModules } from 'react-native';
++
++const NativeModule = NativeModules.MLKitEntityExtraction;
++
++export const extractEntities = async (text) => {
++  if (!NativeModule || typeof NativeModule.extractEntities !== 'function') {
++    return [];
++  }
++  return await NativeModule.extractEntities(text);
++};
++
++export default { extractEntities };
