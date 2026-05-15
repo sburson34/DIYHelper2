@@ -7,20 +7,10 @@
   The localhost/emulator exceptions are only needed for Metro + the local
   .NET backend during development. Production builds never use those hosts.
 
-  Certificate pinning:
-    The pin-set below fails closed if the cert served by api.diyhelper.org
-    has a SubjectPublicKeyInfo hash that doesn't match the current or backup
-    pin. TWO pins must be present at all times so a planned cert rotation
-    doesn't brick every installed app — rotate the backup pin to the next
-    cert BEFORE the primary cert expires, then swap primary/backup on cut.
-
-    Compute current pins with: scripts/compute-cert-pins.sh api.diyhelper.org
-    Document every rotation in docs/SECURITY_PLAYBOOK.md.
-
-    expiration="2026-10-23" gives a one-year safety window after which the
-    pinning will be ignored (fail-open) rather than bricking users on an
-    unpatched device with a stale config — tune the date when the primary
-    cert is rotated.
+  Cert pinning was previously configured here but was removed because the
+  backend uses Let's Encrypt with ~60-day auto-renewal via Caddy, which
+  would brick installed apps on every cert rotation. If revisiting, pin
+  to a long-lived intermediate + a backup intermediate, not the leaf.
 -->
 <network-security-config>
   <base-config cleartextTrafficPermitted="false">
@@ -28,19 +18,6 @@
       <certificates src="system"/>
     </trust-anchors>
   </base-config>
-
-  <domain-config>
-    <domain includeSubdomains="true">api.diyhelper.org</domain>
-    <pin-set expiration="2026-10-23">
-      <!-- TODO: replace placeholders with output of scripts/compute-cert-pins.sh.
-           Primary pin = SPKI SHA-256 of the current api.diyhelper.org leaf cert.
-           Backup pin = SPKI SHA-256 of the Amazon RSA 2048 M02 intermediate
-           (or any other CA in the chain you trust to stay valid across a
-           leaf rotation). Both MUST be present before release. -->
-      <pin digest="SHA-256">REPLACE_WITH_PRIMARY_PIN_BASE64=</pin>
-      <pin digest="SHA-256">REPLACE_WITH_BACKUP_PIN_BASE64=</pin>
-    </pin-set>
-  </domain-config>
 
   <domain-config cleartextTrafficPermitted="true">
     <domain includeSubdomains="true">localhost</domain>
