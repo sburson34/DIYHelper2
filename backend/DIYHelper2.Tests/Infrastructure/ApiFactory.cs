@@ -26,6 +26,20 @@ namespace DIYHelper2.Tests.Infrastructure;
 /// </summary>
 public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    // Fake admin credentials for AdminAuthMiddleware. Tests that hit
+    // admin-gated surfaces (GET/PUT/DELETE /api/help-requests, GET /api/feedback)
+    // should use CreateAdminClient() instead of CreateClient() to get the
+    // Authorization header attached. Set via Environment.SetEnvironmentVariable
+    // in the static constructor BEFORE Program.cs reads them at host build time.
+    public const string AdminUsername = "testadmin";
+    public const string AdminPassword = "testpass";
+
+    static ApiFactory()
+    {
+        Environment.SetEnvironmentVariable("ADMIN_USERNAME", AdminUsername);
+        Environment.SetEnvironmentVariable("ADMIN_PASSWORD", AdminPassword);
+    }
+
     private DbConnection? _connection;
 
     /// <summary>
@@ -72,6 +86,22 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
             // 503 tests working. Tests that want to reach the AI path call
             // SetOpenAiKey() after Services is built.
         });
+    }
+
+    /// <summary>
+    /// HttpClient pre-loaded with the Basic auth header that AdminAuthMiddleware
+    /// expects. Use this in tests that hit /admin/* or any GET/PUT/DELETE on
+    /// /api/help-requests / GET on /api/feedback. The Basic credentials match
+    /// what the static constructor pushed into ADMIN_USERNAME / ADMIN_PASSWORD.
+    /// </summary>
+    public HttpClient CreateAdminClient()
+    {
+        var client = CreateClient();
+        var b64 = Convert.ToBase64String(
+            System.Text.Encoding.UTF8.GetBytes($"{AdminUsername}:{AdminPassword}"));
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", b64);
+        return client;
     }
 
     /// <summary>

@@ -19,7 +19,10 @@ public class HelpRequestsEndpointsTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task FullCrudLifecycle_Works()
     {
-        var client = _factory.CreateClient();
+        // POST is a customer flow (no admin gate); GET/PUT/DELETE are
+        // admin-gated. CreateAdminClient() attaches Basic auth so all
+        // operations work end-to-end.
+        var client = _factory.CreateAdminClient();
 
         // CREATE
         var createPayload = new
@@ -82,7 +85,7 @@ public class HelpRequestsEndpointsTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Get_Returns404_ForUnknownId()
     {
-        var client = _factory.CreateClient();
+        var client = _factory.CreateAdminClient();
         var resp = await client.GetAsync("/api/help-requests/999999");
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }
@@ -90,7 +93,7 @@ public class HelpRequestsEndpointsTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Update_Returns404_ForUnknownId()
     {
-        var client = _factory.CreateClient();
+        var client = _factory.CreateAdminClient();
         var resp = await client.PutAsJsonAsync("/api/help-requests/999999", new { status = "contacted" });
         Assert.Equal(HttpStatusCode.NotFound, resp.StatusCode);
     }

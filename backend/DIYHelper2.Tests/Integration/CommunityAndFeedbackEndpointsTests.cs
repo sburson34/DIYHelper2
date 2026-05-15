@@ -55,7 +55,10 @@ public class CommunityAndFeedbackEndpointsTests : IClassFixture<ApiFactory>
     [Fact]
     public async Task Feedback_PostPersistsAndListReturnsIt()
     {
-        var client = _factory.CreateClient();
+        // POST is the customer submit flow (no admin gate). The subsequent
+        // GET /api/feedback list IS admin-gated, so use CreateAdminClient
+        // for the whole flow — Basic auth is ignored on POST anyway.
+        var client = _factory.CreateAdminClient();
 
         var clientId = $"fb-{Guid.NewGuid():N}";
         var resp = await client.PostAsJsonAsync("/api/feedback", new
