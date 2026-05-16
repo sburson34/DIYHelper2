@@ -67,7 +67,6 @@ export default function WorkSteps({ navigation, route }) {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isAskingHelper, setIsAskingHelper] = useState(false);
   const [awaitingQuestion, setAwaitingQuestion] = useState(false);
-  const [lastTranscript, setLastTranscript] = useState('');
 
   // Refs to avoid stale closures in callbacks
   const currentStepIndexRef = useRef(0);
@@ -159,7 +158,6 @@ export default function WorkSteps({ navigation, route }) {
 
   useSpeechRecognitionEvent('result', (event) => {
     const transcript = event.results[0]?.transcript?.toLowerCase() || '';
-    setLastTranscript(transcript);
     processVoiceCommand(transcript);
   });
 

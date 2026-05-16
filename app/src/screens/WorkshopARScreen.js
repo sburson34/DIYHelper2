@@ -22,8 +22,8 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 export default function WorkshopARScreen({ navigation, route }) {
   const { t } = useTranslation();
-  const { stepText, stepIndex, projectTitle } = route.params || {};
-  const { pose, onFrame, start, stop, available } = usePoseDetection(3);
+  const { stepText, stepIndex } = route.params || {};
+  const { pose, start, stop, available } = usePoseDetection(3);
 
   useEffect(() => {
     start();
