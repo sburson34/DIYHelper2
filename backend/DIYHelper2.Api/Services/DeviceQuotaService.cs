@@ -27,25 +27,22 @@ public class DeviceQuotaService
     public bool TryConsume(string deviceKey, out int remaining)
     {
         var today = DateTime.UtcNow.Date;
-        var counter = _counters.AddOrUpdate(
-            deviceKey,
-            _ => new Counter { Day = today, Count = 1 },
-            (_, existing) =>
-            {
-                if (existing.Day != today)
-                {
-                    existing.Day = today;
-                    existing.Count = 1;
-                }
-                else
-                {
-                    existing.Count++;
-                }
-                return existing;
-            });
+        var counter = _counters.GetOrAdd(deviceKey, _ => new Counter());
 
-        remaining = Math.Max(0, _dailyLimit - counter.Count);
-        return counter.Count <= _dailyLimit;
+        int count;
+        lock (counter)
+        {
+            if (counter.Day != today)
+            {
+                counter.Day = today;
+                counter.Count = 0;
+            }
+            counter.Count++;
+            count = counter.Count;
+        }
+
+        remaining = Math.Max(0, _dailyLimit - count);
+        return count <= _dailyLimit;
     }
 
     public static string DeviceKey(HttpContext ctx)
