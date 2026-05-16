@@ -94,6 +94,7 @@ public class AttomClientTests : IDisposable
         var client = CreateClient();
         var result = await client.EstimateAsync("12345", null!, 10000);
 
+        Assert.NotNull(result);
         Assert.Equal(5000, result.EstimatedValueAdd);
     }
 
@@ -103,6 +104,7 @@ public class AttomClientTests : IDisposable
         var client = CreateClient();
         var result = await client.EstimateAsync("12345", "KITCHEN", 10000);
 
+        Assert.NotNull(result);
         Assert.Equal(7500, result.EstimatedValueAdd);
     }
 }
