@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-DIYHelper2 is a full-stack mobile app for AI-powered DIY project assistance. Users capture photos/videos of home repair issues, describe problems via voice or text, and receive AI-generated step-by-step repair guides (powered by OpenAI GPT-4o).
+DIYHelper2 is a full-stack mobile app for AI-powered DIY project assistance. Users capture photos/videos of home repair issues, describe problems via voice or text, and receive AI-generated step-by-step repair guides. The backend can route vision requests to either OpenAI (GPT-4o) or Anthropic Claude — selected at runtime via the `AI_PROVIDER` env var; see `AI/AIClientFactory.cs`.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ The frontend sends base64-encoded images + text descriptions to the backend, whi
 ### Frontend Architecture (app/)
 
 - **Entry:** `index.js` → `App.js` (navigation setup)
-- **Navigation:** Drawer (root) containing a Stack navigator. Drawer routes: NewProject (CaptureStack), HoneyDoList, ContractorList. Stack routes: Capture → Result → Safety → ProjectDetail → WorkshopSteps
+- **Navigation:** Drawer (root) containing a Stack navigator. Drawer routes: NewProject (CaptureStack), HoneyDoList, ContractorList, Inventory, ShoppingList, Diagnose, LiveCoach, Quotes, Community, Emergency, ReportProblem, Settings. CaptureStack routes: Capture → Result → Safety → ProjectDetail → WorkshopSteps → PaintMatch → Annotate → WorkshopAR → LiveHelp. An `OnboardingGate` in `App.js` wraps everything to handle first-launch onboarding + AI consent before mounting the navigator.
 - **API layer:** `src/api/backendClient.js` — main HTTP client using fetch. `src/config/api.js` — base URL config (dev uses local IP, prod uses `api.diyhelper.org`)
 - **Storage:** AsyncStorage with two keys: `@honey_do_list` (DIY projects) and `@contractor_list` (pro projects). CRUD helpers in `src/utils/storage.js`
 - **Theme:** Centralized design tokens in `src/theme.js` — colors (primary: #FCA004 orange, secondary: #0A4FA6 blue), spacing, border radius
@@ -26,10 +26,14 @@ The frontend sends base64-encoded images + text descriptions to the backend, whi
 
 ### Backend Architecture (backend/DIYHelper2.Api/)
 
-- **Single-file API:** `Program.cs` contains all route handlers (minimal API pattern, no separate controller classes for main routes)
-- **Endpoints:** `POST /api/analyze` (image+text → AI guide), `POST /api/ask-helper` (contextual follow-up questions), `GET /api/health`
-- **Config:** OpenAI key via `OPENAI_API_KEY` env var. 50MB max request body. 2-minute timeout for OpenAI calls
-- **Deployment:** AWS Elastic Beanstalk (`.ebextensions/`)
+- **Single-file API:** `Program.cs` contains most route handlers (minimal API pattern). Supporting code lives in `AI/`, `Integrations/`, `Middleware/`, `Models/`, `Data/`, `Services/`, and `Validation/`.
+- **Core endpoints:** `POST /api/analyze` (image+text → AI guide), `POST /api/ask-helper` (contextual follow-up), `POST /api/verify-step`, `POST /api/diagnose`, `POST /api/clarify`, `POST /api/live-diy/analyze`, `POST /api/translate`, plus help-request, feedback, community-projects, delete-user-data, weather, reddit-discussions, safety-data, property-value-impact, receipt-ocr, paint-color-match, emergency, and features endpoints. Liveness: `GET /healthz` (Docker/Caddy probe); app health: `GET /api/health`.
+- **Database:** EF Core. Postgres in production (`DATABASE_URL` env, typically loaded from AWS Secrets Manager via `SECRET_ARN`), SQLite locally. Migrations live in `Migrations/` and run via `db.Database.Migrate()` on startup; provider selection is in `Data/DatabaseConfig.cs`.
+- **Config:** OpenAI key via `OPENAI_API_KEY` (or JSON-wrapped in Secrets Manager via `SECRET_ARN`); optional `ANTHROPIC_API_KEY`; `AI_PROVIDER` picks the backend. 50MB max request body. Per-IP rate-limiting buckets (`ai`, `translate`, `submit`). `ALLOWED_ORIGINS` whitelists web origins (empty by default — mobile doesn't need CORS).
+- **Middleware pipeline** (order matters, set in `Program.cs`): `CorrelationIdMiddleware`, `SecurityHeadersMiddleware`, `AdminAuthMiddleware` (gates `/admin/*` + admin GETs), static files, CORS, rate limiter, `AppKeyMiddleware` (shared-secret header check, no-op if unset), `ExceptionHandlerMiddleware`, `RequestLoggingMiddleware`.
+- **Observability:** OpenTelemetry traces + metrics (OTLP exporter when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, console exporter in dev). Structured JSON logs to stdout in non-dev.
+- **SSRF protection:** Every typed `HttpClient` for an external integration is wired with `SsrfGuardHandler` so DNS rebinding can't hit instance metadata or loopback.
+- **Deployment:** Docker. `Dockerfile` builds a multi-stage `dotnet/aspnet:10.0-alpine` image (non-root, `EXPOSE 8080`). `.github/workflows/deploy.yml` builds linux/amd64+arm64 on push to main and pushes to `ghcr.io/sburson34/diyhelper-api:{latest,sha}`. Runs on the shared EC2 host (Caddy + docker-compose, managed in the `infrastructure-shared` repo) — not Elastic Beanstalk.
 
 ## Common Commands
 
