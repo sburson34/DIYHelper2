@@ -1,0 +1,8 @@
+# DIY Helper security.txt — RFC 9116
+# Served at https://api.diyhelper.org/.well-known/security.txt
+
+Contact: mailto:bursons@gmail.com
+Expires: 2026-11-17T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://api.diyhelper.org/.well-known/security.txt
+Policy: https://api.diyhelper.org/privacy-policy.html

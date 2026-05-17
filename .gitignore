@@ -10,6 +10,10 @@ build/
 *.txt
 *.log
 
+# RFC 9116 security disclosure file is intentionally checked in even though
+# the generic *.txt rule above would otherwise hide it.
+!backend/DIYHelper2.Api/wwwroot/.well-known/security.txt
+
 # IDEs and editors
 .idea/
 .vscode/

@@ -399,6 +399,18 @@ app.UseMiddleware<AdminAuthMiddleware>(new AdminAuthOptions
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
+// StaticFileMiddleware ignores dot-prefixed directories by default, so
+// /.well-known/security.txt would otherwise 404 even though the file exists in
+// wwwroot/.well-known/. Map it explicitly so security researchers can find
+// our disclosure contact per RFC 9116. AppKeyMiddleware already bypasses
+// /.well-known/ paths.
+app.MapGet("/.well-known/security.txt", (IWebHostEnvironment env) =>
+{
+    var path = Path.Combine(env.WebRootPath ?? "wwwroot", ".well-known", "security.txt");
+    if (!File.Exists(path)) return Results.NotFound();
+    return Results.File(path, "text/plain; charset=utf-8");
+});
+
 app.UseCors("MobilePolicy");
 
 app.UseRateLimiter();
@@ -979,7 +991,11 @@ app.MapPost("/api/delete-user-data", async (
     ILogger<Program> logger) =>
 {
     var name = (dto.Name ?? "").Trim();
-    var email = (dto.Email ?? "").Trim();
+    // Normalize email to lowercase so rate-limit + lookup are case-insensitive.
+    // RFC 5321 makes the local-part technically case-sensitive, but virtually no
+    // real-world MTA cares, and a case-sensitive comparison lets an attacker
+    // sidestep the per-email throttle by toggling case.
+    var email = (dto.Email ?? "").Trim().ToLowerInvariant();
     var phone = (dto.Phone ?? "").Trim();
 
     if (string.IsNullOrEmpty(email) && string.IsNullOrEmpty(phone))

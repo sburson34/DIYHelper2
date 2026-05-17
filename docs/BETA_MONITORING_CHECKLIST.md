@@ -22,9 +22,10 @@
 | `CorrelationIdMiddleware` | Reads `X-Correlation-ID` from mobile app, generates one if missing, pushes to log scope, echoes in response |
 | `RequestLoggingMiddleware` | Structured log per API request: method, path, status, duration |
 | `ExceptionHandlerMiddleware` | Classifies exceptions, logs full details, returns safe JSON with correlation ID |
+| `Observability/SentrySetup.cs` | Sentry .NET SDK wiring. Reads DSN from `Sentry__Dsn` (or `Sentry:Dsn` / `SENTRY_DSN`); SDK is **never initialised when DSN is unset** so dev/CI stay silent. Stamps `correlation_id` tag on every event. `SendDefaultPii=false`, `MaxRequestBodySize=None`, `AttachStacktrace=true`. Filters `OperationCanceledException`/`TaskCanceledException`. `ScrubEvent`/`ScrubBreadcrumb` redact `Authorization`/`Cookie`/`Set-Cookie`/`X-Api-Key`/`X-Admin-Token`/`X-App-Key`/`X-Play-Integrity-Token` headers and drop breadcrumbs whose data keys contain authorization/token/password/secret/cookie/api-key. Regex `sk-…|Bearer …|JWT-shaped` tokens in messages are replaced with `[redacted]`. Traces sample rate: 10% in production, 100% in dev. |
 | `AiWorkflow.cs` | Wraps all OpenAI calls with structured start/success/failure logging and error classification |
 | `ApiError.cs` | Standardized error response format: `{ error, code, correlationId }` |
-| OpenTelemetry | Traces (ASP.NET Core + HttpClient) and metrics (runtime, HTTP), OTLP-ready |
+| OpenTelemetry | Traces (ASP.NET Core + HttpClient) and metrics (runtime, HTTP), OTLP-ready. Independent pipeline from Sentry — OTel owns traces/metrics, Sentry owns user-facing error reporting. |
 | JSON console logging | Structured one-line JSON per event in production, CloudWatch-parseable |
 | `appsettings.Production.json` | Tight levels: app code at Information, framework noise at Warning |
 
@@ -49,6 +50,8 @@
 |---|---|---|
 | `ASPNETCORE_ENVIRONMENT` | Yes | Set to `Production` on EB (controls JSON logging, log levels) |
 | `SECRET_ARN` or `OPENAI_API_KEY` | Yes | OpenAI API key |
+| `Sentry__Dsn` | Yes for prod | Backend Sentry DSN. Omitted in dev/CI so we don't spam the Sentry project. Also reads `Sentry:Dsn` and `SENTRY_DSN`. |
+| `Sentry__Release` or `GitSha` | No | Stamped as the release on every event; defaults to assembly version. Set this in `deploy.yml` so source-map-style release matching works. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | No | Set to `http://localhost:4317` when ADOT sidecar is running |
 | `OTEL_SERVICE_NAME` | No | Defaults to `diyhelper2-api` |
 

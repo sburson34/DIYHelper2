@@ -13,14 +13,21 @@ Operational runbook for security incidents, cost runaway events, and the rotatio
 | --- | --- | --- |
 | Per-IP rate limiter (fixed window) | `Program.cs` — `AddRateLimiter` | hardcoded |
 | Per-device daily AI quota | `Services/DeviceQuotaService.cs` | `DAILY_DEVICE_AI_LIMIT` env (default 60) |
+| Per-user AI cost quota (USD) | `Services/DeviceQuotaService.cs` | `DAILY_DEVICE_AI_LIMIT` env; thread-safe counter |
 | OpenAI moderation pre-check | `AI/ModerationService.cs` | on when `OPENAI_API_KEY` set |
-| Prompt-injection guard | system prompts in `Program.cs` | hardcoded |
+| Prompt-injection guard (system prompt) | system prompts in `Program.cs` | hardcoded |
+| Prompt-injection guard (user input wrapping) | `Validation/PromptSanitizer.cs` — `PromptSanitizer.Wrap` | always on; every AI endpoint wraps free-text fields in `<user_input>` tags and strips the tag from the payload |
+| Case-insensitive email normalization | `/api/delete-user-data` | normalize to lowercase before rate-limit lookup so an attacker cannot bypass `PerEmailPerDay` by toggling case |
 | Shared-secret app key | `Middleware/AppKeyMiddleware.cs` | `APP_KEY` / Secrets Manager |
 | Play Integrity | `AI/PlayIntegrityVerifier.cs` | `PLAY_INTEGRITY_PROJECT_NUMBER` env |
-| SSRF guard (outbound) | `Integrations/SsrfGuardHandler.cs` | always on |
+| SSRF guard (outbound) | `Integrations/SsrfGuardHandler.cs` | always on — blocks loopback (full `127/8` not just `127.0.0.1`), link-local incl. AWS IMDS `169.254.169.254`, RFC1918, CGNAT `100.64/10`, IPv6 unspecified `::`, unique-local `fc00::/7`, link-local, site-local, and IPv4-mapped equivalents |
 | AI kill-switch | `FeatureFlags.AiKillSwitch` | `AI_KILL_SWITCH=true` env |
 | Deletion verification | `/api/confirm-deletion` | always on |
 | Cert pinning (Android) | `res/xml/network_security_config.xml` | always on in release |
+| Security headers (CSP / X-Frame-Options / COOP-COEP-CORP) | `Middleware/SecurityHeadersMiddleware.cs` | always on |
+| Error response sanitization (no raw exception text in `/api/translate` etc.) | `Middleware/ExceptionHandlerMiddleware.cs` + endpoint handlers | always on |
+| Sentry error reporting + scrubbing | `Observability/SentrySetup.cs` | on when `Sentry__Dsn` env set. Scrubs `Authorization`/`Cookie`/`X-Api-Key`/`X-Admin-Token`/`X-App-Key`/`X-Play-Integrity-Token` headers, drops breadcrumbs whose data keys contain `authorization`/`token`/`password`/`secret`/`cookie`/`api-key`, redacts `sk-…`/`Bearer …`/JWT-looking tokens from messages, never ships request bodies (`MaxRequestBodySize = None`), tags every event with the request `correlation_id`. |
+| Security disclosure contact | `wwwroot/.well-known/security.txt` | RFC 9116. `Expires:` must be bumped on every release. |
 
 ## Immediate levers during an incident
 
@@ -34,8 +41,16 @@ Operational runbook for security incidents, cost runaway events, and the rotatio
 ### "Someone found a prompt-injection that leaks the system prompt"
 
 1. Update the injection guard in the affected endpoint's `systemPrompt` in `Program.cs`.
-2. Add a regression test with the offending payload.
-3. Deploy. Meanwhile, temporary kill-switch is the blast-radius limiter.
+2. Confirm the user-supplied fields are wrapped in `PromptSanitizer.Wrap(...)` — if the new endpoint isn't, that's the root cause. The wrapper strips `<user_input>` boundaries from the payload so an attacker can't close the tag and pose as the developer turn.
+3. Add a regression test with the offending payload (mirror `DIYHelper2.Tests/PromptSanitizerTests.cs`).
+4. Deploy. Meanwhile, temporary kill-switch is the blast-radius limiter.
+
+### "Sentry is flooding with the same error"
+
+1. Confirm it's a real error and not Sentry's own noise.
+2. Add an `AddExceptionFilterForType<T>()` line in `Observability/SentrySetup.cs` for known-benign transient types (we already filter `OperationCanceledException` and `TaskCanceledException`).
+3. If the burst is from a single user, find them by the `correlation_id` tag Sentry stamps on every event — that maps 1:1 to the `X-Correlation-Id` response header the mobile app logged.
+4. If Sentry itself is the problem (e.g., DSN compromised, spam events), unset `Sentry__Dsn` in EB env config to disable cleanly — `SentrySetup.AddSentryObservability` is a no-op without it.
 
 ### "Deletion spam"
 
@@ -53,6 +68,8 @@ Per-IP and per-email rate limits are in `/api/delete-user-data`. If someone weap
 | TLS cert for `api.diyhelper.org` | automatic via ACM | When ACM rotates, **you must re-pin** — see below. |
 | Android cert pins | at each TLS rotation, and whenever the intermediate CA changes | See "Cert-pin rotation" below. |
 | `network_security_config.xml` `expiration` | bump to now+12mo on every release that touches pins | Prevents bricking users if we forget the rotation. |
+| Sentry DSN | only on compromise | Sentry DSNs are low-risk public-ish identifiers; rotation is event-driven, not scheduled. If you do rotate, update `Sentry__Dsn` env on the backend and `EXPO_PUBLIC_SENTRY_DSN` (or the `app.json` fallback) on mobile. |
+| Full cross-portfolio cadence | see `docs/SECRETS_ROTATION.md` | Master rotation table; covers JWT signing keys, AI provider keys, Google service accounts, RevenueCat, AWS access keys, app-key, TLS certs, cert pins. |
 
 ## Cert-pin rotation
 
@@ -77,7 +94,8 @@ If ACM has already rotated and you see TLS handshake failures in Sentry, the fix
 - [ ] `EXPO_PUBLIC_APP_KEY` rotated in the release build env.
 - [ ] ProGuard mapping uploaded (Gradle `assembleRelease` runs the Sentry plugin).
 - [ ] `docs/PLAY_DATA_SAFETY.md` still reflects the current data flows.
-- [ ] `/.well-known/security.txt` `Expires:` is >60 days in the future.
+- [ ] `/.well-known/security.txt` `Expires:` is >60 days in the future (current value: `2026-11-17`; renew by ~2026-09-17).
+- [ ] Sentry receiving events from both mobile + backend in prod (`Sentry__Dsn` env set on EB; `EXPO_PUBLIC_SENTRY_DSN` or `app.json` fallback set on mobile).
 - [ ] Dependency scan (`npm audit`, `dotnet list package --vulnerable`) is clean.
 
 ## When Play Integrity blocks legitimate users
