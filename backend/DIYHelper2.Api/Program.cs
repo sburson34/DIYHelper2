@@ -1635,84 +1635,76 @@ app.MapPost("/api/paint-color-match", ([FromBody] PaintColorRequest req, PaintCo
 // response order so the client can map translated[i] back to its original key.
 app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody] TranslateRequest req, ILogger<Program> logger) =>
 {
-    try
+    if (req.Q == null || req.Q.Length == 0 || string.IsNullOrWhiteSpace(req.Target))
+        return Results.Json(new { error = "Missing q[] or target." }, statusCode: 400);
+    if (string.IsNullOrEmpty(googleApiKey))
+        return Results.Json(new { error = "GOOGLE_API_KEY is not configured on the server." }, statusCode: 500);
+
+    string source = string.IsNullOrWhiteSpace(req.Source) ? "en" : req.Source!;
+    string target = req.Target!.ToLowerInvariant();
+
+    if (target == source.ToLowerInvariant())
+        return Results.Ok(new { translations = req.Q });
+
+    var results = new string[req.Q.Length];
+    var missingIndexes = new List<int>();
+    var missingTexts = new List<string>();
+
+    for (int i = 0; i < req.Q.Length; i++)
     {
-        if (req.Q == null || req.Q.Length == 0 || string.IsNullOrWhiteSpace(req.Target))
-            return Results.Json(new { error = "Missing q[] or target." }, statusCode: 400);
-        if (string.IsNullOrEmpty(googleApiKey))
-            return Results.Json(new { error = "GOOGLE_API_KEY is not configured on the server." }, statusCode: 500);
-
-        string source = string.IsNullOrWhiteSpace(req.Source) ? "en" : req.Source!;
-        string target = req.Target!.ToLowerInvariant();
-
-        if (target == source.ToLowerInvariant())
-            return Results.Ok(new { translations = req.Q });
-
-        var results = new string[req.Q.Length];
-        var missingIndexes = new List<int>();
-        var missingTexts = new List<string>();
-
-        for (int i = 0; i < req.Q.Length; i++)
+        var key = $"{source}|{target}|{req.Q[i]}";
+        if (translationCache.TryGetValue(key, out var cached))
+            results[i] = cached;
+        else
         {
-            var key = $"{source}|{target}|{req.Q[i]}";
-            if (translationCache.TryGetValue(key, out var cached))
-                results[i] = cached;
-            else
-            {
-                missingIndexes.Add(i);
-                missingTexts.Add(req.Q[i] ?? "");
-            }
+            missingIndexes.Add(i);
+            missingTexts.Add(req.Q[i] ?? "");
         }
+    }
 
-        if (missingTexts.Count == 0)
-            return Results.Ok(new { translations = results });
-
-        const int BATCH_SIZE = 100;
-        for (int batchStart = 0; batchStart < missingTexts.Count; batchStart += BATCH_SIZE)
-        {
-            var batch = missingTexts.Skip(batchStart).Take(BATCH_SIZE).ToList();
-            var batchIndexes = missingIndexes.Skip(batchStart).Take(BATCH_SIZE).ToList();
-
-            var payload = new Dictionary<string, object>
-            {
-                ["q"] = batch,
-                ["source"] = source,
-                ["target"] = target,
-                ["format"] = "text",
-            };
-
-            using var googleReq = new HttpRequestMessage(HttpMethod.Post,
-                "https://translation.googleapis.com/language/translate/v2");
-            googleReq.Headers.Add("X-Goog-Api-Key", googleApiKey);
-            googleReq.Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
-
-            using var googleResponse = await translateHttpClient.SendAsync(googleReq);
-            string body = await googleResponse.Content.ReadAsStringAsync();
-            if (!googleResponse.IsSuccessStatusCode)
-            {
-                logger.LogError("Google Translate API error {Status}: {Body}", googleResponse.StatusCode, body);
-                return Results.Json(new { error = "Translation service error", details = body }, statusCode: 502);
-            }
-
-            var parsed = JsonSerializer.Deserialize<JsonElement>(body);
-            var translations = parsed.GetProperty("data").GetProperty("translations");
-            for (int j = 0; j < batch.Count; j++)
-            {
-                string translated = translations[j].GetProperty("translatedText").GetString() ?? batch[j];
-                int origIdx = batchIndexes[j];
-                results[origIdx] = translated;
-                var cacheKey = $"{source}|{target}|{batch[j]}";
-                translationCache[cacheKey] = translated;
-            }
-        }
-
+    if (missingTexts.Count == 0)
         return Results.Ok(new { translations = results });
-    }
-    catch (Exception ex)
+
+    const int BATCH_SIZE = 100;
+    for (int batchStart = 0; batchStart < missingTexts.Count; batchStart += BATCH_SIZE)
     {
-        logger.LogError(ex, "translate error");
-        return Results.Json(new { error = ex.Message }, statusCode: 500);
+        var batch = missingTexts.Skip(batchStart).Take(BATCH_SIZE).ToList();
+        var batchIndexes = missingIndexes.Skip(batchStart).Take(BATCH_SIZE).ToList();
+
+        var payload = new Dictionary<string, object>
+        {
+            ["q"] = batch,
+            ["source"] = source,
+            ["target"] = target,
+            ["format"] = "text",
+        };
+
+        using var googleReq = new HttpRequestMessage(HttpMethod.Post,
+            "https://translation.googleapis.com/language/translate/v2");
+        googleReq.Headers.Add("X-Goog-Api-Key", googleApiKey);
+        googleReq.Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
+
+        using var googleResponse = await translateHttpClient.SendAsync(googleReq);
+        string body = await googleResponse.Content.ReadAsStringAsync();
+        if (!googleResponse.IsSuccessStatusCode)
+        {
+            logger.LogError("Google Translate API error {Status}: {Body}", googleResponse.StatusCode, body);
+            return Results.Json(new { error = "Translation service error", details = body }, statusCode: 502);
+        }
+
+        var parsed = JsonSerializer.Deserialize<JsonElement>(body);
+        var translations = parsed.GetProperty("data").GetProperty("translations");
+        for (int j = 0; j < batch.Count; j++)
+        {
+            string translated = translations[j].GetProperty("translatedText").GetString() ?? batch[j];
+            int origIdx = batchIndexes[j];
+            results[origIdx] = translated;
+            var cacheKey = $"{source}|{target}|{batch[j]}";
+            translationCache[cacheKey] = translated;
+        }
     }
+
+    return Results.Ok(new { translations = results });
 });
 
 app.Run();
