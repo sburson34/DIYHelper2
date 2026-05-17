@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createFeatureFlags } from '@sburson34/mobile-shared/feature-flags';
 import { getFeatures } from '../api/backendClient';
 
 export interface Features {
@@ -30,7 +30,6 @@ const DEFAULT_FEATURES: Features = {
   reddit: true,
   pubchem: true,
   receiptOcr: false,
-  // ML Kit features (on-device)
   barcodeScanner: false,
   imageLabeling: false,
   onDeviceTranslation: false,
@@ -39,24 +38,9 @@ const DEFAULT_FEATURES: Features = {
   poseDetection: false,
 };
 
-const FeaturesContext = createContext<Features>(DEFAULT_FEATURES);
+const { FeaturesProvider, useFeatures } = createFeatureFlags<Features>(
+  DEFAULT_FEATURES,
+  { fetcher: () => getFeatures() as Promise<Partial<Features>> },
+);
 
-export const FeaturesProvider = ({ children }: { children: ReactNode }) => {
-  const [features, setFeatures] = useState<Features>(DEFAULT_FEATURES);
-
-  useEffect(() => {
-    let mounted = true;
-    getFeatures()
-      .then((f: Partial<Features>) => { if (mounted) setFeatures({ ...DEFAULT_FEATURES, ...f }); })
-      .catch(() => { /* keep defaults */ });
-    return () => { mounted = false; };
-  }, []);
-
-  return (
-    <FeaturesContext.Provider value={features}>
-      {children}
-    </FeaturesContext.Provider>
-  );
-};
-
-export const useFeatures = (): Features => useContext(FeaturesContext);
+export { FeaturesProvider, useFeatures, DEFAULT_FEATURES };

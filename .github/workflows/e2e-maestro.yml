@@ -29,6 +29,9 @@ jobs:
     # require KVM, which GitHub-hosted doesn't provide.
     runs-on: macos-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +48,8 @@ jobs:
 
       - name: Install app dependencies
         working-directory: app
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm ci
 
       - name: Install Maestro

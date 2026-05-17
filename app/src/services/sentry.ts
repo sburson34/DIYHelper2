@@ -1,18 +1,29 @@
-// Centralized Sentry helper.
+// Thin shim over @sburson34/mobile-shared/sentry. The shared package owns
+// the scrubber (sensitive keys, base64 media, PII fields), the Sentry init
+// call, and the safe helpers. This file just wires up DIYHelper2's
+// app-specific config (DSN, release, app context, tags) and re-exports
+// everything else so feature code can keep importing from
+// '../services/sentry' unchanged.
 //
-// Why this file exists:
-//   - One place to call Sentry.init so index.js stays small.
-//   - One place that scrubs sensitive payloads (auth tokens, API keys,
-//     base64 image/video bodies) before anything is sent.
-//   - Safe wrappers (captureException / captureMessage / setUserContext /
-//     setAppContext) that no-op when the DSN isn't configured, so feature
-//     code can call them unconditionally.
-//
-// Anything Sentry-specific outside of this file should import from here, NOT
-// from '@sentry/react-native' directly. That keeps scrubbing/guards in one
-// place and makes it easy to swap providers later.
+// Anything Sentry-specific outside this file should still import from here
+// (NOT from '@sburson34/mobile-shared/sentry' directly) so per-app
+// composition stays in one place.
 
-import * as Sentry from '@sentry/react-native';
+import {
+  initSentry as sharedInit,
+  captureException as sharedCapture,
+  captureMessage as sharedCaptureMessage,
+  setUserContext as sharedSetUser,
+  clearUserContext as sharedClearUser,
+  setAppContext as sharedSetAppContext,
+  navigationIntegration as sharedNavIntegration,
+  Sentry as SharedSentry,
+} from '@sburson34/mobile-shared/sentry';
+import type {
+  SeverityLevel as SharedSeverityLevel,
+  UserContext as SharedUserContext,
+} from '@sburson34/mobile-shared/sentry';
+
 import {
   SENTRY_DSN,
   SENTRY_ENABLED,
@@ -22,285 +33,40 @@ import {
 } from '../config/sentry';
 import { APP_VERSION, BUILD_NUMBER, GIT_COMMIT, APP_PLATFORM, OS_VERSION } from '../config/appInfo';
 
-export type SeverityLevel = 'fatal' | 'error' | 'warning' | 'info' | 'debug' | 'log';
+export type SeverityLevel = SharedSeverityLevel;
+export type UserContext = SharedUserContext;
 
-// Single shared navigation integration instance. We hand its
-// `registerNavigationContainer` method to the NavigationContainer's onReady
-// callback in App.js so route changes become breadcrumbs/transactions.
-export const navigationIntegration = (Sentry as unknown as {
-  reactNavigationIntegration: (opts?: { enableTimeToInitialDisplay?: boolean }) => unknown;
-}).reactNavigationIntegration({
-  enableTimeToInitialDisplay: false,
-});
-
-// ── Scrubbing ─────────────────────────────────────────────────────────────
-// Keys whose values should never leave the device. Compared case-insensitively
-// against header names, body keys, and breadcrumb data keys.
-const SENSITIVE_KEYS = [
-  'authorization',
-  'auth',
-  'token',
-  'access_token',
-  'refresh_token',
-  'api_key',
-  'apikey',
-  'x-api-key',
-  'openai_api_key',
-  'password',
-  'secret',
-  'cookie',
-  'set-cookie',
-];
-
-// Body fields that may contain raw user media (base64 photos/video frames the
-// app sends to /api/analyze). These are large and privacy-sensitive — strip.
-const MEDIA_KEYS = ['media', 'image', 'images', 'photo', 'photos', 'video', 'videos', 'base64', 'data'];
-
-// Free-text user input and contact fields. Breadcrumbs already log only length
-// for these, but this scrubs any future code path that ends up routing a body
-// through beforeSend so raw user text never reaches Sentry.
-const USER_TEXT_KEYS = [
-  'description',
-  'userdescription',
-  'question',
-  'steptext',
-  'prompt',
-  'customername',
-  'customeremail',
-  'customerphone',
-  'name',
-  'email',
-  'phone',
-];
-
-const REDACTED = '[redacted]';
-
-const isSensitiveKey = (key: string): boolean => {
-  if (typeof key !== 'string') return false;
-  const k = key.toLowerCase();
-  return SENSITIVE_KEYS.some((s) => k === s || k.includes(s));
-};
-
-const isMediaKey = (key: string): boolean => {
-  if (typeof key !== 'string') return false;
-  const k = key.toLowerCase();
-  return MEDIA_KEYS.includes(k);
-};
-
-const isUserTextKey = (key: string): boolean => {
-  if (typeof key !== 'string') return false;
-  return USER_TEXT_KEYS.includes(key.toLowerCase());
-};
-
-// Recursively scrub an arbitrary object. Bounded depth so we never blow the
-// stack on a circular structure.
-const scrub = (value: unknown, depth = 0): unknown => {
-  if (value == null || depth > 6) return value;
-  if (Array.isArray(value)) return value.map((v) => scrub(v, depth + 1));
-  if (typeof value === 'string') {
-    // Heuristic: very long strings that look like base64 image payloads.
-    if (value.length > 2000 && /^[A-Za-z0-9+/=]+$/.test(value.slice(0, 64))) {
-      return `${REDACTED}:base64(${value.length}b)`;
-    }
-    return value;
-  }
-  if (typeof value !== 'object') return value;
-
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    if (isSensitiveKey(k)) {
-      out[k] = REDACTED;
-    } else if (isMediaKey(k)) {
-      out[k] = Array.isArray(v) ? `${REDACTED}:media[${v.length}]` : REDACTED;
-    } else if (isUserTextKey(k) && typeof v === 'string') {
-      out[k] = `${REDACTED}:text(${v.length}c)`;
-    } else {
-      out[k] = scrub(v, depth + 1);
-    }
-  }
-  return out;
-};
-
-// beforeSend / beforeBreadcrumb hooks that apply scrubbing to anything Sentry
-// is about to transmit.
-const beforeSend = (event: unknown): unknown => {
-  try {
-    const ev = event as {
-      request?: { headers?: unknown; data?: unknown; cookies?: unknown };
-      extra?: unknown;
-      contexts?: unknown;
-      tags?: unknown;
-    };
-    if (ev.request) {
-      if (ev.request.headers) ev.request.headers = scrub(ev.request.headers);
-      if (ev.request.data) ev.request.data = scrub(ev.request.data);
-      if (ev.request.cookies) ev.request.cookies = REDACTED;
-    }
-    if (ev.extra) ev.extra = scrub(ev.extra);
-    if (ev.contexts) ev.contexts = scrub(ev.contexts);
-    if (ev.tags) ev.tags = scrub(ev.tags);
-  } catch {
-    // Never let scrubbing errors block delivery.
-  }
-  return event;
-};
-
-const beforeBreadcrumb = (breadcrumb: unknown): unknown => {
-  try {
-    const b = breadcrumb as { data?: unknown; category?: string; level?: string };
-    if (b?.data) b.data = scrub(b.data);
-    // Drop console.debug noise; keep warn/error.
-    if (b?.category === 'console' && b?.level === 'debug') {
-      return null;
-    }
-  } catch {
-    // ignore
-  }
-  return breadcrumb;
-};
-
-// ── Init ──────────────────────────────────────────────────────────────────
-let initialized = false;
+export const navigationIntegration = sharedNavIntegration;
+export const Sentry = SharedSentry;
 
 export const initSentry = (): void => {
-  if (initialized) return;
-  if (!SENTRY_ENABLED) {
-    if (__DEV__) {
-      // eslint-disable-next-line no-console
-      console.log('[sentry] disabled — no DSN configured');
-    }
-    return;
-  }
-
-  (Sentry as unknown as { init: (opts: Record<string, unknown>) => void }).init({
-    dsn: SENTRY_DSN,
+  sharedInit({
+    // Forward null when feature-flagged off so the shared init logs the
+    // "disabled — no DSN configured" line and skips Sentry.init.
+    dsn: SENTRY_ENABLED ? SENTRY_DSN : null,
     environment: SENTRY_ENVIRONMENT,
     release: SENTRY_RELEASE,
     tracesSampleRate: SENTRY_TRACES_SAMPLE_RATE,
-    attachStacktrace: true,
-    // Don't ship raw IPs / cookies.
-    sendDefaultPii: false,
-    // Native crash capture is on by default in @sentry/react-native; we just
-    // pass the integrations we want to add on top.
-    integrations: [navigationIntegration],
-    beforeSend,
-    beforeBreadcrumb,
-    // Beta-friendly: keep auto session tracking so we get crash-free-users.
     enableAutoSessionTracking: true,
+    appContext: {
+      app_version: APP_VERSION,
+      build_number: BUILD_NUMBER,
+      git_commit: GIT_COMMIT,
+      platform: APP_PLATFORM,
+      os_version: OS_VERSION,
+      environment: SENTRY_ENVIRONMENT,
+    },
+    tags: {
+      'app.version': APP_VERSION,
+      'app.build': BUILD_NUMBER,
+      'app.platform': APP_PLATFORM,
+      ...(GIT_COMMIT ? { 'app.commit': GIT_COMMIT } : {}),
+    },
   });
-
-  // Persistent tags — indexed and searchable on every event.
-  Sentry.setTag('app.version', APP_VERSION);
-  Sentry.setTag('app.build', BUILD_NUMBER);
-  Sentry.setTag('app.platform', APP_PLATFORM);
-  if (GIT_COMMIT) Sentry.setTag('app.commit', GIT_COMMIT);
-
-  // Structured context — visible in the event detail sidebar.
-  Sentry.setContext('app', {
-    app_version: APP_VERSION,
-    build_number: BUILD_NUMBER,
-    git_commit: GIT_COMMIT,
-    platform: APP_PLATFORM,
-    os_version: OS_VERSION,
-    environment: SENTRY_ENVIRONMENT,
-  });
-
-  initialized = true;
 };
 
-// ── Public helpers (safe to call before init or with no DSN) ─────────────
-
-export const captureException = (error: unknown, context?: Record<string, unknown>): void => {
-  if (!SENTRY_ENABLED) {
-    // Preserve existing logging behavior in dev/no-DSN builds.
-    // eslint-disable-next-line no-console
-    console.error('[captureException]', error, context || '');
-    return;
-  }
-  try {
-    Sentry.withScope((scope) => {
-      if (context && typeof context === 'object') {
-        for (const [k, v] of Object.entries(context)) {
-          scope.setExtra(k, v);
-        }
-      }
-      Sentry.captureException(error);
-    });
-  } catch {
-    // swallow — telemetry must never crash the app
-  }
-};
-
-export const captureMessage = (
-  message: string,
-  level: SeverityLevel = 'info',
-  extra?: Record<string, unknown>,
-): void => {
-  if (!SENTRY_ENABLED) {
-    // eslint-disable-next-line no-console
-    console.log(`[captureMessage:${level}]`, message, extra || '');
-    return;
-  }
-  try {
-    Sentry.withScope((scope) => {
-      (scope as unknown as { setLevel: (l: SeverityLevel) => void }).setLevel(level);
-      if (extra && typeof extra === 'object') {
-        for (const [k, v] of Object.entries(extra)) {
-          scope.setExtra(k, v);
-        }
-      }
-      Sentry.captureMessage(message);
-    });
-  } catch {
-    // ignore
-  }
-};
-
-export interface UserContext {
-  id?: string | number;
-  email?: string;
-  username?: string;
-  [extra: string]: unknown;
-}
-
-// id is required; everything else is optional. Email/username are only set if
-// the caller explicitly opted in (we don't pull them from storage by default).
-export const setUserContext = (info: UserContext = {}): void => {
-  if (!SENTRY_ENABLED) return;
-  const { id, email, username, ...rest } = info;
-  try {
-    Sentry.setUser({
-      id: id != null ? String(id) : undefined,
-      email,
-      username,
-      ...rest,
-    } as Parameters<typeof Sentry.setUser>[0]);
-  } catch {
-    // ignore
-  }
-};
-
-export const clearUserContext = (): void => {
-  if (!SENTRY_ENABLED) return;
-  try {
-    Sentry.setUser(null);
-  } catch {
-    // ignore
-  }
-};
-
-// App-level context — locale, theme, skill level, feature flags, etc. Anything
-// that helps reproduce a bug but is not user-identifying.
-export const setAppContext = (key: string, value: unknown): void => {
-  if (!SENTRY_ENABLED) return;
-  try {
-    Sentry.setContext(key, scrub(value) as Record<string, unknown>);
-  } catch {
-    // ignore
-  }
-};
-
-// Re-export the underlying SDK for the few cases (e.g. Sentry.wrap in
-// index.js) where we need direct access. Prefer the helpers above for normal
-// feature code.
-export { Sentry };
+export const captureException = sharedCapture;
+export const captureMessage = sharedCaptureMessage;
+export const setUserContext = sharedSetUser;
+export const clearUserContext = sharedClearUser;
+export const setAppContext = sharedSetAppContext;

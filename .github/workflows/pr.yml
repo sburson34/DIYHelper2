@@ -19,6 +19,9 @@ jobs:
   frontend:
     name: Frontend (lint + unit)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     defaults:
       run:
         working-directory: app
@@ -32,6 +35,11 @@ jobs:
           cache-dependency-path: app/package-lock.json
 
       - name: Install
+        env:
+          # Read by app/.npmrc to authenticate to GHCR for the public
+          # @sburson34/mobile-shared package. GitHub's npm endpoint
+          # requires auth even on public packages.
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm ci
 
       - name: Lint
@@ -117,6 +125,8 @@ jobs:
 
       - name: npm audit (app)
         working-directory: app
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npm ci --ignore-scripts
           npm audit --audit-level=high --omit=dev
