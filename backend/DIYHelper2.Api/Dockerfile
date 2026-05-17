@@ -3,10 +3,16 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
 WORKDIR /src
 
+# nuget.config (at repo root) authenticates dotnet restore against the
+# GHCR feed for Sburson.Shared.Backend. GitHub's NuGet endpoint requires
+# auth even on public packages; the deploy workflow forwards the
+# auto-issued GITHUB_TOKEN as a BuildKit secret.
+COPY nuget.config nuget.config
 COPY backend/DIYHelper2.slnx backend/
 COPY backend/DIYHelper2.Api/DIYHelper2.Api.csproj backend/DIYHelper2.Api/
 COPY backend/DIYHelper2.Tests/DIYHelper2.Tests.csproj backend/DIYHelper2.Tests/
-RUN dotnet restore backend/DIYHelper2.Api/DIYHelper2.Api.csproj
+RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
+    dotnet restore backend/DIYHelper2.Api/DIYHelper2.Api.csproj
 
 COPY backend/ backend/
 WORKDIR /src/backend/DIYHelper2.Api

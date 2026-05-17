@@ -1,10 +1,17 @@
+using Microsoft.Extensions.Configuration;
+using Sburson.Shared.FeatureFlags;
+
 namespace DIYHelper2.Api.Integrations;
 
 /// <summary>
-/// Reads feature flag env vars at startup. Frontend pulls these via GET /api/features.
-/// Scaffolded APIs stay dark until their credentials land and the flag is flipped on.
+/// Reads feature flag env vars / IConfiguration at startup. Frontend pulls
+/// these via GET /api/features. Scaffolded APIs stay dark until their
+/// credentials land and the flag is flipped on.
+///
+/// Inherits from <see cref="FeatureFlagsBase"/> for the shared IsEnabled /
+/// EnabledWhenSet helpers; the typed properties + ToPublicJson stay app-specific.
 /// </summary>
-public class FeatureFlags
+public class FeatureFlags : FeatureFlagsBase
 {
     public bool AmazonPa { get; }
     public bool Attom { get; }
@@ -26,39 +33,36 @@ public class FeatureFlags
 
     // Emergency kill-switch. When true, all /api/analyze, /api/ask-helper,
     // /api/diagnose, /api/clarify, and /api/verify-step endpoints return 503.
-    // Flip via the AI_KILL_SWITCH env var (Elastic Beanstalk → Configuration →
-    // Software → Environment properties) for an immediate rollout without a
+    // Flip via the AI_KILL_SWITCH env var for an immediate rollout without a
     // redeploy. Use when an abuse wave or provider outage is draining the
     // OpenAI budget faster than per-device quotas can contain.
     public bool AiKillSwitch { get; }
 
-    public FeatureFlags()
+    public FeatureFlags(IConfiguration config) : base(config)
     {
-        AmazonPa = ReadBool("FEATURES_AMAZON_PA");
-        Attom = ReadBool("FEATURES_ATTOM");
-        PaintColors = ReadBool("FEATURES_PAINT_COLORS");
-        ClaudeFallback = ReadBool("FEATURES_CLAUDE_FALLBACK");
-        // The following default to ON when the upstream key is set, OFF otherwise.
-        YouTube = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("YOUTUBE_API_KEY"));
-        Weather = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OPENWEATHER_API_KEY"));
-        Reddit = ReadBool("FEATURES_REDDIT", defaultValue: true);
-        PubChem = ReadBool("FEATURES_PUBCHEM", defaultValue: true);
-        ReceiptOcr = !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("MINDEE_API_KEY"));
+        AmazonPa = IsEnabled("AmazonPa");
+        Attom = IsEnabled("Attom");
+        PaintColors = IsEnabled("PaintColors");
+        ClaudeFallback = IsEnabled("ClaudeFallback");
+        // Auto-enable when the upstream key is set, OFF otherwise.
+        YouTube = EnabledWhenSet("YOUTUBE_API_KEY");
+        Weather = EnabledWhenSet("OPENWEATHER_API_KEY");
+        Reddit = IsEnabled("Reddit", defaultValue: true);
+        PubChem = IsEnabled("PubChem", defaultValue: true);
+        ReceiptOcr = EnabledWhenSet("MINDEE_API_KEY");
         // ML Kit features — all default OFF until validated on target devices.
-        BarcodeScanner = ReadBool("FEATURES_BARCODE_SCANNER");
-        ImageLabeling = ReadBool("FEATURES_IMAGE_LABELING");
-        OnDeviceTranslation = ReadBool("FEATURES_ON_DEVICE_TRANSLATION");
-        DigitalInk = ReadBool("FEATURES_DIGITAL_INK");
-        EntityExtraction = ReadBool("FEATURES_ENTITY_EXTRACTION");
-        PoseDetection = ReadBool("FEATURES_POSE_DETECTION");
-        AiKillSwitch = ReadBool("AI_KILL_SWITCH");
-    }
-
-    private static bool ReadBool(string name, bool defaultValue = false)
-    {
-        var raw = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrEmpty(raw)) return defaultValue;
-        return raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw == "1";
+        BarcodeScanner = IsEnabled("BarcodeScanner");
+        ImageLabeling = IsEnabled("ImageLabeling");
+        OnDeviceTranslation = IsEnabled("OnDeviceTranslation");
+        DigitalInk = IsEnabled("DigitalInk");
+        EntityExtraction = IsEnabled("EntityExtraction");
+        PoseDetection = IsEnabled("PoseDetection");
+        // Read AI_KILL_SWITCH directly (no FEATURES_ prefix) to preserve the
+        // existing deployment contract — flipping this is a fleet-wide emergency
+        // lever and the env var is documented in the runbook by that name.
+        var aiKillRaw = Environment.GetEnvironmentVariable("AI_KILL_SWITCH");
+        AiKillSwitch = !string.IsNullOrEmpty(aiKillRaw)
+            && (aiKillRaw.Equals("true", StringComparison.OrdinalIgnoreCase) || aiKillRaw == "1");
     }
 
     public object ToPublicJson() => new

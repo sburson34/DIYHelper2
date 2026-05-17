@@ -1,4 +1,4 @@
-using DIYHelper2.Api.Integrations;
+using Sburson.Shared.Http;
 using Xunit;
 
 namespace DIYHelper2.Tests;

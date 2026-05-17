@@ -1,10 +1,10 @@
 using System.ClientModel;
 using System.Text.Json;
-using DIYHelper2.Api.Middleware;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
+using Sburson.Shared.Web;
 using Xunit;
 
 namespace DIYHelper2.Tests;
@@ -115,7 +115,10 @@ public class ExceptionHandlerMiddlewareTests
     {
         var envMock = new Mock<IHostEnvironment>();
         envMock.Setup(e => e.EnvironmentName).Returns(isDev ? "Development" : "Production");
-        return new ExceptionHandlerMiddleware(next, envMock.Object);
+        // Empty registry — these tests exercise the default classifier path.
+        // App-specific classifiers (OpenAI ClientResultException) are wired
+        // in Program.cs via AddSburonWeb(classifiers => ...).
+        return new ExceptionHandlerMiddleware(next, envMock.Object, new ExceptionClassifierRegistry());
     }
 
     [Fact]

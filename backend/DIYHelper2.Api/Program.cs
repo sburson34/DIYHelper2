@@ -17,6 +17,10 @@ using DIYHelper2.Api.Middleware;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Integrations;
 using DIYHelper2.Api.Validation;
+using Sburson.Shared.Email;
+using Sburson.Shared.FeatureFlags;
+using Sburson.Shared.Http;
+using Sburson.Shared.Web;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
 using OpenTelemetry;
@@ -133,21 +137,41 @@ builder.Services.AddCors(options =>
 // External integration clients (typed HttpClients for uniform retry/timeout/logging).
 // Every typed client gets the SsrfGuardHandler so DNS rebinding cannot bounce
 // an outbound request into the AWS instance metadata service or loopback.
-builder.Services.AddTransient<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<YouTubeClient>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<WeatherClient>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<RedditClient>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<PubChemClient>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<AttomClient>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
-builder.Services.AddHttpClient<DIYHelper2.Api.AI.PlayIntegrityVerifier>().AddHttpMessageHandler<DIYHelper2.Api.Integrations.SsrfGuardHandler>();
+builder.Services.AddTransient<SsrfGuardHandler>();
+builder.Services.AddHttpClient<YouTubeClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<WeatherClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<RedditClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<PubChemClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<AttomClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<DIYHelper2.Api.AI.PlayIntegrityVerifier>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddSingleton<DIYHelper2.Api.Services.DeviceQuotaService>();
-builder.Services.AddSingleton<DIYHelper2.Api.Services.DeletionMailer>();
+builder.Services.AddSburonEmail(builder.Configuration);
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.RetentionService>();
+
+// Shared web pipeline (CorrelationId / Exception / RequestLogging / SecurityHeaders).
+// DIYHelper2 also classifies OpenAI ClientResultException to friendly statuses —
+// register that as an app-specific classifier; the package stays SDK-free.
+builder.Services.AddSburonWeb(classifiers =>
+{
+    classifiers.Add(ex =>
+    {
+        if (ex is ClientResultException cre)
+        {
+            var status = cre.Status;
+            if (status == 429)
+                return (429, "The service is temporarily busy. Please wait a moment and try again.", "rate_limited");
+            if (status == 400 || ex.Message.Contains("content_filter", StringComparison.OrdinalIgnoreCase))
+                return (422, "The AI could not process this request. Try a shorter description or different photo.", "ai_rejected");
+            return (502, "The AI service returned an error. Please try again.", "ai_error");
+        }
+        return null;
+    });
+});
 
 // ── AI vision client DI wiring ─────────────────────────────────────
 // AiKeyStore is a mutable holder populated after AWS Secrets Manager
@@ -987,7 +1011,7 @@ app.MapPost("/api/delete-user-data", async (
     [FromBody] DeleteUserDataDto dto,
     HttpContext context,
     AppDbContext db,
-    DIYHelper2.Api.Services.DeletionMailer mailer,
+    IEmailService mailer,
     ILogger<Program> logger) =>
 {
     var name = (dto.Name ?? "").Trim();
@@ -1057,7 +1081,16 @@ app.MapPost("/api/delete-user-data", async (
 
     if (!string.IsNullOrEmpty(email))
     {
-        try { await mailer.SendVerificationCodeAsync(email, code); }
+        try
+        {
+            await mailer.SendAsync(
+                email,
+                "DIY Helper: confirm your data deletion request",
+                $"Your verification code is {code}.\n\n" +
+                "Enter it in the DIY Helper app to confirm you want your data deleted.\n" +
+                "This code expires in 30 minutes.\n\n" +
+                "If you did not request deletion, you can ignore this email.");
+        }
         catch (Exception ex) { logger.LogWarning(ex, "delete-user-data: mailer failed; user can retry."); }
     }
 
