@@ -49,6 +49,9 @@ jobs:
   backend:
     name: Backend (build + test)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     defaults:
       run:
         working-directory: backend
@@ -64,6 +67,11 @@ jobs:
           dotnet-quality: 'preview'
 
       - name: Restore
+        env:
+          # Read by ../nuget.config for the public Sburson.Shared.Backend
+          # feed. GitHub's NuGet endpoint always requires auth even on
+          # public packages; the auto-issued token has packages:read.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: dotnet restore DIYHelper2.slnx
 
       - name: Build (no restore)
@@ -90,6 +98,9 @@ jobs:
   security:
     name: Dependency vulnerability scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -112,6 +123,8 @@ jobs:
 
       - name: dotnet vulnerable packages (backend)
         working-directory: backend
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           dotnet restore DIYHelper2.slnx
           OUTPUT=$(dotnet list DIYHelper2.slnx package --vulnerable --include-transitive 2>&1)
