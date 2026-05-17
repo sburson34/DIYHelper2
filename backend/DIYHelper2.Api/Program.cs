@@ -23,8 +23,10 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using DIYHelper2.Api.Observability;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddSentryObservability();
 
 // Add services to the container.
 builder.Services.AddOpenApi();
@@ -354,6 +356,10 @@ using (var scope = app.Services.CreateScope())
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+    app.MapGet("/api/sentry-test", () =>
+    {
+        throw new InvalidOperationException("Sentry wiring smoke test (intentional throw)");
+    });
 }
 
 // Trust X-Forwarded-* headers only when we are running behind the ALB so the
@@ -378,6 +384,7 @@ if (!app.Environment.IsDevelopment())
 
 // Correlation ID must run before anything that wants to log with it.
 app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseSentryObservability();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
 // Admin Basic-Auth gate BEFORE static files so /admin/* HTML/JS/CSS is
