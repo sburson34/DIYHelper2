@@ -39,7 +39,14 @@ function loadSentryModule() {
     APP_PLATFORM: 'android',
     OS_VERSION: '33',
   }));
-  return require('../services/sentry');
+  const mod = require('../services/sentry');
+  // The shared @sburson34/mobile-shared/sentry gates captureException et al.
+  // on its module-level `enabled` flag, which only flips true after
+  // initSentry() runs successfully. Old DIYHelper2 sentry.ts gated on
+  // SENTRY_ENABLED directly, so these tests didn't need to call init first.
+  // Now they do — init here once and let each test exercise its own helper.
+  mod.initSentry();
+  return mod;
 }
 
 describe('initSentry', () => {
