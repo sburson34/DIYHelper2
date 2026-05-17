@@ -37,8 +37,6 @@ jobs:
           file: backend/DIYHelper2.Api/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          secrets: |
-            ghcr_read_token=${{ secrets.GHCR_READ_TOKEN }}
           tags: |
             ghcr.io/sburson34/diyhelper-api:latest
             ghcr.io/sburson34/diyhelper-api:${{ github.sha }}

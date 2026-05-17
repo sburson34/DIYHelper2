@@ -49,15 +49,6 @@ jobs:
   backend:
     name: Backend (build + test)
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    env:
-      # Read by ../nuget.config to authenticate to GHCR for the private
-      # Sburson.Shared.Backend package. The auto-issued GITHUB_TOKEN cannot
-      # read packages owned by a different repo, so we use an org PAT with
-      # read:packages scope, stored as the GHCR_READ_TOKEN org secret.
-      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
     defaults:
       run:
         working-directory: backend
@@ -99,11 +90,6 @@ jobs:
   security:
     name: Dependency vulnerability scan
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    env:
-      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
