@@ -74,5 +74,29 @@ public class HealthAndFeaturesEndpointsTests : IClassFixture<ApiFactory>
             Assert.Contains($"\"id\":\"{expectedCategory}\"", body);
     }
 
+    [Fact]
+    public async Task SecurityHeaders_PresentOnApiResponses()
+    {
+        // Defense-in-depth: SecurityHeadersMiddleware mirrors what the Caddy
+        // edge reverse proxy sets, so a direct hit to the container (e.g.
+        // bypassing the proxy during local debugging) still gets the same
+        // protections. Locking these in here prevents accidental drift.
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync("/api/health");
+
+        Assert.True(response.Headers.Contains("X-Content-Type-Options") ||
+            response.Content.Headers.Contains("X-Content-Type-Options"));
+
+        var combined = response.Headers.Concat(response.Content.Headers);
+        var headerNames = combined.Select(h => h.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Contains("X-Content-Type-Options", headerNames);
+        Assert.Contains("X-Frame-Options", headerNames);
+        Assert.Contains("Referrer-Policy", headerNames);
+        Assert.Contains("Cross-Origin-Resource-Policy", headerNames);
+        // Cache-Control is set for /api/* responses.
+        Assert.Contains("Cache-Control", headerNames);
+    }
+
     private record HealthResponse(string status, DateTime timestamp);
 }
