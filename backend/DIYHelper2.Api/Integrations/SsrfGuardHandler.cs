@@ -75,10 +75,15 @@ public class SsrfGuardHandler : DelegatingHandler
             if (b[0] == 192 && b[1] == 168) return true;
             // 169.254.0.0/16 (link-local, includes AWS IMDS 169.254.169.254)
             if (b[0] == 169 && b[1] == 254) return true;
-            // 0.0.0.0/8 (unspecified)
+            // 0.0.0.0/8 (unspecified; covers the literal 0.0.0.0)
             if (b[0] == 0) return true;
             // 100.64.0.0/10 (CGNAT)
             if (b[0] == 100 && (b[1] & 0xC0) == 64) return true;
+            // 127.0.0.0/8 fully (IPAddress.IsLoopback only matches 127.0.0.1;
+            // 127.x.y.z is reserved and routes to the local host on Linux).
+            if (b[0] == 127) return true;
+            // 255.255.255.255 limited broadcast
+            if (b[0] == 255 && b[1] == 255 && b[2] == 255 && b[3] == 255) return true;
             return false;
         }
 
@@ -86,6 +91,8 @@ public class SsrfGuardHandler : DelegatingHandler
         {
             if (ip.IsIPv6LinkLocal || ip.IsIPv6SiteLocal) return true;
             var b = ip.GetAddressBytes();
+            // :: (unspecified) — Linux treats this as the local host on connect.
+            if (IsAllZero(b)) return true;
             // fc00::/7 unique local
             if ((b[0] & 0xFE) == 0xFC) return true;
             // Mapped IPv4
@@ -94,5 +101,12 @@ public class SsrfGuardHandler : DelegatingHandler
         }
 
         return false;
+    }
+
+    private static bool IsAllZero(byte[] b)
+    {
+        for (int i = 0; i < b.Length; i++)
+            if (b[i] != 0) return false;
+        return true;
     }
 }
