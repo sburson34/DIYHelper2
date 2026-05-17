@@ -11,7 +11,8 @@ COPY nuget.config nuget.config
 COPY backend/DIYHelper2.slnx backend/
 COPY backend/DIYHelper2.Api/DIYHelper2.Api.csproj backend/DIYHelper2.Api/
 COPY backend/DIYHelper2.Tests/DIYHelper2.Tests.csproj backend/DIYHelper2.Tests/
-RUN --mount=type=secret,id=github_token,env=GITHUB_TOKEN \
+RUN --mount=type=secret,id=github_token \
+    GITHUB_TOKEN="$(cat /run/secrets/github_token)" \
     dotnet restore backend/DIYHelper2.Api/DIYHelper2.Api.csproj
 
 COPY backend/ backend/
