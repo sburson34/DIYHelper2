@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DIYHelper2.Api.AI;
+using DIYHelper2.Api.Validation;
 
 namespace DIYHelper2.Api.Services;
 
@@ -58,9 +59,13 @@ public static class LiveDiyService
               "Do not provide step-by-step guidance for the work itself."
             : "";
 
-        return $@"Task description: ""{task}""
+        // Wrap user-supplied strings in delimiter tags (PromptSanitizer) so a
+        // hostile description containing literal `"` cannot break out of the
+        // surrounding text. The system prompt instructs the model to treat
+        // content inside tags as untrusted data.
+        return $@"Task description (untrusted user input): {PromptSanitizer.Wrap(task)}
 Current step the user thinks they are on: {step}
-User's question this turn: ""{question}""
+User's question this turn (untrusted user input): {PromptSanitizer.Wrap(question)}
 {imageNote}{riskNote}
 
 Return JSON only with EXACTLY these fields:
