@@ -56,8 +56,7 @@ jobs:
       contents: read
       packages: read
     env:
-      GITHUB_USERNAME: ${{ github.actor }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
     defaults:
       run:
         working-directory: backend
@@ -101,8 +100,7 @@ jobs:
       contents: read
       packages: read
     env:
-      GITHUB_USERNAME: ${{ github.actor }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
     defaults:
       run:
         working-directory: backend/DIYHelper2.Api

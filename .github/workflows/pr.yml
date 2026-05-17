@@ -53,10 +53,11 @@ jobs:
       contents: read
       packages: read
     env:
-      # Used by ../nuget.config to authenticate to GHCR for the shared
-      # Sburson.Shared.Backend package.
-      GITHUB_USERNAME: ${{ github.actor }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Read by ../nuget.config to authenticate to GHCR for the private
+      # Sburson.Shared.Backend package. The auto-issued GITHUB_TOKEN cannot
+      # read packages owned by a different repo, so we use an org PAT with
+      # read:packages scope, stored as the GHCR_READ_TOKEN org secret.
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
     defaults:
       run:
         working-directory: backend
@@ -102,8 +103,7 @@ jobs:
       contents: read
       packages: read
     env:
-      GITHUB_USERNAME: ${{ github.actor }}
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GHCR_READ_TOKEN: ${{ secrets.GHCR_READ_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
