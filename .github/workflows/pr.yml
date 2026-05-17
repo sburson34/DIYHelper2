@@ -49,6 +49,14 @@ jobs:
   backend:
     name: Backend (build + test)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # Used by ../nuget.config to authenticate to GHCR for the shared
+      # Sburson.Shared.Backend package.
+      GITHUB_USERNAME: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: backend
@@ -90,6 +98,12 @@ jobs:
   security:
     name: Dependency vulnerability scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GITHUB_USERNAME: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 

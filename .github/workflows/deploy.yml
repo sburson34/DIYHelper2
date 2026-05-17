@@ -37,6 +37,10 @@ jobs:
           file: backend/DIYHelper2.Api/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          build-args: |
+            GITHUB_USERNAME=${{ github.actor }}
+          secrets: |
+            github_token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             ghcr.io/sburson34/diyhelper-api:latest
             ghcr.io/sburson34/diyhelper-api:${{ github.sha }}

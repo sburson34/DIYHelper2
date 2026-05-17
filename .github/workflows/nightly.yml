@@ -41,6 +41,12 @@ jobs:
   flaky-detect-backend:
     name: Flaky detect (xUnit x3)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GITHUB_USERNAME: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     defaults:
       run:
         working-directory: backend
