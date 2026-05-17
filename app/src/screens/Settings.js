@@ -22,7 +22,7 @@ import { requestServerSideDeletion } from '../api/backendClient';
 // Privacy-policy SLA: server-side deletion within 30 days of a verified request.
 // Falls back to a pre-filled mailto: when the backend is unreachable so the user
 // always has a path to submit the request and we honor the commitment.
-const PRIVACY_CONTACT_EMAIL = 'bursonproperties@gmail.com';
+const PRIVACY_CONTACT_EMAIL = 'bursons@gmail.com';
 
 export default function Settings() {
   const { t, language, setLanguage, isTranslating, translationError } = useTranslation();
