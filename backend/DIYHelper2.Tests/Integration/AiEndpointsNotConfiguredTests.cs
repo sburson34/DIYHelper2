@@ -10,6 +10,7 @@ namespace DIYHelper2.Tests.Integration;
 /// the mobile app relies on to show a friendly "service unavailable" banner
 /// instead of crashing.
 /// </summary>
+[Collection("SerialEnv")]
 public class AiEndpointsNotConfiguredTests : IClassFixture<ApiFactory>
 {
     private readonly ApiFactory _factory;

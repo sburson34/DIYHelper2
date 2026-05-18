@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <!--
+      Live contract suite — exercises real OpenAI / Anthropic vision endpoints
+      against tiny canned images. Skipped unless RUN_LIVE_CONTRACT=true AND
+      the relevant provider key is in the env. Cost: <$0.001 per test run.
+      NEVER referenced from pr.yml — only nightly.yml + workflow_dispatch.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\DIYHelper2.Api\DIYHelper2.Api.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -15,6 +15,7 @@ namespace DIYHelper2.Tests.Integration;
 /// limiter runs before the handler, so we see 503s until the quota drains
 /// and 429s after — without paying for any actual AI calls.
 /// </summary>
+[Collection("SerialEnv")]
 public class RateLimiterTests : IClassFixture<ApiFactory>
 {
     private readonly ApiFactory _factory;

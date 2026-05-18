@@ -51,6 +51,7 @@ export default function Diagnose() {
           value={description}
           onChangeText={setDescription}
           accessibilityLabel={t('diagnose_title')}
+          testID="diagnose-description-input"
         />
         <TouchableOpacity
           style={styles.runBtn}
@@ -59,6 +60,7 @@ export default function Diagnose() {
           accessibilityLabel={t('diagnose_button')}
           accessibilityRole="button"
           accessibilityState={{ disabled: loading, busy: loading }}
+          testID="diagnose-run-button"
         >
           {loading ? <ActivityIndicator color="#fff" /> : (
             <>

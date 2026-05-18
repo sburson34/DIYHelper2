@@ -90,6 +90,7 @@ export default function Emergency() {
             onPress={() => callPro('911')}
             accessibilityLabel={t('emergency_call_911')}
             accessibilityRole="button"
+            testID="emergency-banner-call-911"
           >
             <Icon name="call" size={20} color="#fff" />
             <Text style={styles.call911Text}>{t('emergency_call_911')}</Text>
@@ -114,6 +115,7 @@ export default function Emergency() {
               accessibilityLabel={s.buttonLabel}
               accessibilityHint={s.label}
               accessibilityRole="button"
+              testID={`emergency-scenario-${s.id}-cta`}
             >
               <Icon name="call" size={18} color="#fff" />
               <Text style={styles.callBtnText}>{s.buttonLabel}</Text>
