@@ -134,16 +134,14 @@ describe('Diagnose', () => {
 
   it('Diagnose button calls backendClient.diagnoseProblem with the description', async () => {
     const Diagnose = require('../screens/Diagnose').default;
-    const { getAllByLabelText } = renderScreen(Diagnose);
+    const { getByTestId } = renderScreen(Diagnose);
 
-    // The TextInput and the screen header both use the same a11y label;
-    // the first match is the input (FlatList scrolls top-down).
+    // Use stable testIDs added to the input + run button so this test
+    // doesn't break if the i18n string or the screen header copy changes.
     const description = 'water under the sink, smells musty';
-    const [input] = getAllByLabelText(/what's wrong/i);
-    fireEvent.changeText(input, description);
+    fireEvent.changeText(getByTestId('diagnose-description-input'), description);
 
-    const buttons = getAllByLabelText(/^diagnose$/i);
-    await act(async () => { fireEvent.press(buttons[0]); });
+    await act(async () => { fireEvent.press(getByTestId('diagnose-run-button')); });
 
     await waitFor(() => expect(diagnoseProblem).toHaveBeenCalledTimes(1));
     expect(diagnoseProblem.mock.calls[0][0]).toMatchObject({ description, language: 'en' });
@@ -151,10 +149,9 @@ describe('Diagnose', () => {
 
   it('Diagnose button does NOT call the API when description is empty', async () => {
     const Diagnose = require('../screens/Diagnose').default;
-    const { getAllByLabelText } = renderScreen(Diagnose);
+    const { getByTestId } = renderScreen(Diagnose);
 
-    const buttons = getAllByLabelText(/^diagnose$/i);
-    await act(async () => { fireEvent.press(buttons[0]); });
+    await act(async () => { fireEvent.press(getByTestId('diagnose-run-button')); });
 
     // No network call when validation rejects — important for not burning
     // OpenAI tokens on accidental taps with an empty field.
@@ -243,14 +240,13 @@ describe('Emergency', () => {
 
   it('Call 911 button opens the tel:911 deep link', async () => {
     const Emergency = require('../screens/Emergency').default;
-    const { getAllByLabelText } = renderScreen(Emergency);
+    const { getByTestId } = renderScreen(Emergency);
 
-    // There are 3 "Call 911" buttons on the screen (top banner + gas + fire
-    // scenarios). All three route through callPro('911') → tel:911.
-    const buttons = getAllByLabelText(/call 911/i);
-    expect(buttons.length).toBeGreaterThan(0);
-
-    await act(async () => { fireEvent.press(buttons[0]); });
+    // The banner Call 911 CTA gets a stable testID so this test doesn't
+    // hinge on which of the three on-screen "Call 911" buttons React Test
+    // Renderer happens to return first. The gas + fire scenario CTAs also
+    // route through callPro('911'); the banner is the canonical entry point.
+    await act(async () => { fireEvent.press(getByTestId('emergency-banner-call-911')); });
     await waitFor(() => expect(Linking.openURL).toHaveBeenCalled());
     expect(Linking.openURL.mock.calls[0][0]).toBe('tel:911');
   });

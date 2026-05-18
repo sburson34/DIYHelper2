@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using DIYHelper2.Tests.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
+using Sburson.Shared.Web;
 
 namespace DIYHelper2.Tests.Integration;
 
@@ -233,6 +234,30 @@ public class SecurityRegressionTests
             Assert.Equal("openai-secret-1", store.OpenAiKey);
             Assert.Equal("anthropic-secret-2", store.AnthropicKey);
             Assert.NotEqual(store.OpenAiKey, store.AnthropicKey);
+        }
+    }
+
+    // ── Shared middleware integration ─────────────────────────────────
+
+    public class SharedMiddlewareWired : IClassFixture<ApiFactory>
+    {
+        private readonly ApiFactory _factory;
+        public SharedMiddlewareWired(ApiFactory factory) => _factory = factory;
+
+        [Fact]
+        public async Task CorrelationIdMiddleware_IsResolvableFromDi_AndEchoesHeader()
+        {
+            // Two assertions, one pin: (1) the type from Sburson.Shared.Web
+            // is wired into the request pipeline (proven by the X-Correlation-ID
+            // response header), and (2) the package the build resolved against
+            // still ships the expected middleware class. Together these guard
+            // against an accidental Sburson.Shared.Backend downgrade silently
+            // dropping the shared web pipeline.
+            _ = typeof(CorrelationIdMiddleware); // forces a compile-time reference
+            var client = _factory.CreateClient();
+            var resp = await client.GetAsync("/api/health");
+            Assert.True(resp.Headers.Contains("X-Correlation-ID"),
+                "Shared CorrelationIdMiddleware must be wired into the pipeline so every response echoes X-Correlation-ID.");
         }
     }
 

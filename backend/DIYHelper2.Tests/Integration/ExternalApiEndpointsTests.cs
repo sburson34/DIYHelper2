@@ -185,11 +185,10 @@ public class ExternalApiEndpointsTests : IClassFixture<ApiFactory>, IAsyncLifeti
                 base64Image = Convert.ToBase64String(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }),
                 mimeType = "image/jpeg",
             });
-            // 503 is the correct shape when the key isn't there. Mindee
-            // unconfigured ≠ a transient error — the endpoint is dark.
-            Assert.True(resp.StatusCode == HttpStatusCode.ServiceUnavailable
-                     || resp.StatusCode == HttpStatusCode.BadRequest,
-                $"Expected 503 or 400, got {(int)resp.StatusCode}");
+            // Endpoint short-circuits with 503 / not-configured when
+            // MINDEE_API_KEY is absent. That's the contract the mobile client
+            // relies on to hide the receipt-OCR CTA — keep it tight.
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
         }
         finally
         {
@@ -256,10 +255,12 @@ public class ExternalApiEndpointsTests : IClassFixture<ApiFactory>, IAsyncLifeti
             base64Image = Convert.ToBase64String(bytes),
             mimeType = "image/png",
         });
-        // Either 200 (well-formed payload) or 400 (the PaintColorClient
-        // rejected a too-small image) — either way we proved the handler ran
-        // without crashing. The downstream client has its own dedicated tests.
-        Assert.True((int)resp.StatusCode < 500,
-            $"Expected <500, got {(int)resp.StatusCode}");
+        // PaintColorClient always returns a match against the bundled
+        // palette; the endpoint has no failure path past the base64 decode.
+        // Anything other than 200 here is a regression worth catching.
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("dominantHex", body);
+        Assert.Contains("matches", body);
     }
 }
