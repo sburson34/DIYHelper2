@@ -1,6 +1,8 @@
 using System.Data.Common;
+using System.Net.Http;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Data;
+using DIYHelper2.Api.Integrations;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -40,6 +42,22 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         Environment.SetEnvironmentVariable("ADMIN_PASSWORD", AdminPassword);
     }
 
+    /// <summary>
+    /// Ensures every fresh ApiFactory starts from a known env-var baseline,
+    /// regardless of what a previous test class (e.g. KillSwitchApiFactory)
+    /// left in the process. This protects against cross-fixture bleed when
+    /// multiple test classes in the SerialEnv collection mutate process env.
+    /// Subclasses that intentionally set an env var should do so AFTER
+    /// calling the base constructor.
+    /// </summary>
+    public ApiFactory()
+    {
+        // FeatureFlags reads AI_KILL_SWITCH at singleton construction. Force
+        // it OFF here so a leftover "true" from KillSwitchApiFactory doesn't
+        // poison a sibling test class.
+        Environment.SetEnvironmentVariable("AI_KILL_SWITCH", null);
+    }
+
     private DbConnection? _connection;
 
     /// <summary>
@@ -49,6 +67,23 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     /// on what the handler sent.
     /// </summary>
     public FakeAIVisionClient FakeAi { get; } = new();
+
+    /// <summary>
+    /// One fake HTTP handler per typed-HttpClient external service. Every
+    /// outbound HTTP call goes through one of these in tests, so nothing
+    /// reaches the network. Per-test code sets <c>.Responder</c> on the
+    /// handler it cares about (e.g., <c>FakeWeatherHandler.Responder = _ =>
+    /// Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content =
+    /// new StringContent(...) });</c>).
+    /// </summary>
+    public FakeHttpMessageHandler FakeWeatherHandler { get; } = new();
+    public FakeHttpMessageHandler FakeRedditHandler { get; } = new();
+    public FakeHttpMessageHandler FakePubChemHandler { get; } = new();
+    public FakeHttpMessageHandler FakeAttomHandler { get; } = new();
+    public FakeHttpMessageHandler FakeReceiptOcrHandler { get; } = new();
+    public FakeHttpMessageHandler FakeYouTubeHandler { get; } = new();
+    public FakeHttpMessageHandler FakeModerationHandler { get; } = new();
+    public FakeHttpMessageHandler FakePlayIntegrityHandler { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -85,6 +120,21 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
             // AiKeyStore stays empty by default — keeps the "not configured"
             // 503 tests working. Tests that want to reach the AI path call
             // SetOpenAiKey() after Services is built.
+
+            // Replace primary HTTP handlers for every typed HttpClient that
+            // hits an external API. Each test gets a deterministic stub it can
+            // shape via the exposed Fake*Handler fields. The SsrfGuardHandler
+            // delegating registration in Program.cs wraps these, so SSRF tests
+            // continue to assert blocking against the real guard.
+            services.ConfigureHttpClientDefaults(b => { /* shared defaults stay */ });
+            services.AddHttpClient<WeatherClient>().ConfigurePrimaryHttpMessageHandler(() => FakeWeatherHandler);
+            services.AddHttpClient<RedditClient>().ConfigurePrimaryHttpMessageHandler(() => FakeRedditHandler);
+            services.AddHttpClient<PubChemClient>().ConfigurePrimaryHttpMessageHandler(() => FakePubChemHandler);
+            services.AddHttpClient<AttomClient>().ConfigurePrimaryHttpMessageHandler(() => FakeAttomHandler);
+            services.AddHttpClient<ReceiptOcrClient>().ConfigurePrimaryHttpMessageHandler(() => FakeReceiptOcrHandler);
+            services.AddHttpClient<YouTubeClient>().ConfigurePrimaryHttpMessageHandler(() => FakeYouTubeHandler);
+            services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().ConfigurePrimaryHttpMessageHandler(() => FakeModerationHandler);
+            services.AddHttpClient<DIYHelper2.Api.AI.PlayIntegrityVerifier>().ConfigurePrimaryHttpMessageHandler(() => FakePlayIntegrityHandler);
         });
     }
 

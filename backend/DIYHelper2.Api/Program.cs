@@ -454,20 +454,11 @@ app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp =
 // from /api/health so the container shows healthy even before any DB work.
 app.MapGet("/healthz", () => Results.Ok());
 
-// RFC 9116 responsible-disclosure contact. Intentionally public — bypassed
-// by AppKeyMiddleware so security researchers can reach it without the key.
-app.MapGet("/.well-known/security.txt", () =>
-{
-    var body = string.Join("\n", new[]
-    {
-        "Contact: mailto:bursons@gmail.com",
-        "Expires: 2027-04-22T00:00:00.000Z",
-        "Preferred-Languages: en",
-        "Canonical: https://api.diyhelper.org/.well-known/security.txt",
-        "",
-    });
-    return Results.Text(body, "text/plain; charset=utf-8");
-});
+// RFC 9116 responsible-disclosure contact is served by the earlier
+// MapGet("/.well-known/security.txt", ...) registration above, which reads
+// from wwwroot/.well-known/security.txt. A previous duplicate inline
+// MapGet here was removed — keeping two registrations for the same route
+// triggers AmbiguousMatchException at request time. See ComplianceFilesTests.
 
 // In-memory community projects store (#18). Replace with DB once schema is settled.
 // ConcurrentQueue lets POST and GET run without serialising on a lock.
