@@ -86,8 +86,13 @@ jobs:
         run: dotnet build DIYHelper2.slnx --no-restore --configuration Release
 
       - name: Test
+        # Only the fast unit + integration project here. DIYHelper2.Tests.Live
+        # makes real OpenAI / Anthropic calls and lives in nightly.yml's
+        # live-contract job; its tests would skip on a PR anyway (the
+        # LiveContractFactAttribute auto-skips without RUN_LIVE_CONTRACT)
+        # but pointing at the single project is faster and unambiguous.
         run: >
-          dotnet test DIYHelper2.slnx
+          dotnet test DIYHelper2.Tests/DIYHelper2.Tests.csproj
           --no-build
           --configuration Release
           --logger "trx;LogFileName=test-results.trx"

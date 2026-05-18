@@ -70,3 +70,40 @@ jobs:
             echo "=== xUnit run #$i ==="
             dotnet test DIYHelper2.slnx --logger "console;verbosity=minimal" || exit 1
           done
+
+  live-contract:
+    name: Live contract suite (Anthropic + OpenAI vision)
+    runs-on: ubuntu-latest
+    # Don't fail the nightly if a provider rate-limits us or has a brief
+    # outage — the rest of the nightly should still go green.
+    continue-on-error: true
+    permissions:
+      contents: read
+      packages: read
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_LIVE_CONTRACT: 'true'
+      OPENAI_API_KEY: ${{ secrets.LIVE_OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.LIVE_ANTHROPIC_API_KEY }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - run: dotnet restore DIYHelper2.slnx
+
+      - name: Run live contract suite
+        # The LiveContractFactAttribute auto-skips tests whose RequiredEnv is
+        # not set, so a partial-secret config still surfaces useful coverage.
+        # Estimated cost per run: <$0.01 across both providers (1×1 PNG +
+        # single-token "OK" reply on Claude Haiku + GPT-4o).
+        run: >
+          dotnet test DIYHelper2.Tests.Live/DIYHelper2.Tests.Live.csproj
+          --configuration Release
+          --logger "console;verbosity=normal"
