@@ -6,8 +6,10 @@ name: PR validation
 
 on:
   pull_request:
+    paths-ignore: ['docs/**', '**/*.md']
   push:
     branches: [main]
+    paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
 concurrency:
@@ -108,43 +110,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  security:
-    name: Dependency vulnerability scan
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: app/package-lock.json
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '10.0.x'
-          dotnet-quality: 'preview'
-
-      - name: npm audit (app)
-        working-directory: app
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          npm ci --ignore-scripts
-          npm audit --audit-level=high --omit=dev
-
-      - name: dotnet vulnerable packages (backend)
-        working-directory: backend
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          dotnet restore DIYHelper2.slnx
-          OUTPUT=$(dotnet list DIYHelper2.slnx package --vulnerable --include-transitive 2>&1)
-          echo "$OUTPUT"
-          if echo "$OUTPUT" | grep -qi "has the following vulnerable packages"; then
-            echo "::error::dotnet reported vulnerable NuGet packages in backend"
-            exit 1
-          fi
+# Dependency vulnerability scan moved to nightly.yml. Deps rarely change
+# between commits, so per-PR scans mostly burned minutes confirming the
+# same baseline. Nightly cron + workflow_dispatch is the new cadence.

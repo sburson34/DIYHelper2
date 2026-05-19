@@ -5,6 +5,11 @@ name: E2E (Maestro)
 # PRs on this. Run before cutting a release or when touching navigation
 # / screen-mount paths.
 #
+# Dispatch-only (no `pull_request:` trigger). Maestro on macos-latest is
+# 10x the Linux runner rate, so a PR trigger that boots an emulator just
+# to fail-fast would burn ~5 effective minutes per PR. Run manually
+# before a release or when touching navigation / screen-mount paths.
+#
 # Required secrets:
 #   None for the offline flows (smoke-launch, drawer-navigation,
 #   settings-theme). The "golden-path" flow needs the deployed backend

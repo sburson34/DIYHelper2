@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# Pre-push hook: run the fast PR-CI checks locally so a broken push never
+# burns GitHub Actions minutes confirming it. Mirrors the jobs in
+# .github/workflows/pr.yml (backend + frontend), minus the integration
+# tests that need Docker (those run in CI where Testcontainers is wired).
+#
+# Activate this hook once per checkout:
+#     git config core.hooksPath .githooks
+#
+# Skip a one-off push (e.g. WIP branches):
+#     SKIP_PREPUSH=1 git push
+#
+# What runs (~30-60s):
+#   - cd backend && dotnet build (Release, no restore on warm cache)
+#   - cd backend && dotnet test --filter "Category!=Network&Category!=Integration"
+#   - cd app && npm run lint
+#   - cd app && npm run test:ci  (Jest, no coverage)
+#
+# What does NOT run locally:
+#   - Testcontainers integration tests (need Docker)
+#   - Live network tests (need ALLOW_NETWORK_TESTS=1)
+#   - Maestro / Playwright e2e
+#   - Dependency vulnerability scan (runs nightly in CI)
+
+set -euo pipefail
+
+if [[ "${SKIP_PREPUSH:-0}" == "1" ]]; then
+  echo "[pre-push] SKIP_PREPUSH=1 — bypassing local checks."
+  exit 0
+fi
+
+# Skip on pushes to branches that have no source changes (e.g. tag pushes).
+changed=$(git diff --name-only "@{push}" HEAD 2>/dev/null || git diff --name-only origin/main HEAD 2>/dev/null || echo "")
+if [[ -z "$changed" ]]; then
+  echo "[pre-push] No local changes vs upstream — skipping."
+  exit 0
+fi
+
+needs_backend=$(echo "$changed" | grep -E '^backend/' || true)
+needs_app=$(echo "$changed" | grep -E '^app/' || true)
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+if [[ -n "$needs_backend" ]]; then
+  echo "[pre-push] backend changed — building + running fast tests..."
+  pushd backend >/dev/null
+  dotnet build --configuration Release --nologo --verbosity quiet
+  # Filter excludes Network (gated live tests) + Integration (Docker-only)
+  # so the hook stays under a minute on a warm cache.
+  dotnet test --no-build --configuration Release \
+    --filter "Category!=Network&Category!=Integration" \
+    --logger "console;verbosity=minimal" \
+    --nologo
+  popd >/dev/null
+fi
+
+if [[ -n "$needs_app" ]]; then
+  echo "[pre-push] app changed — linting + jest..."
+  pushd app >/dev/null
+  npm run lint -- --max-warnings=200
+  CI=true npx jest --ci --reporters=default
+  popd >/dev/null
+fi
+
+echo "[pre-push] All checks passed."
