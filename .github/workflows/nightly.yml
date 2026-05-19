@@ -5,9 +5,10 @@ name: Nightly extended
 # repeat runs, dependency drift check, and a publish-deploy dry run.
 
 on:
-  schedule:
-    # 07:00 UTC = 03:00 ET, outside normal working hours.
-    - cron: '0 7 * * *'
+  # schedule cron disabled pre-launch — re-enable at launch
+  # (saves live-contract API calls against Anthropic + OpenAI)
+  # schedule:
+  #   - cron: '0 7 * * *'   # 07:00 UTC = 03:00 ET
   workflow_dispatch:
 
 jobs:

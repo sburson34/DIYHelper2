@@ -4,9 +4,11 @@ name: Full validation (coverage)
 # artifacts for both frontend and backend. Expected to take 10-20 minutes.
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '0 8 * * 0'   # Sundays 08:00 UTC — pre-launch cadence
   workflow_dispatch:
+  # push:                  # disabled pre-launch — re-enable at launch
+  #   branches: [main]
 
 concurrency:
   group: full-${{ github.ref }}
