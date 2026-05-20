@@ -91,6 +91,13 @@ public class ApiFactory : BaseApiFactory<Program>
             // Replace the production DbContext registration with one bound to
             // BaseApiFactory's per-fixture backend (Postgres-via-Testcontainers
             // in CI, SQLite-in-memory on dev machines without Docker).
+            //
+            // RemoveAllDatabaseProviders (Sburson.Shared.Testing 0.1.2) strips
+            // every EF Core + Npgsql service the production AddDbContext
+            // registered. Without it EF Core sees two providers on the
+            // SQLite-fallback path (which CI uses) and throws on first
+            // request. Same fix that landed in ArgumentRef + LandscapeHelper.
+            services.RemoveAllDatabaseProviders();
             services.RemoveAll<DbContextOptions<AppDbContext>>();
             services.RemoveAll<AppDbContext>();
 
