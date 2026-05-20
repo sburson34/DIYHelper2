@@ -1,6 +1,7 @@
 using System.Text.Json;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Validation;
+using Sburson.Shared.AI;
 
 namespace DIYHelper2.Api.Services;
 

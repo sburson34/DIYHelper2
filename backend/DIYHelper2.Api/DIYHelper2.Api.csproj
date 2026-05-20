@@ -7,7 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sburson.Shared.Backend" Version="0.1.1" />
+    <PackageReference Include="Sburson.Shared.Backend" Version="0.5.1" />
     <PackageReference Include="AWSSDK.SecretsManager" Version="4.0.4.15" />
     <PackageReference Include="AWSSDK.SimpleEmail" Version="4.0.2.25" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
