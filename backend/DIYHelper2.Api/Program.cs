@@ -17,6 +17,7 @@ using DIYHelper2.Api.Middleware;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Integrations;
 using DIYHelper2.Api.Validation;
+using Sburson.Shared.AI;
 using Sburson.Shared.Email;
 using Sburson.Shared.FeatureFlags;
 using Sburson.Shared.Http;
