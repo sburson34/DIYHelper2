@@ -25,7 +25,8 @@ jest.mock('../mlkit/poseDetection', () => ({
 }));
 
 const WorkshopARScreen = require('../screens/WorkshopARScreen').default;
-const { renderScreen, fireEvent } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent } = require('@testing-library/react-native');
 
 describe('WorkshopARScreen', () => {
   it('tapping Done navigates back to WorkshopSteps with completedStepIndex', () => {

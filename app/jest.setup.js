@@ -1,12 +1,33 @@
-// Global mocks for React Native and Expo modules
+// Jest setup — shared mocks from @sburson34/mobile-shared/testing plus the
+// DIY-specific stubs the shared package doesn't know about (DIY i18n context,
+// react-native-tts, expo-speech-recognition, expo-audio).
+//
+// The shared call installs jest.mock(...) for:
+//   - @react-native-async-storage/async-storage (stateful in-memory)
+//   - expo-secure-store, expo-notifications, expo-constants
+//   - @sentry/react-native
+//   - react-native-safe-area-context (real React contexts, zero insets)
+//   - @expo/vector-icons (every family becomes a no-op host)
+//   - react-native-gesture-handler (passthrough)
+//   - react-native-reanimated (passthrough)
+//
+// Anything else DIY relies on stays below.
 
-// AsyncStorage mock
-jest.mock('@react-native-async-storage/async-storage', () => {
+const { setupSharedJestMocks } = require('@sburson34/mobile-shared/testing');
+setupSharedJestMocks();
+
+// AsyncStorage — override the shared package's Map-backed mock with one
+// backed by a plain object exposed as `_store`. DIY's storage.test.js asserts
+// directly against `AsyncStorage._store['@analyze_cache']` (a dict, not a
+// Map), so the shared mock breaks the cache-eviction assertion. Same
+// jest.doMock dance as below: we run AFTER setupSharedJestMocks() so this
+// registration wins.
+jest.doMock('@react-native-async-storage/async-storage', () => {
   const store = {};
   return {
     __esModule: true,
     default: {
-      getItem: jest.fn((key) => Promise.resolve(store[key] || null)),
+      getItem: jest.fn((key) => Promise.resolve(store[key] ?? null)),
       setItem: jest.fn((key, value) => {
         store[key] = value;
         return Promise.resolve();
@@ -19,33 +40,36 @@ jest.mock('@react-native-async-storage/async-storage', () => {
         Object.keys(store).forEach((key) => delete store[key]);
         return Promise.resolve();
       }),
+      getAllKeys: jest.fn(() => Promise.resolve(Object.keys(store))),
+      multiGet: jest.fn((keys) =>
+        Promise.resolve(keys.map((k) => [k, store[k] ?? null])),
+      ),
+      multiSet: jest.fn((pairs) => {
+        for (const [k, v] of pairs) store[k] = v;
+        return Promise.resolve();
+      }),
+      multiRemove: jest.fn((keys) => {
+        for (const k of keys) delete store[k];
+        return Promise.resolve();
+      }),
       _store: store,
       _reset: () => {
         Object.keys(store).forEach((key) => delete store[key]);
       },
     },
   };
-});
+}, { virtual: true });
 
-// React Native Platform mock — expose both default and named shapes so both
-// `import Platform from '...'` and `require('...').OS` work.
-jest.mock('react-native/Libraries/Utilities/Platform', () => {
-  const platform = {
-    OS: 'android',
-    Version: 33,
-    constants: { reactNativeVersion: { major: 0, minor: 83, patch: 0 } },
-    select: jest.fn((obj) => (obj ? obj.android ?? obj.native ?? obj.default : undefined)),
-    isTV: false,
-    isTesting: true,
-  };
-  return { __esModule: true, default: platform, ...platform };
-});
-
-// expo-secure-store mock — in-memory; tests exercise secureGet/secureSet paths
-// the same way they exercise AsyncStorage. `virtual: true` so the mock
-// resolves even if the package isn't installed (useful before `npm install`
-// has picked up the new dependency).
-jest.mock('expo-secure-store', () => {
+// expo-secure-store — override the shared package's stateless stub with a
+// stateful in-memory store + a `_reset()` escape hatch. DIY's storage.test.js
+// + several other suites call SecureStore._reset() in beforeEach to start
+// clean, so the shared mock (which lacks _reset) would NPE every test.
+//
+// jest.doMock (NOT jest.mock) is required here: jest.mock gets hoisted to
+// the top of the file by Babel and would run BEFORE setupSharedJestMocks(),
+// letting the shared mock overwrite it. jest.doMock isn't hoisted, so it
+// runs after the shared call and its registration wins.
+jest.doMock('expo-secure-store', () => {
   const store = {};
   return {
     __esModule: true,
@@ -64,108 +88,25 @@ jest.mock('expo-secure-store', () => {
   };
 }, { virtual: true });
 
-// Expo Constants mock
-jest.mock('expo-constants', () => ({
-  __esModule: true,
-  default: {
-    expoConfig: {
-      version: '1.0.0',
-      android: { versionCode: 1 },
-      ios: { buildNumber: '1' },
-      extra: {},
-    },
-    manifest: null,
-    nativeBuildVersion: '1',
-  },
-}));
-
-// Expo Notifications mock
-jest.mock('expo-notifications', () => ({
-  getPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
-  requestPermissionsAsync: jest.fn(() => Promise.resolve({ status: 'granted' })),
-  setNotificationChannelAsync: jest.fn(() => Promise.resolve()),
-  scheduleNotificationAsync: jest.fn(() => Promise.resolve('notif-id-123')),
-  cancelScheduledNotificationAsync: jest.fn(() => Promise.resolve()),
-  setNotificationHandler: jest.fn(),
-  AndroidImportance: { DEFAULT: 3 },
-}));
-
-// Sentry mock
-jest.mock('@sentry/react-native', () => ({
-  init: jest.fn(),
-  captureException: jest.fn(),
-  captureMessage: jest.fn(),
-  setUser: jest.fn(),
-  setTag: jest.fn(),
-  setContext: jest.fn(),
-  addBreadcrumb: jest.fn(),
-  withScope: jest.fn((cb) => {
-    const scope = {
-      setLevel: jest.fn(),
-      setTag: jest.fn(),
-      setExtra: jest.fn(),
-    };
-    cb(scope);
-  }),
-  wrap: jest.fn((component) => component),
-  reactNavigationIntegration: jest.fn(() => ({
-    registerNavigationContainer: jest.fn(),
-  })),
-  Severity: { Warning: 'warning', Error: 'error', Info: 'info', Fatal: 'fatal' },
-}));
-
-// react-native-safe-area-context — stub to plain View/passthrough
-jest.mock('react-native-safe-area-context', () => {
-  const React = require('react');
-  const { View } = require('react-native');
-  const pass = ({ children, ...rest }) => React.createElement(View, rest, children);
-  return {
-    SafeAreaProvider: pass,
-    SafeAreaView: pass,
-    SafeAreaInsetsContext: { Consumer: ({ children }) => children({ top: 0, bottom: 0, left: 0, right: 0 }) },
-    useSafeAreaInsets: () => ({ top: 0, bottom: 0, left: 0, right: 0 }),
-    useSafeAreaFrame: () => ({ x: 0, y: 0, width: 390, height: 844 }),
+// React Native Platform mock — expose both default and named shapes so both
+// `import Platform from '...'` and `require('...').OS` work.
+jest.mock('react-native/Libraries/Utilities/Platform', () => {
+  const platform = {
+    OS: 'android',
+    Version: 33,
+    constants: { reactNativeVersion: { major: 0, minor: 83, patch: 0 } },
+    select: jest.fn((obj) => (obj ? obj.android ?? obj.native ?? obj.default : undefined)),
+    isTV: false,
+    isTesting: true,
   };
+  return { __esModule: true, default: platform, ...platform };
 });
 
-// @expo/vector-icons — render icons as empty Views so name/size don't matter.
-jest.mock('@expo/vector-icons', () => {
-  const React = require('react');
-  const { View } = require('react-native');
-  const stub = (props) => React.createElement(View, { accessibilityLabel: props.accessibilityLabel || 'icon' });
-  return new Proxy({}, { get: () => stub });
-});
-
-// react-native-gesture-handler — minimal stub.
-jest.mock('react-native-gesture-handler', () => {
-  const React = require('react');
-  const { View } = require('react-native');
-  const pass = ({ children, ...rest }) => React.createElement(View, rest, children);
-  return {
-    GestureHandlerRootView: pass,
-    Swipeable: pass,
-    DrawerLayout: pass,
-    ScrollView: pass,
-    TouchableOpacity: require('react-native').TouchableOpacity,
-    TouchableWithoutFeedback: require('react-native').TouchableWithoutFeedback,
-    TouchableHighlight: require('react-native').TouchableHighlight,
-    State: {},
-    Directions: {},
-    gestureHandlerRootHOC: (c) => c,
-  };
-});
-
-// react-native-reanimated — use its provided mock when available.
-try {
-  jest.mock('react-native-reanimated', () => require('react-native-reanimated/mock'));
-} catch {
-  // If the mock isn't shipped in this version, ignore — tests that need it will opt in per-file.
-}
-
-// i18n — resolve keys against the English catalogue so tests can match the
+// DIY i18n — resolve keys against the English catalogue so tests can match the
 // same user-visible strings that the app renders. Fall back to the key name
 // when a key isn't in the catalogue, so pre-existing tests that asserted on
-// key strings continue to work.
+// key strings continue to work. The shared package doesn't ship this because
+// each app owns its own translations module.
 jest.mock('./src/i18n/I18nContext', () => {
   const React = require('react');
   const { translations } = require('./src/i18n/translations');
@@ -184,8 +125,8 @@ jest.mock('./src/i18n/I18nContext', () => {
   };
 });
 
-// react-native-tts — module loads under Jest (native side missing), so mock
-// explicitly to prevent runtime crashes when screens call Tts.stop() etc.
+// react-native-tts — DIY-only; module loads under Jest (native side missing),
+// so mock explicitly to prevent runtime crashes when screens call Tts.stop().
 jest.mock('react-native-tts', () => ({
   __esModule: true,
   default: {
@@ -201,7 +142,7 @@ jest.mock('react-native-tts', () => ({
   },
 }));
 
-// expo-speech-recognition — provide the hook and module shapes screens use.
+// expo-speech-recognition — provide the hook + module shapes screens use.
 jest.mock('expo-speech-recognition', () => ({
   useSpeechRecognitionEvent: jest.fn(),
   ExpoSpeechRecognitionModule: {
@@ -213,7 +154,7 @@ jest.mock('expo-speech-recognition', () => ({
   getSupportedLocales: jest.fn(() => Promise.resolve({ locales: [] })),
 }));
 
-// expo-audio — stub recorder APIs.
+// expo-audio — DIY uses the recorder API; stub it.
 jest.mock('expo-audio', () => ({
   useAudioRecorder: () => ({
     prepare: jest.fn(() => Promise.resolve()),
@@ -231,7 +172,7 @@ jest.mock('expo-audio', () => ({
 // we do not stub it globally because `backendClient.test.js` exercises the
 // real implementation.
 
-// Global fetch mock
+// Global fetch mock — resilience.test.tsx replaces this on a per-test basis.
 global.fetch = jest.fn();
 
 // __DEV__ global
@@ -243,5 +184,6 @@ jest.spyOn(console, 'warn').mockImplementation(() => {});
 jest.spyOn(console, 'log').mockImplementation(() => {});
 jest.spyOn(console, 'debug').mockImplementation(() => {});
 
-// Asset mock (for image imports)
+// Asset mock (for image imports — jest.config.js moduleNameMapper points at
+// this file for .png/.jpg/etc.)
 module.exports = 'test-asset-stub';

@@ -18,7 +18,8 @@ jest.mock('../components/PhotoAnnotator', () => {
 });
 
 const AnnotateScreen = require('../screens/AnnotateScreen').default;
-const { renderScreen, fireEvent } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent } = require('@testing-library/react-native');
 
 describe('AnnotateScreen', () => {
   it('onSave navigates to Capture with annotation payload', () => {

@@ -5,7 +5,8 @@ jest.mock('../api/backendClient', () => ({
 }));
 
 const Community = require('../screens/Community').default;
-const { renderScreen, fireEvent, waitFor } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent } = require('@testing-library/react-native');
 
 describe('Community screen', () => {
   it('tapping a community post navigates into NewProject > Result with the project', async () => {

@@ -21,15 +21,25 @@ jest.mock('../utils/storage', () => ({
 }));
 
 const HoneyDo = require('../screens/HoneyDo').default;
-const { renderScreen, fireEvent, waitFor, act } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent, act } = require('@testing-library/react-native');
 
 describe('HoneyDo list screen', () => {
   it('tapping a project navigates to nested ProjectDetail with correct params', async () => {
-    const { navigation, findByLabelText } = renderScreen(HoneyDo);
+    // Capture the focus listener registered by HoneyDo so we can invoke it
+    // by hand — the shared renderWithNav stubs `addListener` as a no-op.
+    const listeners = {};
+    const navOverride = {
+      addListener: jest.fn((event, cb) => {
+        listeners[event] = cb;
+        return () => { delete listeners[event]; };
+      }),
+    };
+    const { navigation, findByLabelText } = renderScreen(HoneyDo, { navigation: navOverride });
 
     // Simulate React Navigation emitting focus so the screen loads items.
     await act(async () => {
-      navigation.emit('focus');
+      listeners.focus && listeners.focus();
     });
 
     const item = await findByLabelText(/Project: Fix leaky faucet/);

@@ -41,16 +41,32 @@ jest.mock('../utils/captureBus', () => ({ subscribeReset: jest.fn(() => jest.fn(
 
 const { getMostRecentProject } = require('../utils/storage');
 const CaptureScreen = require('../screens/CaptureScreen').default;
-const { renderScreen, fireEvent, act, waitFor } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent, act } = require('@testing-library/react-native');
+
+// React Navigation listener-capture: the shared renderWithNav's default
+// `addListener` is a no-op jest.fn, but DIY screens load resume data only on
+// 'focus'. Override addListener so we can invoke the focus callback by hand.
+function withFocusEmitter() {
+  const listeners = {};
+  const navigation = {
+    addListener: jest.fn((event, cb) => {
+      listeners[event] = cb;
+      return () => { delete listeners[event]; };
+    }),
+  };
+  return { navigation, listeners };
+}
 
 describe('CaptureScreen', () => {
   it('contractor resume card navigates to ProjectDetail', async () => {
     getMostRecentProject.mockResolvedValueOnce({
       id: 'c-1', title: 'Fix roof', _list: 'contractor',
     });
-    const { navigation, findByText } = renderScreen(CaptureScreen);
+    const focus = withFocusEmitter();
+    const { navigation, findByText } = renderScreen(CaptureScreen, { navigation: focus.navigation });
 
-    await act(async () => { navigation.emit('focus'); });
+    await act(async () => { focus.listeners.focus && focus.listeners.focus(); });
 
     fireEvent.press(await findByText('Fix roof'));
 
@@ -64,9 +80,10 @@ describe('CaptureScreen', () => {
     getMostRecentProject.mockResolvedValueOnce({
       id: 'h-1', title: 'Paint wall', _list: 'honey-do',
     });
-    const { navigation, findByText } = renderScreen(CaptureScreen);
+    const focus = withFocusEmitter();
+    const { navigation, findByText } = renderScreen(CaptureScreen, { navigation: focus.navigation });
 
-    await act(async () => { navigation.emit('focus'); });
+    await act(async () => { focus.listeners.focus && focus.listeners.focus(); });
 
     fireEvent.press(await findByText('Paint wall'));
 

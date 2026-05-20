@@ -82,7 +82,7 @@ jest.spyOn(Alert, 'alert').mockImplementation(() => {});
 jest.spyOn(Linking, 'openURL').mockImplementation(() => Promise.resolve());
 
 const { fireEvent, waitFor, act } = require('@testing-library/react-native');
-const { renderScreen } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
 
 // ── AiConsentScreen ───────────────────────────────────────────────────
 
@@ -96,7 +96,7 @@ describe('AiConsentScreen', () => {
   it('accept button calls setAiConsent(true) and invokes onAccept', async () => {
     const AiConsentScreen = require('../screens/AiConsentScreen').default;
     const onAccept = jest.fn();
-    const { getByLabelText } = renderScreen(AiConsentScreen, { onAccept });
+    const { getByLabelText } = renderScreen(AiConsentScreen, { props: { onAccept } });
 
     await act(async () => {
       fireEvent.press(getByLabelText('I understand and accept'));
@@ -109,8 +109,7 @@ describe('AiConsentScreen', () => {
   it('decline button surfaces a confirmation Alert', () => {
     const AiConsentScreen = require('../screens/AiConsentScreen').default;
     const { getByLabelText } = renderScreen(AiConsentScreen, {
-      onAccept: jest.fn(),
-      onDecline: jest.fn(),
+      props: { onAccept: jest.fn(), onDecline: jest.fn() },
     });
 
     fireEvent.press(getByLabelText('Continue without AI features'));

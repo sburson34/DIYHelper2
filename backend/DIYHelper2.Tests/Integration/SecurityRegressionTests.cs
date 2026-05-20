@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using DIYHelper2.Tests.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
+using Sburson.Shared.Testing.Assertions;
 using Sburson.Shared.Web;
 
 namespace DIYHelper2.Tests.Integration;
@@ -192,6 +193,13 @@ public class SecurityRegressionTests
         private readonly ApiFactory _factory;
         public HeadersOnEveryResponse(ApiFactory factory) => _factory = factory;
 
+        /// <summary>
+        /// Cross-Origin-Resource-Policy is DIY-specific (added during the
+        /// 2026-05-17 audit). The X-Content-Type-Options / X-Frame-Options /
+        /// Referrer-Policy + correlation-ID trio is covered by
+        /// <see cref="SburonMiddlewarePipelinePin"/> below, which delegates to
+        /// the shared assertion.
+        /// </summary>
         [Theory]
         [InlineData("/api/health")]
         [InlineData("/api/features")]
@@ -205,11 +213,8 @@ public class SecurityRegressionTests
                 .Select(h => h.Key)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            // These are the four the audit pinned. Drift = explicit test
-            // failure rather than a silent header drop in middleware.
-            Assert.Contains("X-Content-Type-Options", headers);
-            Assert.Contains("X-Frame-Options", headers);
-            Assert.Contains("Referrer-Policy", headers);
+            // DIY adds CORP on top of the shared trio — pin it explicitly so a
+            // refactor that removes the dedicated middleware fails loudly.
             Assert.Contains("Cross-Origin-Resource-Policy", headers);
         }
     }
@@ -239,25 +244,26 @@ public class SecurityRegressionTests
 
     // ── Shared middleware integration ─────────────────────────────────
 
-    public class SharedMiddlewareWired : IClassFixture<ApiFactory>
+    /// <summary>
+    /// Delegates the audit-pinned middleware-pipeline check (correlation ID
+    /// in/out + X-Content-Type-Options / X-Frame-Options / Referrer-Policy)
+    /// to <see cref="MiddlewareAssertions.AssertSburonMiddlewareWiredAsync"/>
+    /// in the shared package. A future tweak (e.g. a new audited header)
+    /// lands in one place instead of every per-app copy.
+    /// </summary>
+    public class SburonMiddlewarePipelinePin : IClassFixture<ApiFactory>
     {
         private readonly ApiFactory _factory;
-        public SharedMiddlewareWired(ApiFactory factory) => _factory = factory;
+        public SburonMiddlewarePipelinePin(ApiFactory factory) => _factory = factory;
 
         [Fact]
-        public async Task CorrelationIdMiddleware_IsResolvableFromDi_AndEchoesHeader()
+        public Task Sburson_Middleware_Pipeline_Wires_CorrelationId_And_Security_Headers()
         {
-            // Two assertions, one pin: (1) the type from Sburson.Shared.Web
-            // is wired into the request pipeline (proven by the X-Correlation-ID
-            // response header), and (2) the package the build resolved against
-            // still ships the expected middleware class. Together these guard
-            // against an accidental Sburson.Shared.Backend downgrade silently
-            // dropping the shared web pipeline.
-            _ = typeof(CorrelationIdMiddleware); // forces a compile-time reference
-            var client = _factory.CreateClient();
-            var resp = await client.GetAsync("/api/health");
-            Assert.True(resp.Headers.Contains("X-Correlation-ID"),
-                "Shared CorrelationIdMiddleware must be wired into the pipeline so every response echoes X-Correlation-ID.");
+            // Compile-time reference into Sburson.Shared.Web so a silent
+            // downgrade that dropped the middleware class would fail to build
+            // rather than silently regress the pipeline check.
+            _ = typeof(CorrelationIdMiddleware);
+            return MiddlewareAssertions.AssertSburonMiddlewareWiredAsync(_factory, "/api/health");
         }
     }
 

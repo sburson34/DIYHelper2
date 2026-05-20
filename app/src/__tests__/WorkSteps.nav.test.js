@@ -23,7 +23,8 @@ jest.mock('expo-image-picker', () => ({
 }));
 
 const WorkSteps = require('../screens/WorkSteps').default;
-const { renderScreen, fireEvent } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent } = require('@testing-library/react-native');
 
 describe('WorkSteps screen', () => {
   it('AR Guide button navigates to WorkshopAR with step payload', () => {

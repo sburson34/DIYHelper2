@@ -24,13 +24,21 @@ jest.mock('../utils/notifications', () => ({
 }));
 
 const Contractors = require('../screens/Contractors').default;
-const { renderScreen, fireEvent, act } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent, act } = require('@testing-library/react-native');
 
 describe('Contractors list screen', () => {
   it('tapping a project navigates to nested ProjectDetail with contractor listType', async () => {
-    const { navigation, findByText } = renderScreen(Contractors);
+    const listeners = {};
+    const navOverride = {
+      addListener: jest.fn((event, cb) => {
+        listeners[event] = cb;
+        return () => { delete listeners[event]; };
+      }),
+    };
+    const { navigation, findByText } = renderScreen(Contractors, { navigation: navOverride });
 
-    await act(async () => { navigation.emit('focus'); });
+    await act(async () => { listeners.focus && listeners.focus(); });
 
     fireEvent.press(await findByText('Install new water heater'));
 
