@@ -1,32 +1,30 @@
-using System.Data.Common;
-using System.Net.Http;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Data;
 using DIYHelper2.Api.Integrations;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Sburson.Shared.Testing;
 
 namespace DIYHelper2.Tests.Infrastructure;
 
 /// <summary>
-/// Test host factory for API integration tests. Replaces the file-backed
-/// SQLite registration with an in-memory SQLite connection that lives for
-/// the lifetime of the factory — this keeps tests isolated and parallelizable
-/// while still exercising the real EF Core + SQLite stack (important because
-/// Program.cs runs raw <c>CREATE TABLE IF NOT EXISTS</c> statements that the
-/// EF InMemory provider would reject).
+/// Per-app test host factory. Inherits the heavy lifting from
+/// <see cref="BaseApiFactory{TProgram}"/> (Testcontainers Postgres in CI,
+/// SQLite-in-memory fallback on developer machines without Docker, per-fixture
+/// schema isolation, in-memory <c>ConfigOverrides</c>) and only overrides the
+/// app-specific DbContext registration plus DIY-domain Fake adapters.
 ///
 /// <para>
-/// Tests that need to stub the AI client can read <see cref="FakeAi"/> and
-/// set <see cref="FakeAIVisionClient.Responder"/> to return canned JSON
-/// for each call. The default responder returns <c>"{}"</c>.
+/// Tests that need to stub the AI client read <see cref="FakeAi"/> and set
+/// <see cref="FakeAIVisionClient.Responder"/> to return canned JSON. Tests that
+/// need to shape an external HTTP call (Weather, Reddit, PubChem, Attom,
+/// ReceiptOcr, YouTube, Moderation, PlayIntegrity) set <c>.Responder</c> on the
+/// matching <c>Fake*Handler</c> field.
 /// </para>
 /// </summary>
-public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
+public class ApiFactory : BaseApiFactory<Program>
 {
     // Fake admin credentials for AdminAuthMiddleware. Tests that hit
     // admin-gated surfaces (GET/PUT/DELETE /api/help-requests, GET /api/feedback)
@@ -58,8 +56,6 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         Environment.SetEnvironmentVariable("AI_KILL_SWITCH", null);
     }
 
-    private DbConnection? _connection;
-
     /// <summary>
     /// Stub AI client shared by every request made through this factory.
     /// Tests set <c>FakeAi.Responder</c> to shape the canned AI response for
@@ -68,14 +64,11 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     /// </summary>
     public FakeAIVisionClient FakeAi { get; } = new();
 
-    /// <summary>
-    /// One fake HTTP handler per typed-HttpClient external service. Every
-    /// outbound HTTP call goes through one of these in tests, so nothing
-    /// reaches the network. Per-test code sets <c>.Responder</c> on the
-    /// handler it cares about (e.g., <c>FakeWeatherHandler.Responder = _ =>
-    /// Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content =
-    /// new StringContent(...) });</c>).
-    /// </summary>
+    // One FakeHttpMessageHandler per typed-HttpClient external service. Every
+    // outbound HTTP call goes through one of these in tests, so nothing reaches
+    // the network. Per-test code sets `.Responder` on the handler it cares
+    // about. These now come from Sburson.Shared.Testing — same shape, single
+    // implementation across the portfolio.
     public FakeHttpMessageHandler FakeWeatherHandler { get; } = new();
     public FakeHttpMessageHandler FakeRedditHandler { get; } = new();
     public FakeHttpMessageHandler FakePubChemHandler { get; } = new();
@@ -87,34 +80,39 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
-        builder.UseEnvironment(Environments.Development);
+        // Lets BaseApiFactory layer ConfigOverrides + the per-fixture connection
+        // string on top of appsettings before our own service tweaks run.
+        base.ConfigureWebHost(builder);
+
+        builder.UseEnvironment("Development");
 
         builder.ConfigureServices(services =>
         {
-            // Remove the production DbContext registration.
-            var dbDescriptors = services
-                .Where(d => d.ServiceType == typeof(DbContextOptions<AppDbContext>)
-                         || d.ServiceType == typeof(AppDbContext))
-                .ToList();
-            foreach (var d in dbDescriptors) services.Remove(d);
-
-            // Shared open SQLite connection so every scope reuses the same
-            // in-memory database for the duration of the factory.
-            _connection = new SqliteConnection("DataSource=:memory:");
-            _connection.Open();
+            // Replace the production DbContext registration with one bound to
+            // BaseApiFactory's per-fixture backend (Postgres-via-Testcontainers
+            // in CI, SQLite-in-memory on dev machines without Docker).
+            //
+            // RemoveAllDatabaseProviders (Sburson.Shared.Testing 0.1.2) strips
+            // every EF Core + Npgsql service the production AddDbContext
+            // registered. Without it EF Core sees two providers on the
+            // SQLite-fallback path (which CI uses) and throws on first
+            // request. Same fix that landed in ArgumentRef + LandscapeHelper.
+            services.RemoveAllDatabaseProviders();
+            services.RemoveAll<DbContextOptions<AppDbContext>>();
+            services.RemoveAll<AppDbContext>();
 
             services.AddDbContext<AppDbContext>(options =>
             {
-                options.UseSqlite(_connection);
+                if (UseSqliteFallback)
+                    options.UseSqlite(ConnectionString);
+                else
+                    options.UseNpgsql(ConnectionString);
             });
 
-            // Replace the production IAIVisionClient with the test stub.
-            // Last registration wins for GetRequiredService, so this shadows
-            // the production factory registered in Program.cs.
-            var aiDescriptors = services
-                .Where(d => d.ServiceType == typeof(IAIVisionClient))
-                .ToList();
-            foreach (var d in aiDescriptors) services.Remove(d);
+            // Replace the production IAIVisionClient with the test stub. Last
+            // registration wins for GetRequiredService, so this shadows the
+            // production factory registered in Program.cs.
+            services.RemoveAll<IAIVisionClient>();
             services.AddSingleton<IAIVisionClient>(FakeAi);
 
             // AiKeyStore stays empty by default — keeps the "not configured"
@@ -126,7 +124,6 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
             // shape via the exposed Fake*Handler fields. The SsrfGuardHandler
             // delegating registration in Program.cs wraps these, so SSRF tests
             // continue to assert blocking against the real guard.
-            services.ConfigureHttpClientDefaults(b => { /* shared defaults stay */ });
             services.AddHttpClient<WeatherClient>().ConfigurePrimaryHttpMessageHandler(() => FakeWeatherHandler);
             services.AddHttpClient<RedditClient>().ConfigurePrimaryHttpMessageHandler(() => FakeRedditHandler);
             services.AddHttpClient<PubChemClient>().ConfigurePrimaryHttpMessageHandler(() => FakePubChemHandler);
@@ -155,9 +152,9 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     }
 
     /// <summary>
-    /// Populate the DI-resolved <see cref="AiKeyStore"/> with a non-empty
-    /// key so AI-backed endpoints can reach the (stubbed) AI client. Call
-    /// this from tests that want to exercise the full analyze pipeline.
+    /// Populate the DI-resolved <see cref="AiKeyStore"/> with a non-empty key
+    /// so AI-backed endpoints can reach the (stubbed) AI client. Call this
+    /// from tests that want to exercise the full analyze pipeline.
     /// </summary>
     public void SetOpenAiKey(string key)
     {
@@ -166,7 +163,7 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         store.OpenAiKey = key;
     }
 
-    public Task InitializeAsync()
+    public new Task InitializeAsync()
     {
         // Explicitly null out any AI keys Program.cs may have pulled from
         // ambient env vars at startup. Integration tests must be hermetic:
@@ -178,15 +175,5 @@ public class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         store.OpenAiKey = null;
         store.AnthropicKey = null;
         return Task.CompletedTask;
-    }
-
-    public new async Task DisposeAsync()
-    {
-        if (_connection is not null)
-        {
-            await _connection.DisposeAsync();
-            _connection = null;
-        }
-        await base.DisposeAsync();
     }
 }

@@ -105,7 +105,7 @@ jest.mock('@react-navigation/native', () => ({
   useFocusEffect: (cb) => { const cleanup = cb && cb(); return cleanup; },
 }));
 
-const { renderScreen } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
 
 const sampleProject = {
   title: 'Test project',
@@ -159,7 +159,7 @@ describe('screen smoke tests', () => {
     // eslint-disable-next-line jest/valid-title
     test(`${c.name} renders without throwing`, () => {
       const Component = require(c.module).default;
-      const { toJSON } = renderScreen(Component, { params: c.params, ...(c.extraProps || {}) });
+      const { toJSON } = renderScreen(Component, { params: c.params, props: c.extraProps || {} });
       expect(toJSON()).toBeTruthy();
     });
   }

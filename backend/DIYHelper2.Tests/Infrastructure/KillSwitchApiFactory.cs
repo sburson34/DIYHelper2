@@ -7,6 +7,12 @@ namespace DIYHelper2.Tests.Infrastructure;
 /// reliable way to assert the gate is enforced on every AI route from a
 /// single, dedicated test fixture.
 ///
+/// <para>
+/// Inherits the new <see cref="ApiFactory"/> (which itself inherits
+/// <see cref="Sburson.Shared.Testing.BaseApiFactory{TProgram}"/>), so it gets
+/// Testcontainers Postgres + SQLite-fallback for free.
+/// </para>
+///
 /// Restores the previous value of the env var on dispose to keep other test
 /// classes hermetic.
 /// </summary>

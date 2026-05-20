@@ -24,7 +24,8 @@ jest.mock('../services/monitoring', () => ({
 }));
 
 const ResultScreen = require('../screens/ResultScreen').default;
-const { renderScreen, fireEvent, act, waitFor } = require('./helpers/renderWithNav');
+const { renderWithNav: renderScreen } = require('@sburson34/mobile-shared/testing');
+const { fireEvent } = require('@testing-library/react-native');
 
 const sampleProject = {
   title: 'Fix sink',
