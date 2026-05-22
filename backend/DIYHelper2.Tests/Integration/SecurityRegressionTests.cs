@@ -145,6 +145,15 @@ public class SecurityRegressionTests
 
     // ── Moderation reject ─────────────────────────────────────────────
 
+    // All nested classes in this file join the SerialEnv collection so they
+    // run sequentially with AiKillSwitch / PlayIntegrityFailure. Those two
+    // mutate process-level env vars (AI_KILL_SWITCH, PLAY_INTEGRITY_*) that
+    // the shared FeatureFlags singleton + PlayIntegrityOptions factory read
+    // on resolution. Without serial-env serialization, a parallel test can
+    // observe a transient env-var state and fail intermittently with the
+    // wrong status code (e.g. expecting 503 from kill-switch but getting
+    // 502 from a misfiring PlayIntegrity check).
+    [Collection("SerialEnv")]
     public class ModerationReject : IClassFixture<ApiFactory>, IAsyncLifetime
     {
         private readonly ApiFactory _factory;
@@ -188,6 +197,7 @@ public class SecurityRegressionTests
 
     // ── Security headers ──────────────────────────────────────────────
 
+    [Collection("SerialEnv")]
     public class HeadersOnEveryResponse : IClassFixture<ApiFactory>
     {
         private readonly ApiFactory _factory;
@@ -221,6 +231,7 @@ public class SecurityRegressionTests
 
     // ── AI key independence ───────────────────────────────────────────
 
+    [Collection("SerialEnv")]
     public class AiKeyStoreIndependence : IClassFixture<ApiFactory>
     {
         private readonly ApiFactory _factory;
@@ -251,6 +262,7 @@ public class SecurityRegressionTests
     /// in the shared package. A future tweak (e.g. a new audited header)
     /// lands in one place instead of every per-app copy.
     /// </summary>
+    [Collection("SerialEnv")]
     public class SburonMiddlewarePipelinePin : IClassFixture<ApiFactory>
     {
         private readonly ApiFactory _factory;
@@ -269,6 +281,7 @@ public class SecurityRegressionTests
 
     // ── Non-AI 4xx paths for the remaining AI endpoints ──────────────
 
+    [Collection("SerialEnv")]
     public class AskHelperBadInput : IClassFixture<ApiFactory>
     {
         private readonly ApiFactory _factory;
@@ -288,6 +301,7 @@ public class SecurityRegressionTests
         }
     }
 
+    [Collection("SerialEnv")]
     public class LiveDiyBadInput : IClassFixture<ApiFactory>
     {
         private readonly ApiFactory _factory;
