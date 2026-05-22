@@ -22,6 +22,7 @@ using Sburson.Shared.DataDeletion;
 using Sburson.Shared.Email;
 using Sburson.Shared.FeatureFlags;
 using Sburson.Shared.Http;
+using Sburson.Shared.Observability;
 using Sburson.Shared.Web;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
@@ -29,10 +30,13 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
-using DIYHelper2.Api.Observability;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddSentryObservability();
+builder.AddSburonSentry(opts =>
+{
+    opts.AppSlug = "diyhelper2-api";
+    opts.AdditionalSensitiveHeaders.Add("X-Play-Integrity-Token");
+});
 
 // Add services to the container.
 builder.Services.AddOpenApi();
@@ -410,7 +414,7 @@ if (!app.Environment.IsDevelopment())
 
 // Correlation ID must run before anything that wants to log with it.
 app.UseMiddleware<CorrelationIdMiddleware>();
-app.UseSentryObservability();
+app.UseSburonSentry();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
 // Admin Basic-Auth gate BEFORE static files so /admin/* HTML/JS/CSS is
