@@ -1,14 +1,15 @@
 name: PR validation
 
-# Fast-feedback pipeline. Runs on every push and PR. Target: under 5 minutes
-# so developers get a pass/fail while the change is still fresh. Coverage and
-# the slower full-smoke tests run in `full.yml` (on merge to main) instead.
+# Pre-launch cost control: CI fires only on PR open / ready_for_review /
+# reopened — fixup pushes during a PR do NOT retrigger, and push to main
+# does NOT retrigger. Rerun manually via
+# `gh workflow run "PR validation" --ref <branch>` or close+reopen the
+# PR. Re-add the synchronize + push triggers before going to prod so
+# main regressions are caught automatically.
 
 on:
   pull_request:
-    paths-ignore: ['docs/**', '**/*.md']
-  push:
-    branches: [main]
+    types: [opened, ready_for_review, reopened]
     paths-ignore: ['docs/**', '**/*.md']
   workflow_dispatch:
 
