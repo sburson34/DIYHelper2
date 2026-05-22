@@ -1,8 +1,8 @@
-using DIYHelper2.Api.Observability;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Sburson.Shared.Observability;
 using Sentry;
 using Sentry.AspNetCore;
 using Sentry.Extensibility;
@@ -40,7 +40,7 @@ public class SentrySetupTests : IDisposable
             ["Sentry:Dsn"] = ""
         });
 
-        builder.AddSentryObservability();
+        builder.AddSburonSentry(o => o.AppSlug = "diyhelper2-api");
         using var app = builder.Build();
 
         Assert.False(SentrySdk.IsEnabled);
@@ -55,7 +55,7 @@ public class SentrySetupTests : IDisposable
             ["Sentry:Dsn"] = "https://abc@o0.ingest.sentry.io/0"
         });
 
-        builder.AddSentryObservability();
+        builder.AddSburonSentry(o => o.AppSlug = "diyhelper2-api");
         using var app = builder.Build();
 
         var options = app.Services.GetRequiredService<IOptions<SentryAspNetCoreOptions>>().Value;
