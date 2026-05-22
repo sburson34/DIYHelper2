@@ -4,10 +4,12 @@ name: Full validation (coverage)
 # artifacts for both frontend and backend. Expected to take 10-20 minutes.
 
 on:
-  schedule:
-    - cron: '0 8 * * 0'   # Sundays 08:00 UTC — pre-launch cadence
+  # Pre-launch cost control: cron disabled to skip the weekly broader-test
+  # run. Re-enable both schedule + push:main before going to prod.
   workflow_dispatch:
-  # push:                  # disabled pre-launch — re-enable at launch
+  # schedule:
+  #   - cron: '0 8 * * 0'   # Sundays 08:00 UTC
+  # push:
   #   branches: [main]
 
 concurrency:
@@ -18,6 +20,7 @@ jobs:
   frontend-coverage:
     name: Frontend coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read
@@ -59,6 +62,7 @@ jobs:
   backend-coverage:
     name: Backend coverage
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read
@@ -103,6 +107,7 @@ jobs:
   build-verify-backend:
     name: Publish-build verify (backend)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: read
