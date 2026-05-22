@@ -14,6 +14,7 @@ using DIYHelper2.Api;
 using DIYHelper2.Api.Data;
 using DIYHelper2.Api.Models;
 using DIYHelper2.Api.Middleware;
+using Sburson.Shared.Mobile;
 using DIYHelper2.Api.AI;
 using DIYHelper2.Api.Integrations;
 using DIYHelper2.Api.Validation;
@@ -151,8 +152,27 @@ builder.Services.AddHttpClient<PubChemClient>().AddHttpMessageHandler<SsrfGuardH
 builder.Services.AddHttpClient<AttomClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<SsrfGuardHandler>();
-builder.Services.AddHttpClient<DIYHelper2.Api.AI.PlayIntegrityVerifier>().AddHttpMessageHandler<SsrfGuardHandler>();
-builder.Services.AddSingleton<DIYHelper2.Api.Services.DeviceQuotaService>();
+// Mobile abuse-prevention from Sburson.Shared.Mobile. Env vars are read
+// lazily inside the Transient factory delegate so test fixtures that
+// set PLAY_INTEGRITY_* / DAILY_DEVICE_AI_LIMIT after the host builds
+// (e.g. via IAsyncLifetime.InitializeAsync) still take effect — matches
+// the prior local-class behavior that read env vars per construction.
+builder.Services.AddTransient(_ => new Sburson.Shared.Mobile.PlayIntegrityOptions
+{
+    ProjectNumber = Environment.GetEnvironmentVariable("PLAY_INTEGRITY_PROJECT_NUMBER"),
+    PackageName = Environment.GetEnvironmentVariable("PLAY_INTEGRITY_PACKAGE_NAME") ?? "com.diyhelper2",
+    RequireDeviceIntegrity = string.Equals(
+        Environment.GetEnvironmentVariable("PLAY_INTEGRITY_REQUIRE_MEETS_DEVICE_INTEGRITY"),
+        "true", StringComparison.OrdinalIgnoreCase),
+    AccessTokenOverride = Environment.GetEnvironmentVariable("PLAY_INTEGRITY_ACCESS_TOKEN"),
+});
+builder.Services.AddHttpClient<Sburson.Shared.Mobile.PlayIntegrityVerifier>(c => c.Timeout = TimeSpan.FromSeconds(5))
+    .AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddSingleton(_ => new Sburson.Shared.Mobile.DeviceQuotaOptions
+{
+    DailyLimit = int.TryParse(Environment.GetEnvironmentVariable("DAILY_DEVICE_AI_LIMIT"), out var dailyLimit) && dailyLimit > 0 ? dailyLimit : 60,
+});
+builder.Services.AddSingleton<Sburson.Shared.Mobile.DeviceQuotaService>();
 builder.Services.AddSburonEmail(builder.Configuration);
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
@@ -501,8 +521,8 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     PubChemClient pubChem,
     AmazonPaClient amazonPa,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DIYHelper2.Api.AI.PlayIntegrityVerifier integrity,
-    DIYHelper2.Api.Services.DeviceQuotaService quota,
+    PlayIntegrityVerifier integrity,
+    DeviceQuotaService quota,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -513,10 +533,10 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
 
     var integrityToken = context.Request.Headers["X-Play-Integrity-Token"].FirstOrDefault();
     var integrityResult = await integrity.VerifyAsync(integrityToken);
-    if (integrityResult == DIYHelper2.Api.AI.IntegrityResult.Invalid)
+    if (integrityResult == IntegrityResult.Invalid)
         return ApiError.Response(context, 403, "Device integrity check failed.", "integrity_failed");
 
-    if (!quota.TryConsume(DIYHelper2.Api.Services.DeviceQuotaService.DeviceKey(context), out _))
+    if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
     var validationError = MediaValidation.Validate(request.Description, request.Media, context);
@@ -856,8 +876,8 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     ILogger<Program> logger,
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DIYHelper2.Api.AI.PlayIntegrityVerifier integrity,
-    DIYHelper2.Api.Services.DeviceQuotaService quota,
+    PlayIntegrityVerifier integrity,
+    DeviceQuotaService quota,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -868,10 +888,10 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
 
     var integrityToken = context.Request.Headers["X-Play-Integrity-Token"].FirstOrDefault();
     var integrityResult = await integrity.VerifyAsync(integrityToken);
-    if (integrityResult == DIYHelper2.Api.AI.IntegrityResult.Invalid)
+    if (integrityResult == IntegrityResult.Invalid)
         return ApiError.Response(context, 403, "Device integrity check failed.", "integrity_failed");
 
-    if (!quota.TryConsume(DIYHelper2.Api.Services.DeviceQuotaService.DeviceKey(context), out _))
+    if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
     if (!string.IsNullOrEmpty(request.Question) && request.Question.Length > MediaValidation.MaxDescriptionLength)
@@ -1174,7 +1194,7 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
     ILogger<Program> logger,
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DIYHelper2.Api.Services.DeviceQuotaService quota,
+    DeviceQuotaService quota,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -1183,7 +1203,7 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
-    if (!quota.TryConsume(DIYHelper2.Api.Services.DeviceQuotaService.DeviceKey(context), out _))
+    if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
     var modResult = await moderation.CheckAsync(req.StepText);
@@ -1244,7 +1264,7 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
     ILogger<Program> logger,
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DIYHelper2.Api.Services.DeviceQuotaService quota,
+    DeviceQuotaService quota,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -1253,7 +1273,7 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
-    if (!quota.TryConsume(DIYHelper2.Api.Services.DeviceQuotaService.DeviceKey(context), out _))
+    if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
     var validationError = MediaValidation.Validate(req.Description, req.Media, context);
@@ -1318,7 +1338,7 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
     ILogger<Program> logger,
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DIYHelper2.Api.Services.DeviceQuotaService quota,
+    DeviceQuotaService quota,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -1327,7 +1347,7 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
-    if (!quota.TryConsume(DIYHelper2.Api.Services.DeviceQuotaService.DeviceKey(context), out _))
+    if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
     var validationError = MediaValidation.Validate(req.Description, req.Media, context);
@@ -1397,8 +1417,8 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
     IAIVisionClient aiClient,
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DIYHelper2.Api.AI.PlayIntegrityVerifier integrity,
-    DIYHelper2.Api.Services.DeviceQuotaService quota,
+    PlayIntegrityVerifier integrity,
+    DeviceQuotaService quota,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -1409,10 +1429,10 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
 
     var integrityToken = context.Request.Headers["X-Play-Integrity-Token"].FirstOrDefault();
     var integrityResult = await integrity.VerifyAsync(integrityToken);
-    if (integrityResult == DIYHelper2.Api.AI.IntegrityResult.Invalid)
+    if (integrityResult == IntegrityResult.Invalid)
         return ApiError.Response(context, 403, "Device integrity check failed.", "integrity_failed");
 
-    if (!quota.TryConsume(DIYHelper2.Api.Services.DeviceQuotaService.DeviceKey(context), out _))
+    if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
     if (!string.IsNullOrEmpty(request.TaskDescription) && request.TaskDescription.Length > MediaValidation.MaxDescriptionLength)
