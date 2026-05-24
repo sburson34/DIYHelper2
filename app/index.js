@@ -16,6 +16,11 @@ try { initSentry(); } catch (e) {
   console.warn('[sentry] init failed:', e?.message);
 }
 
+// Anonymous product telemetry — init early, then record the cold-launch event.
+// Best-effort: a telemetry failure must never block app boot.
+import {initTelemetry, track} from './src/services/telemetry';
+initTelemetry().then(() => track('app_opened')).catch(() => {});
+
 import {AppRegistry} from 'react-native';
 import App from './App';
 import {name as appName} from './app.json';

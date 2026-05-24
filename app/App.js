@@ -14,6 +14,7 @@ setTimeout(() => { SplashScreen.hideAsync().catch(() => {}); }, 4000);
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NavigationContainer, DefaultTheme, DrawerActions } from '@react-navigation/native';
 import { navigationIntegration } from './src/services/sentry';
+import { track } from './src/services/telemetry';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { Ionicons as Icon } from '@expo/vector-icons';
@@ -244,6 +245,18 @@ function AppContent() {
           // Sentry not initialized (no DSN) — safe to ignore.
         }
         SplashScreen.hideAsync().catch(() => {});
+      }}
+      onStateChange={(state) => {
+        // Anonymous product telemetry: record which screen the user landed on.
+        // Best-effort — never let a telemetry hiccup break navigation.
+        try {
+          const route = state?.routes?.[state.index];
+          if (route?.name) {
+            track('screen_viewed', { screen: route.name });
+          }
+        } catch {
+          // ignore
+        }
       }}
     >
       <Drawer.Navigator
