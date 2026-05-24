@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using DIYHelper2.Api.Models;
 using Sburson.Shared.DataDeletion;
+using Sburson.Shared.Telemetry;
 
 namespace DIYHelper2.Api.Data;
 
@@ -12,9 +13,14 @@ public class AppDbContext : DbContext
     public DbSet<BetaFeedback> BetaFeedback => Set<BetaFeedback>();
     public DbSet<DataDeletionRequest> DataDeletionRequests => Set<DataDeletionRequest>();
 
+    // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
+    public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
+
+        modelBuilder.ApplyAnalyticsEvent();
 
         // Rate-limiting lookups on /api/delete-user-data filter by (Email,
         // CreatedAt) and (ClientIp, CreatedAt). Indexes keep those CountAsync
