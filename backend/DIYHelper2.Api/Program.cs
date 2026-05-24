@@ -120,6 +120,9 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(optio
 // See Data/DatabaseConfig.cs for the provider decision logic.
 builder.Services.AddDbContext<AppDbContext>(DatabaseConfig.Configure);
 
+builder.Services.AddScoped<DIYHelper2.Api.Services.Telemetry.TelemetryIngestService>();
+builder.Services.AddScoped<DIYHelper2.Api.Services.Telemetry.UsageDigestService>();
+
 // CORS — the mobile app does NOT need CORS (it isn't a browser). CORS only
 // matters when a web origin calls the API. Default to an empty allow-list so
 // browser origins are rejected. Set ALLOWED_ORIGINS="https://admin.example.com"
@@ -1783,6 +1786,35 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
     }
 
     return Results.Ok(new { translations = results });
+});
+
+// ── Anonymous product telemetry ───────────────────────────────────────────
+// Ingest is anonymous (events keyed on a per-install AnonId, never a user).
+// The digest is an operator tool gated by Sburson.Shared.Telemetry.UsageDigestGate
+// (open in Dev/Testing; in prod needs Telemetry:AllowDigestInProd + a matching
+// X-Admin-Token header).
+app.MapPost("/api/telemetry/events", async (
+    Sburson.Shared.Telemetry.TelemetryBatchDto? body,
+    DIYHelper2.Api.Services.Telemetry.TelemetryIngestService ingest,
+    CancellationToken ct) =>
+{
+    var result = await ingest.IngestAsync(body, ct);
+    return Results.Accepted(value: new { ingested = result.Ingested, dropped = result.Dropped });
+});
+
+app.MapGet("/api/admin/usage-digest", async (
+    HttpContext http,
+    DIYHelper2.Api.Services.Telemetry.UsageDigestService digest,
+    IWebHostEnvironment env,
+    IConfiguration cfg,
+    CancellationToken ct,
+    int days = 30,
+    int topN = 25) =>
+{
+    var token = http.Request.Headers[Sburson.Shared.Telemetry.UsageDigestGate.AdminTokenHeader].ToString();
+    if (!Sburson.Shared.Telemetry.UsageDigestGate.IsAllowed(env, cfg, token))
+        return Results.NotFound();
+    return Results.Ok(await digest.BuildAsync(days, topN, ct));
 });
 
 app.Run();
