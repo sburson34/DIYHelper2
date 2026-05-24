@@ -1,5 +1,14 @@
 module.exports = {
   preset: 'react-native',
+  // Defensive: react-native Animated.timing leaks setTimeout callbacks
+  // through node_modules/react-native/jest/setup.js that don't drain in
+  // the jest mock environment. Without forceExit, jest sits after the
+  // test loop completes, waiting on those open timer handles until the
+  // CI runner kills the job at timeout-minutes. PianoHelper #20 surfaced
+  // this with a 20-min stall on a 1-min test suite; applying portfolio-
+  // wide so the same trap doesn't catch the next mobile app to add an
+  // Animated.View.
+  forceExit: true,
   transformIgnorePatterns: [
     'node_modules/(?!(react-native|@react-native|@react-navigation|@sburson34|expo|@expo|@sentry/react-native|expo-constants|expo-notifications|expo-camera|expo-image-picker|expo-speech-recognition|expo-audio|expo-splash-screen|expo-print|expo-sharing|react-native-gesture-handler|react-native-reanimated|react-native-screens|react-native-safe-area-context|react-native-tts|react-native-image-picker|react-native-vision-camera)/)',
   ],
