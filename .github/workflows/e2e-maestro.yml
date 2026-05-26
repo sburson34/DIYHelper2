@@ -29,16 +29,22 @@ on:
 jobs:
   maestro:
     name: Maestro (Android emulator)
-    # Android emulators run dramatically more reliably on macOS runners
-    # (hardware acceleration available out of the box). Linux runners
-    # require KVM, which GitHub-hosted doesn't provide.
-    runs-on: macos-latest
+    # ubuntu-latest (1× billing). KVM is available on GitHub-hosted Linux
+    # runners; the "Enable KVM" step below grants the runner user access so
+    # the x86_64 emulator boots with hardware acceleration.
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
       packages: read
     steps:
       - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       - uses: actions/setup-node@v4
         with:
