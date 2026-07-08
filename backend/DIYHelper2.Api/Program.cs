@@ -157,6 +157,17 @@ builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<SsrfGua
 builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<SsrfGuardHandler>();
 // Expo push service — fans promotional broadcasts out to registered devices.
 builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+// Brand Studio: scrapes a customer's website to seed a white-label brand.
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.BrandExtractionClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+// CRM lead delivery — a second, best-effort channel alongside the brand email.
+// The webhook sink covers the long tail (Zapier/Make → the company's own CRM);
+// native OAuth providers (Jobber, Housecall Pro) plug in later as additional
+// ICrmLeadSink registrations. SsrfGuard matters on the webhook client because
+// its destination URL is brand-operator supplied.
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.ICrmLeadSink>(
+    sp => sp.GetRequiredService<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>());
+builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher>();
 // Mobile abuse-prevention from Sburson.Shared.Mobile. Env vars are read
 // lazily inside the Transient factory delegate so test fixtures that
 // set PLAY_INTEGRITY_* / DAILY_DEVICE_AI_LIMIT after the host builds
@@ -1100,6 +1111,7 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
     HttpContext context,
     AppDbContext db,
     Sburson.Shared.Email.IEmailService mailer,
+    DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher crmDispatcher,
     ILogger<Program> logger) =>
 {
     // Reject oversize / malformed image payloads before persisting. Mobile app
@@ -1141,6 +1153,10 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
     // flagship inbox so a lead is never silently dropped. Best-effort: an email
     // failure must not fail the customer's submit (they already got their guide).
     await NotifyBrandOfLeadAsync(db, mailer, logger, brandSlug, helpRequest);
+
+    // Second delivery channel: push into the brand's CRM if it's connected to one
+    // (webhook today). Best-effort like the email above — never fails the submit.
+    await crmDispatcher.PushLeadAsync(brandSlug, helpRequest);
 
     return Results.Created($"/api/help-requests/{helpRequest.Id}", new { id = helpRequest.Id });
 });
@@ -1259,6 +1275,23 @@ app.MapGet("/api/brands", async (HttpContext http, AppDbContext db) =>
         .Select(b => new { slug = b.Slug, companyName = b.CompanyName })
         .ToListAsync();
     return Results.Ok(new { isSuperAdmin = isSuper, brands });
+});
+
+// Brand Studio: scrape a customer's website to seed a white-label brand
+// (colors, logo, company name, fonts, legal links). Admin-gated (path starts
+// with /api/brands) and SSRF-guarded via the typed client. Returns a draft the
+// operator reviews/adjusts — never a finished config.
+app.MapGet("/api/brands/extract", async (
+    [FromQuery] string? url, HttpContext http,
+    DIYHelper2.Api.Integrations.BrandExtractionClient extractor) =>
+{
+    if (string.IsNullOrWhiteSpace(url)
+        || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+        || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        return ApiError.BadRequest(http, "Enter a valid http(s) website URL.");
+
+    var result = await extractor.ExtractAsync(uri);
+    return Results.Ok(result);
 });
 
 // ── Push notifications ──────────────────────────────────────────────

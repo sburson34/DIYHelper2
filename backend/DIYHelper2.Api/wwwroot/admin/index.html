@@ -21,6 +21,7 @@
       <button class="tab active" data-section="overview" type="button">Overview</button>
       <button class="tab" data-section="leads" type="button">Leads</button>
       <button class="tab" data-section="push" type="button">Push Notifications</button>
+      <button class="tab" data-section="studio" type="button">Brand Studio</button>
     </nav>
     <div class="account">
       <span class="account-name" id="account-name"></span>
@@ -161,6 +162,122 @@
 
       <div class="section-head"><h3>Recent campaigns</h3></div>
       <div id="campaign-history"></div>
+    </section>
+
+    <!-- ── BRAND STUDIO ─────────────────────────────────────────────── -->
+    <section id="studio-section" class="section hidden">
+      <div class="section-head">
+        <h2>Brand Studio</h2>
+        <p>Point at a company's website to auto-fill its branding, tweak it live, then export a ready-to-build config.</p>
+      </div>
+
+      <div class="studio-grid">
+        <div class="studio-form card">
+          <div class="form-group">
+            <label for="studio-url">Import from website</label>
+            <div class="import-row">
+              <input id="studio-url" type="url" placeholder="https://theircompany.com">
+              <button class="btn accent" id="studio-import-btn" type="button">Import</button>
+            </div>
+            <div id="studio-warnings"></div>
+          </div>
+
+          <div class="studio-two">
+            <div class="form-group">
+              <label for="studio-name">App name</label>
+              <input id="studio-name" type="text" placeholder="Acme Home">
+            </div>
+            <div class="form-group">
+              <label for="studio-id">Brand ID (slug)</label>
+              <input id="studio-id" type="text" placeholder="acme-home">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="studio-short">Company short name <span class="muted">(used in permission prompts)</span></label>
+            <input id="studio-short" type="text" placeholder="Acme">
+          </div>
+
+          <div class="form-group">
+            <label>Primary color</label>
+            <div class="color-row">
+              <input type="color" id="studio-primary-picker" class="color-picker">
+              <input type="text" id="studio-primary" class="hex-input" placeholder="#2E7D32">
+              <div class="candidate-swatches" id="cand-primary"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Secondary color</label>
+            <div class="color-row">
+              <input type="color" id="studio-secondary-picker" class="color-picker">
+              <input type="text" id="studio-secondary" class="hex-input" placeholder="#0A4FA6">
+              <div class="candidate-swatches" id="cand-secondary"></div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Accent color</label>
+            <div class="color-row">
+              <input type="color" id="studio-accent-picker" class="color-picker">
+              <input type="text" id="studio-accent" class="hex-input" placeholder="#FDD314">
+              <div class="candidate-swatches" id="cand-accent"></div>
+            </div>
+          </div>
+
+          <div class="form-group" id="logo-group">
+            <label>Logo candidates <span class="muted">(pick one to use as the app icon source)</span></label>
+            <div class="logo-candidates" id="logo-candidates"><span class="muted">Import a site to find logos.</span></div>
+          </div>
+
+          <div class="form-group" id="font-group">
+            <label>Detected site font</label>
+            <div id="studio-fonts"><span class="muted">—</span></div>
+          </div>
+
+          <div class="studio-two">
+            <div class="form-group">
+              <label for="studio-privacy">Privacy policy URL</label>
+              <input id="studio-privacy" type="url" placeholder="https://…/privacy">
+            </div>
+            <div class="form-group">
+              <label for="studio-terms">Terms URL</label>
+              <input id="studio-terms" type="url" placeholder="https://…/terms">
+            </div>
+          </div>
+        </div>
+
+        <div class="studio-preview-col">
+          <div class="preview-label">Live preview</div>
+          <div class="phone">
+            <div class="phone-notch"></div>
+            <div class="app-preview" id="app-preview">
+              <div class="ap-header" id="ap-header"><span id="ap-appname">Your app</span></div>
+              <div class="ap-body">
+                <div class="ap-card">
+                  <div class="ap-card-top">
+                    <span class="ap-card-title">Kitchen faucet leak</span>
+                    <span class="ap-chip" id="ap-chip">in progress</span>
+                  </div>
+                  <div class="ap-text">Your step-by-step repair guide is ready.</div>
+                  <button class="ap-btn" id="ap-btn" type="button">Get a pro quote</button>
+                </div>
+                <a class="ap-link" id="ap-link">View safety tips →</a>
+              </div>
+            </div>
+          </div>
+          <div class="palette-strip" id="palette-strip"></div>
+          <div class="contrast-note" id="contrast-note"></div>
+        </div>
+      </div>
+
+      <div class="section-head"><h3>Export</h3></div>
+      <div class="card">
+        <div class="modal-actions">
+          <button class="btn primary" id="studio-copy-btn" type="button">Copy brand.json</button>
+          <button class="btn ghost" id="studio-download-btn" type="button">Download brand.json</button>
+        </div>
+        <textarea id="studio-json" class="json-out" readonly rows="16"></textarea>
+        <p class="muted studio-hint">Save as <code>app/brands/&lt;id&gt;/brand.json</code>, drop the chosen logo in as <code>icon.png</code> + <code>splash.png</code>, then run <code>BRAND=&lt;id&gt; npm run prebuild</code>. Also add a matching row to the backend <code>Brands</code> table so leads route correctly.</p>
+      </div>
     </section>
   </main>
 

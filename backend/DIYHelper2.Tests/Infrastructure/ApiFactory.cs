@@ -79,6 +79,10 @@ public class ApiFactory : BaseApiFactory<Program>
     public FakeHttpMessageHandler FakeModerationHandler { get; } = new();
     public FakeHttpMessageHandler FakePlayIntegrityHandler { get; } = new();
     public FakeHttpMessageHandler FakeExpoHandler { get; } = new();
+    public FakeHttpMessageHandler FakeBrandExtractHandler { get; } = new();
+    /// <summary>Intercepts the outbound CRM lead webhook (WebhookCrmSink) so a
+    /// brand's LeadWebhookUrl push is asserted on instead of hitting the network.</summary>
+    public FakeHttpMessageHandler FakeCrmWebhookHandler { get; } = new();
 
     /// <summary>Captures lead-routing emails instead of hitting SES. Tests read
     /// <c>FakeEmail.SentMessages</c> and can set <c>FakeEmail.OnSend</c> to throw.</summary>
@@ -145,6 +149,8 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().ConfigurePrimaryHttpMessageHandler(() => FakeModerationHandler);
             services.AddHttpClient<PlayIntegrityVerifier>().ConfigurePrimaryHttpMessageHandler(() => FakePlayIntegrityHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.BrandExtractionClient>().ConfigurePrimaryHttpMessageHandler(() => FakeBrandExtractHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeCrmWebhookHandler);
         });
     }
 
@@ -171,7 +177,8 @@ public class ApiFactory : BaseApiFactory<Program>
     /// </summary>
     public async Task SeedBrandAsync(
         string slug, string companyName, string leadEmail,
-        string? username = null, string? password = null, bool isActive = true)
+        string? username = null, string? password = null, bool isActive = true,
+        string? leadWebhookUrl = null)
     {
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -187,6 +194,7 @@ public class ApiFactory : BaseApiFactory<Program>
                 DashboardUsername = username,
                 DashboardPasswordHash = hash,
                 IsActive = isActive,
+                LeadWebhookUrl = leadWebhookUrl,
             });
         }
         else
@@ -196,6 +204,7 @@ public class ApiFactory : BaseApiFactory<Program>
             existing.DashboardUsername = username;
             existing.DashboardPasswordHash = hash;
             existing.IsActive = isActive;
+            existing.LeadWebhookUrl = leadWebhookUrl;
         }
         await db.SaveChangesAsync();
     }

@@ -1,17 +1,20 @@
 import Constants from 'expo-constants';
+import { generateBrandColors, BrandSeed } from './brandPalette';
 
 // ── White-label brand hues ────────────────────────────────────────────
 // The active brand (brands/<id>/brand.json → app.config.js → expo-constants)
-// supplies primary/secondary/accent. Everything else — backgrounds, text,
-// semantic colors — is derived per light/dark mode from the defaults below.
+// supplies primary/secondary/accent seed colors. From those, brandPalette
+// derives a coherent, contrast-safe set — readable on-colors (onPrimary etc.)
+// plus pressed (…Dark) and tinted (…Soft) variants — so any brand color stays
+// legible. Backgrounds, text, and semantic colors stay neutral per light/dark
+// mode (chrome is neutral; the brand shows through accents/buttons/links).
 // Falls back to the DIYHelper palette when no brand is present (e.g. Jest,
 // where expo-constants exposes no expoConfig).
-type BrandHues = Partial<Pick<typeof baseLight, 'primary' | 'secondary' | 'accent'>>;
 const C = Constants as unknown as {
-  expoConfig?: { extra?: { brand?: { colors?: BrandHues } } };
-  manifest?: { extra?: { brand?: { colors?: BrandHues } } };
+  expoConfig?: { extra?: { brand?: { colors?: BrandSeed } } };
+  manifest?: { extra?: { brand?: { colors?: BrandSeed } } };
 };
-const brandHues: BrandHues =
+const brandHues: BrandSeed =
   C.expoConfig?.extra?.brand?.colors ?? C.manifest?.extra?.brand?.colors ?? {};
 
 // Light theme palette (kept as default export so legacy `import theme from '../theme'` still works)
@@ -45,9 +48,11 @@ const baseDark: typeof baseLight = {
   shadow: '#000000',
 };
 
-// Brand hues override the base palette in both modes.
-const light = { ...baseLight, ...brandHues };
-const dark = { ...baseDark, ...brandHues };
+// Brand seed → full contrast-safe brand slots, layered over the neutral base
+// for each mode. This overrides primary/secondary/accent (as before) AND adds
+// onPrimary/onSecondary/onAccent + primaryDark/primarySoft/secondaryDark.
+const light = { ...baseLight, ...generateBrandColors(brandHues, 'light', baseLight) };
+const dark = { ...baseDark, ...generateBrandColors(brandHues, 'dark', baseDark) };
 
 const shared = {
   roundness: { small: 8, medium: 16, large: 24, full: 999 },

@@ -34,6 +34,7 @@ const sections = {
   overview: el('overview-section'),
   leads: el('leads-section'),
   push: el('push-section'),
+  studio: el('studio-section'),
 };
 
 document.addEventListener('DOMContentLoaded', init);
@@ -44,6 +45,7 @@ async function init() {
   wireBrandScope();
   wireLeads();
   wirePush();
+  wireStudio();
   el('signout').addEventListener('click', signOut);
   renderTemplates();
   showSection('overview');
@@ -114,6 +116,7 @@ function showSection(name) {
   if (name === 'overview') loadOverview();
   else if (name === 'leads') loadRequests();
   else if (name === 'push') { loadAudience(); loadCampaigns(); updatePreview(); updatePreviewAppName(); }
+  else if (name === 'studio') updateStudio();
 }
 
 /* ── Overview ───────────────────────────────────────────────────────────── */
@@ -551,6 +554,232 @@ async function cancelCampaign(id) {
   } catch (err) {
     toast(err.message || 'Could not cancel.', 'error');
   }
+}
+
+/* ── Brand Studio ───────────────────────────────────────────────────────── */
+// Palette math — a compact JS port of app/src/brandPalette.ts so the live
+// preview and contrast warnings match exactly what the mobile app will render.
+function parseHex(s) {
+  if (typeof s !== 'string') return null;
+  let h = s.trim().replace(/^#/, '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return { r: parseInt(h.slice(0, 2), 16), g: parseInt(h.slice(2, 4), 16), b: parseInt(h.slice(4, 6), 16) };
+}
+function normHex(s) {
+  const c = parseHex(s);
+  if (!c) return null;
+  const h = (n) => n.toString(16).padStart(2, '0');
+  return ('#' + h(c.r) + h(c.g) + h(c.b)).toUpperCase();
+}
+function luminance(hex) {
+  const c = parseHex(hex);
+  if (!c) return 0;
+  const lin = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  return 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+}
+function contrast(a, b) {
+  const la = luminance(a); const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+function mixHex(a, b, w) {
+  const ca = parseHex(a); const cb = parseHex(b);
+  if (!ca || !cb) return a;
+  const h = (n) => Math.round(n).toString(16).padStart(2, '0');
+  return ('#' + h(ca.r + (cb.r - ca.r) * w) + h(ca.g + (cb.g - ca.g) * w) + h(ca.b + (cb.b - ca.b) * w)).toUpperCase();
+}
+function onColorFor(bg) {
+  const dark = '#10151F'; const light = '#FFFFFF';
+  const cd = contrast(bg, dark); const cl = contrast(bg, light);
+  if (cl >= 4.5 && cl >= cd) return light;
+  if (cd >= 4.5) return dark;
+  return cd >= cl ? dark : light;
+}
+
+const studio = { colors: {}, candidates: [], logos: [], selectedLogo: null };
+
+function wireStudio() {
+  el('studio-import-btn').addEventListener('click', importFromWebsite);
+  el('studio-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') importFromWebsite(); });
+
+  // Keep each color's picker <-> hex text in sync and refresh the preview.
+  ['primary', 'secondary', 'accent'].forEach((key) => {
+    const text = el(`studio-${key}`);
+    const picker = el(`studio-${key}-picker`);
+    text.addEventListener('input', () => { const n = normHex(text.value); if (n) picker.value = n; updateStudio(); });
+    picker.addEventListener('input', () => { text.value = picker.value.toUpperCase(); updateStudio(); });
+  });
+  ['studio-name', 'studio-id', 'studio-short', 'studio-privacy', 'studio-terms'].forEach((id) => {
+    el(id).addEventListener('input', updateStudio);
+  });
+
+  el('cand-primary').addEventListener('click', (e) => pickCandidate(e, 'primary'));
+  el('cand-secondary').addEventListener('click', (e) => pickCandidate(e, 'secondary'));
+  el('cand-accent').addEventListener('click', (e) => pickCandidate(e, 'accent'));
+  el('logo-candidates').addEventListener('click', (e) => {
+    const img = e.target.closest('.logo-thumb');
+    if (!img) return;
+    studio.selectedLogo = img.dataset.url;
+    document.querySelectorAll('#logo-candidates .logo-thumb').forEach((t) => t.classList.remove('selected'));
+    img.classList.add('selected');
+    updateStudio();
+  });
+
+  el('studio-copy-btn').addEventListener('click', () => {
+    navigator.clipboard.writeText(el('studio-json').value).then(
+      () => toast('brand.json copied.', 'success'),
+      () => toast('Copy failed — select the text manually.', 'error'));
+  });
+  el('studio-download-btn').addEventListener('click', downloadBrandJson);
+}
+
+function pickCandidate(e, key) {
+  const sw = e.target.closest('.swatch');
+  if (!sw) return;
+  el(`studio-${key}`).value = sw.dataset.color;
+  el(`studio-${key}-picker`).value = sw.dataset.color;
+  updateStudio();
+}
+
+function slugify(s) {
+  return (s || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+
+async function importFromWebsite() {
+  const url = el('studio-url').value.trim();
+  if (!url) { toast('Enter a website URL.', 'error'); return; }
+  const btn = el('studio-import-btn');
+  btn.disabled = true; btn.textContent = 'Importing…';
+  el('studio-warnings').innerHTML = '';
+  try {
+    const data = await getJson(`/api/brands/extract?url=${encodeURIComponent(url)}`);
+    if (data.companyName) {
+      el('studio-name').value = data.companyName;
+      el('studio-short').value = data.companyName.split(/\s+/)[0];
+      el('studio-id').value = slugify(data.companyName);
+    }
+    if (data.primary) { el('studio-primary').value = data.primary; el('studio-primary-picker').value = data.primary; }
+    if (data.secondary) { el('studio-secondary').value = data.secondary; el('studio-secondary-picker').value = data.secondary; }
+    if (data.accent) { el('studio-accent').value = data.accent; el('studio-accent-picker').value = data.accent; }
+    if (data.privacyPolicyUrl) el('studio-privacy').value = data.privacyPolicyUrl;
+    if (data.termsUrl) el('studio-terms').value = data.termsUrl;
+
+    renderCandidates('cand-primary', data.colorCandidates);
+    renderCandidates('cand-secondary', data.colorCandidates);
+    renderCandidates('cand-accent', data.colorCandidates);
+    renderLogos(data.logoCandidates || []);
+    renderFonts(data.fonts || []);
+
+    (data.warnings || []).forEach((w) => {
+      const div = document.createElement('div');
+      div.className = 'warn-banner';
+      div.textContent = w;
+      el('studio-warnings').appendChild(div);
+    });
+    updateStudio();
+    toast('Imported. Review and adjust below.', 'success');
+  } catch (err) {
+    toast(err.message || 'Import failed.', 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Import';
+  }
+}
+
+function renderCandidates(hostId, colors) {
+  el(hostId).innerHTML = (colors || []).map((c) =>
+    `<span class="swatch" data-color="${escapeHtml(c)}" title="${escapeHtml(c)}"></span>`).join('');
+  // Swatch fill is a dynamic value → set via CSSOM (allowed under CSP).
+  Array.from(el(hostId).children).forEach((sw) => { sw.style.background = sw.dataset.color; });
+}
+
+function renderLogos(logos) {
+  studio.logos = logos;
+  const host = el('logo-candidates');
+  if (!logos.length) { host.innerHTML = '<span class="muted">No logos found — upload one manually.</span>'; return; }
+  host.innerHTML = logos.map((u) =>
+    `<img class="logo-thumb" data-url="${escapeHtml(u)}" src="${escapeHtml(u)}" alt="logo option">`).join('');
+}
+
+function renderFonts(fonts) {
+  el('studio-fonts').innerHTML = fonts.length
+    ? fonts.map((f) => `<span class="font-chip">${escapeHtml(f)}</span>`).join('') +
+      '<div class="muted studio-hint">Font theming is a planned enhancement — noted for reference.</div>'
+    : '<span class="muted">—</span>';
+}
+
+function currentStudioColors() {
+  const primary = normHex(el('studio-primary').value) || '#FCA004';
+  const secondary = normHex(el('studio-secondary').value) || '#0A4FA6';
+  const accent = normHex(el('studio-accent').value) || '#FDD314';
+  return { primary, secondary, accent };
+}
+
+function updateStudio() {
+  const { primary, secondary, accent } = currentStudioColors();
+  const onPrimary = onColorFor(primary);
+  const onAccent = onColorFor(accent);
+  const name = el('studio-name').value.trim() || 'Your app';
+
+  // Live preview.
+  el('ap-appname').textContent = name;
+  el('ap-header').style.background = primary;
+  el('ap-appname').style.color = onPrimary;
+  const btn = el('ap-btn');
+  btn.style.background = primary; btn.style.color = onPrimary;
+  const chip = el('ap-chip');
+  chip.style.background = mixHex('#FFFFFF', accent, 0.85); chip.style.color = onColorFor(mixHex('#FFFFFF', accent, 0.85));
+  el('ap-link').style.color = secondary;
+
+  // Palette strip.
+  const cells = [
+    ['primary', primary, onPrimary], ['on', onPrimary, primary],
+    ['secondary', secondary, onColorFor(secondary)], ['accent', accent, onAccent],
+  ];
+  el('palette-strip').innerHTML = cells.map(([label, bg, fg]) =>
+    `<div class="palette-cell" data-bg="${escapeHtml(bg)}" data-fg="${escapeHtml(fg)}">${escapeHtml(label)}</div>`).join('');
+  Array.from(el('palette-strip').children).forEach((c) => { c.style.background = c.dataset.bg; c.style.color = c.dataset.fg; });
+
+  // Contrast guidance.
+  const ratio = contrast(onPrimary, primary);
+  const note = el('contrast-note');
+  if (ratio >= 4.5) {
+    note.innerHTML = `<span class="ok">✓ Primary carries accessible text (${ratio.toFixed(1)}:1).</span>`;
+  } else {
+    note.innerHTML = `<span class="warn">⚠ Text on the primary color is only ${ratio.toFixed(1)}:1 (AA needs 4.5). Consider darkening the primary for buttons.</span>`;
+  }
+
+  el('studio-json').value = buildBrandJson();
+}
+
+function buildBrandJson() {
+  const { primary, secondary, accent } = currentStudioColors();
+  const id = slugify(el('studio-id').value || el('studio-name').value) || 'new-brand';
+  const config = {
+    id,
+    name: el('studio-name').value.trim() || 'New Brand',
+    slug: id,
+    scheme: id.replace(/-/g, ''),
+    bundleId: `com.${id.replace(/-/g, '')}.app`,
+    companyShortName: el('studio-short').value.trim() || el('studio-name').value.trim() || 'New Brand',
+    releasePrefix: id,
+    privacyPolicyUrl: el('studio-privacy').value.trim() || '',
+    termsUrl: el('studio-terms').value.trim() || '',
+    colors: { primary, secondary, accent },
+    splashBackground: mixHex(secondary, '#000000', 0.35),
+    iconBackground: mixHex(secondary, '#000000', 0.35),
+    _logoSource: studio.selectedLogo || '',
+  };
+  return JSON.stringify(config, null, 2);
+}
+
+function downloadBrandJson() {
+  const id = slugify(el('studio-id').value || el('studio-name').value) || 'brand';
+  const blob = new Blob([el('studio-json').value], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${id}.brand.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 /* ── Sign out ───────────────────────────────────────────────────────────── */

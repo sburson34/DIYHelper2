@@ -18,6 +18,14 @@ public class HelpRequest
     public string ProjectData { get; set; } = string.Empty;
     public string? ImageBase64 { get; set; }
     public string Status { get; set; } = "new";
+
+    /// <summary>Id of the record created in the brand's external CRM when this
+    /// lead was pushed there (see <see cref="Integrations.Crm.CrmLeadDispatcher"/>).
+    /// Null when the brand has no CRM connection, when the push failed, or when
+    /// the provider returns no id (e.g. a generic webhook). Stored for
+    /// idempotency + dashboard deep-linking.</summary>
+    public string? CrmRemoteId { get; set; }
+
     public string? Notes { get; set; }
     public DateTime? FollowUpDate { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
