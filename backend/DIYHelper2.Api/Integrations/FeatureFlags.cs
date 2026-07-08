@@ -23,6 +23,14 @@ public class FeatureFlags : FeatureFlagsBase
     public bool PubChem { get; }
     public bool ReceiptOcr { get; }
 
+    // Video analysis. OFF by default: vision models can't process video frames,
+    // so video items are never sent to the AI — but accepting them wastes upload
+    // bandwidth and (unlike images) bypasses the per-item size cap. Gated behind
+    // this flag so requests carrying video are rejected at the edge until a
+    // frame-extraction pipeline exists to make it worth the cost. Flip via
+    // FEATURES_VideoAnalysis=true.
+    public bool VideoAnalysis { get; }
+
     // ML Kit features (on-device, controlled by backend flags for fleet management)
     public bool BarcodeScanner { get; }
     public bool ImageLabeling { get; }
@@ -50,6 +58,7 @@ public class FeatureFlags : FeatureFlagsBase
         Reddit = IsEnabled("Reddit", defaultValue: true);
         PubChem = IsEnabled("PubChem", defaultValue: true);
         ReceiptOcr = EnabledWhenSet("MINDEE_API_KEY");
+        VideoAnalysis = IsEnabled("VideoAnalysis");
         // ML Kit features — all default OFF until validated on target devices.
         BarcodeScanner = IsEnabled("BarcodeScanner");
         ImageLabeling = IsEnabled("ImageLabeling");
@@ -76,6 +85,7 @@ public class FeatureFlags : FeatureFlagsBase
         reddit = Reddit,
         pubchem = PubChem,
         receiptOcr = ReceiptOcr,
+        videoAnalysis = VideoAnalysis,
         barcodeScanner = BarcodeScanner,
         imageLabeling = ImageLabeling,
         onDeviceTranslation = OnDeviceTranslation,

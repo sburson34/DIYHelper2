@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { View, Image, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Image, Text, StyleSheet, TouchableOpacity, Linking } from 'react-native';
 import * as SplashScreen from 'expo-splash-screen';
+import * as Notifications from 'expo-notifications';
 
 // Swallow any error from preventAutoHideAsync — if it fails, the OS hides
 // the splash on its own, which is strictly better than crashing at boot.
@@ -45,7 +46,8 @@ import { ThemeProvider } from './src/ThemeContext';
 import { FeaturesProvider } from './src/config/features';
 import { TranslationProvider } from './src/mlkit/TranslationProvider';
 import { requestCaptureReset } from './src/utils/captureBus';
-import { getOnboardingSeen, setOnboardingSeen, getAiConsent, AI_CONSENT_VERSION } from './src/utils/storage';
+import { getOnboardingSeen, setOnboardingSeen, getAiConsent, AI_CONSENT_VERSION, getPromoConsent } from './src/utils/storage';
+import PromoConsentScreen from './src/screens/PromoConsentScreen';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
 // Helper used by both the logo header and the "New Project" drawer item.
@@ -233,6 +235,19 @@ function AppContent() {
   // Hand the NavigationContainer ref to Sentry's react-navigation integration
   // so route changes are emitted as breadcrumbs (and tx spans when tracing).
   const navigationRef = useRef(null);
+
+  // Route a tapped promotional push. Backend campaigns may carry a { url }
+  // payload (deep link into the app via its scheme, or an external https link);
+  // open whatever's there. Harmless no-op for notifications without a url.
+  useEffect(() => {
+    const sub = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response?.notification?.request?.content?.data;
+      const url = data && typeof data.url === 'string' ? data.url : null;
+      if (url) Linking.openURL(url).catch(() => {});
+    });
+    return () => sub.remove();
+  }, []);
+
   return (
     <NavigationContainer
       theme={MyTheme}
@@ -605,6 +620,7 @@ function AppContent() {
 function OnboardingGate() {
   const [seen, setSeen] = React.useState(null); // null = loading
   const [consentOk, setConsentOk] = React.useState(null); // null = loading
+  const [promoAsked, setPromoAsked] = React.useState(null); // null = loading
   React.useEffect(() => {
     getOnboardingSeen().then(setSeen);
     getAiConsent().then(c => {
@@ -612,8 +628,10 @@ function OnboardingGate() {
       // version. A bump of AI_CONSENT_VERSION re-prompts returning users.
       setConsentOk(!!(c && c.version === AI_CONSENT_VERSION));
     });
+    // A null promo record means we've never asked; show the priming screen once.
+    getPromoConsent().then(p => setPromoAsked(p !== null));
   }, []);
-  if (seen === null || consentOk === null) return null;
+  if (seen === null || consentOk === null || promoAsked === null) return null;
   if (!seen) {
     return <OnboardingScreen onFinish={() => { setOnboardingSeen(); setSeen(true); }} />;
   }
@@ -624,6 +642,9 @@ function OnboardingGate() {
         onDecline={() => setConsentOk(true)}
       />
     );
+  }
+  if (!promoAsked) {
+    return <PromoConsentScreen onDone={() => setPromoAsked(true)} />;
   }
   return <AppContent />;
 }

@@ -25,6 +25,8 @@ jest.mock('../utils/storage', () => {
     setCommunityOptIn: noop,
     getAppPrefs: () => Promise.resolve({}),
     setAppPrefs: noop,
+    getPromoConsent: () => Promise.resolve(null),
+    setPromoConsent: noop,
     getToolInventory: empty,
     addToInventory: noop,
     removeFromInventory: noop,
@@ -55,6 +57,8 @@ jest.mock('../api/backendClient', () => ({
 jest.mock('../utils/notifications', () => ({
   cancelForProject: jest.fn(() => Promise.resolve()),
   requestPermissions: jest.fn(() => Promise.resolve({ status: 'granted' })),
+  registerForPushNotificationsAsync: jest.fn(() => Promise.resolve('ExponentPushToken[stub]')),
+  devicePlatform: jest.fn(() => 'ios'),
 }));
 
 jest.mock('../services/feedback', () => ({ submitFeedback: jest.fn(() => Promise.resolve()) }));

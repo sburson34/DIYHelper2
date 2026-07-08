@@ -1,4 +1,6 @@
 import * as Notifications from 'expo-notifications';
+import * as Device from 'expo-device';
+import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import { updateHoneyDoList, updateContractorList, Project } from './storage';
 
@@ -37,6 +39,44 @@ export const requestPermissions = async (): Promise<boolean> => {
     return false;
   }
 };
+
+// Obtain this device's Expo push token for REMOTE (server-sent) promotional
+// notifications. Distinct from the local reminders above: this returns a token
+// the backend uses to reach the device. Returns null if permission is denied,
+// the code runs on a simulator (which can't receive push), or the EAS projectId
+// is missing. The caller is responsible for sending the token to the backend
+// (so this module stays free of an API dependency).
+export const registerForPushNotificationsAsync = async (): Promise<string | null> => {
+  try {
+    const granted = await requestPermissions();
+    if (!granted) return null;
+    // Push tokens are only issued to physical devices.
+    if (!Device.isDevice) return null;
+
+    if (Platform.OS === 'android') {
+      // A dedicated high-importance channel so offers surface as a banner
+      // rather than silently, and users can mute promos separately in OS settings.
+      await Notifications.setNotificationChannelAsync('promotions', {
+        name: 'Offers & promotions',
+        importance: Notifications.AndroidImportance.HIGH,
+      });
+    }
+
+    const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+    if (!projectId) {
+      console.warn('registerForPushNotificationsAsync: missing EAS projectId');
+      return null;
+    }
+    const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId });
+    return tokenResponse.data ?? null;
+  } catch (e) {
+    console.warn('push token registration failed', e);
+    return null;
+  }
+};
+
+// Platform hint sent to the backend alongside the token ("ios" | "android").
+export const devicePlatform = (): string => Platform.OS;
 
 type NotificationContent = Parameters<typeof Notifications.scheduleNotificationAsync>[0]['content'];
 type NotificationTrigger = Parameters<typeof Notifications.scheduleNotificationAsync>[0]['trigger'];

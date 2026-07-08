@@ -78,6 +78,11 @@ public class ApiFactory : BaseApiFactory<Program>
     public FakeHttpMessageHandler FakeYouTubeHandler { get; } = new();
     public FakeHttpMessageHandler FakeModerationHandler { get; } = new();
     public FakeHttpMessageHandler FakePlayIntegrityHandler { get; } = new();
+    public FakeHttpMessageHandler FakeExpoHandler { get; } = new();
+
+    /// <summary>Captures lead-routing emails instead of hitting SES. Tests read
+    /// <c>FakeEmail.SentMessages</c> and can set <c>FakeEmail.OnSend</c> to throw.</summary>
+    public FakeEmailService FakeEmail { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -116,6 +121,12 @@ public class ApiFactory : BaseApiFactory<Program>
             services.RemoveAll<IAIVisionClient>();
             services.AddSingleton<IAIVisionClient>(FakeAi);
 
+            // Capture lead-routing emails instead of sending via SES (which
+            // AddSburonEmail would register as a Noop here anyway since Email:From
+            // is unset — the fake lets tests assert on what would have been sent).
+            services.RemoveAll<Sburson.Shared.Email.IEmailService>();
+            services.AddSingleton<Sburson.Shared.Email.IEmailService>(FakeEmail);
+
             // AiKeyStore stays empty by default — keeps the "not configured"
             // 503 tests working. Tests that want to reach the AI path call
             // SetOpenAiKey() after Services is built.
@@ -133,6 +144,7 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<YouTubeClient>().ConfigurePrimaryHttpMessageHandler(() => FakeYouTubeHandler);
             services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().ConfigurePrimaryHttpMessageHandler(() => FakeModerationHandler);
             services.AddHttpClient<PlayIntegrityVerifier>().ConfigurePrimaryHttpMessageHandler(() => FakePlayIntegrityHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
         });
     }
 
@@ -147,6 +159,75 @@ public class ApiFactory : BaseApiFactory<Program>
         var client = CreateClient();
         var b64 = Convert.ToBase64String(
             System.Text.Encoding.UTF8.GetBytes($"{AdminUsername}:{AdminPassword}"));
+        client.DefaultRequestHeaders.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", b64);
+        return client;
+    }
+
+    /// <summary>
+    /// Insert-or-update a white-label brand row. Idempotent by slug so tests in
+    /// the same fixture can call it repeatedly. Pass username+password to make it
+    /// a dashboard-capable tenant (the password is BCrypt-hashed).
+    /// </summary>
+    public async Task SeedBrandAsync(
+        string slug, string companyName, string leadEmail,
+        string? username = null, string? password = null, bool isActive = true)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var hash = password is null ? null : Sburson.Shared.Auth.PasswordHasher.Hash(password);
+        var existing = await db.Brands.FirstOrDefaultAsync(b => b.Slug == slug);
+        if (existing is null)
+        {
+            db.Brands.Add(new DIYHelper2.Api.Models.Brand
+            {
+                Slug = slug,
+                CompanyName = companyName,
+                LeadEmail = leadEmail,
+                DashboardUsername = username,
+                DashboardPasswordHash = hash,
+                IsActive = isActive,
+            });
+        }
+        else
+        {
+            existing.CompanyName = companyName;
+            existing.LeadEmail = leadEmail;
+            existing.DashboardUsername = username;
+            existing.DashboardPasswordHash = hash;
+            existing.IsActive = isActive;
+        }
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Insert a push-token row directly (bypasses the /api/push/register HTTP
+    /// path so bulk seeding doesn't trip the per-IP "submit" rate limiter).
+    /// Returns the Expo token so a test can reference it.
+    /// </summary>
+    public async Task<string> SeedPushTokenAsync(
+        string brand, string platform = "ios", bool marketingOptIn = true, bool isActive = true, string? token = null)
+    {
+        token ??= $"ExponentPushToken[{Guid.NewGuid():N}]";
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        db.Add(new DIYHelper2.Api.Models.PushToken
+        {
+            Brand = brand,
+            Token = token,
+            Platform = platform,
+            MarketingOptIn = marketingOptIn,
+            IsActive = isActive,
+        });
+        await db.SaveChangesAsync();
+        return token;
+    }
+
+    /// <summary>HttpClient with Basic auth for a per-brand dashboard login.</summary>
+    public HttpClient CreateBrandClient(string username, string password)
+    {
+        var client = CreateClient();
+        var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes($"{username}:{password}"));
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", b64);
         return client;

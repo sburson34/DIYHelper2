@@ -5,6 +5,8 @@
   "scripts": {
     "kill-metro": "npx kill-port 8081 2>/dev/null; echo 'Port 8081 cleared'",
     "env": "bash scripts/load-env.sh",
+    "prebuild": "bash scripts/load-env.sh npx expo prebuild -p android --clean",
+    "brands": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('brands');for(const b of fs.readdirSync(d)){if(fs.existsSync(p.join(d,b,'brand.json'))){const j=JSON.parse(fs.readFileSync(p.join(d,b,'brand.json')));console.log(b.padEnd(16),j.name,'—',j.bundleId)}}\"",
     "android": "npm run kill-metro && bash scripts/load-env.sh react-native run-android",
     "ios": "npm run kill-metro && bash scripts/load-env.sh react-native run-ios",
     "start": "npm run kill-metro && bash scripts/load-env.sh react-native start",
@@ -34,6 +36,7 @@
     "expo-audio": "~55.0.9",
     "expo-camera": "~55.0.13",
     "expo-constants": "~55.0.9",
+    "expo-device": "~55.0.7",
     "expo-image-picker": "~55.0.16",
     "expo-notifications": "~55.0.17",
     "expo-print": "~55.0.12",

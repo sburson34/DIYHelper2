@@ -1,0 +1,18 @@
+{
+  "id": "acme-home",
+  "name": "Acme Home Helper",
+  "slug": "acme-home",
+  "scheme": "acmehome",
+  "bundleId": "com.acme.homehelp",
+  "companyShortName": "Acme",
+  "releasePrefix": "acme-home",
+  "privacyPolicyUrl": "https://api.diyhelper.org/privacy-policy.html",
+  "termsUrl": "https://api.diyhelper.org/terms-of-service.html",
+  "colors": {
+    "primary": "#1B7F4C",
+    "secondary": "#0A2540",
+    "accent": "#F5A623"
+  },
+  "splashBackground": "#0A2540",
+  "iconBackground": "#0A2540"
+}

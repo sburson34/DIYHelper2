@@ -155,6 +155,8 @@ builder.Services.AddHttpClient<PubChemClient>().AddHttpMessageHandler<SsrfGuardH
 builder.Services.AddHttpClient<AttomClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<SsrfGuardHandler>();
+// Expo push service — fans promotional broadcasts out to registered devices.
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 // Mobile abuse-prevention from Sburson.Shared.Mobile. Env vars are read
 // lazily inside the Transient factory delegate so test fixtures that
 // set PLAY_INTEGRITY_* / DAILY_DEVICE_AI_LIMIT after the host builds
@@ -173,14 +175,26 @@ builder.Services.AddHttpClient<Sburson.Shared.Mobile.PlayIntegrityVerifier>(c =>
     .AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddSingleton(_ => new Sburson.Shared.Mobile.DeviceQuotaOptions
 {
-    DailyLimit = int.TryParse(Environment.GetEnvironmentVariable("DAILY_DEVICE_AI_LIMIT"), out var dailyLimit) && dailyLimit > 0 ? dailyLimit : 60,
+    // Free-to-customer default: 15 AI calls/device/day bounds worst-case spend
+    // per user while covering normal multi-project usage. Raise via env if a
+    // deployment needs more headroom. Was 60.
+    DailyLimit = int.TryParse(Environment.GetEnvironmentVariable("DAILY_DEVICE_AI_LIMIT"), out var dailyLimit) && dailyLimit > 0 ? dailyLimit : 15,
 });
 builder.Services.AddSingleton<Sburson.Shared.Mobile.DeviceQuotaService>();
+// Process-wide daily backstop on aggregate AI call volume (runaway-spend guard).
+builder.Services.AddSingleton<DIYHelper2.Api.Services.AiSpendGuard>();
 builder.Services.AddSburonEmail(builder.Configuration);
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.RetentionService>();
+
+// Push notifications: the send service is scoped (per-request / per-tick DbContext),
+// with two background workers — one to dispatch scheduled campaigns, one to poll
+// Expo delivery receipts and prune dead tokens.
+builder.Services.AddScoped<DIYHelper2.Api.Services.PushSendService>();
+builder.Services.AddHostedService<DIYHelper2.Api.Services.PushDispatchService>();
+builder.Services.AddHostedService<DIYHelper2.Api.Services.PushReceiptService>();
 
 // Shared web pipeline (CorrelationId / Exception / RequestLogging / SecurityHeaders).
 // DIYHelper2 also classifies OpenAI ClientResultException to friendly statuses —
@@ -216,7 +230,8 @@ builder.Services.AddSingleton<IAIVisionClient>(sp =>
 
     var openAi = new OpenAIVisionClient(
         apiKey: store.OpenAiKey ?? string.Empty,
-        logger: sp.GetRequiredService<ILogger<OpenAIVisionClient>>());
+        logger: sp.GetRequiredService<ILogger<OpenAIVisionClient>>(),
+        model: store.OpenAiModel);
 
     IAIVisionClient? anthropic = null;
     if (!string.IsNullOrEmpty(store.AnthropicKey))
@@ -224,7 +239,8 @@ builder.Services.AddSingleton<IAIVisionClient>(sp =>
         anthropic = new AnthropicVisionClient(
             http: new HttpClient { Timeout = TimeSpan.FromMinutes(2) },
             apiKey: store.AnthropicKey,
-            logger: sp.GetRequiredService<ILogger<AnthropicVisionClient>>());
+            logger: sp.GetRequiredService<ILogger<AnthropicVisionClient>>(),
+            model: store.AnthropicModel);
     }
 
     return new AIClientFactory(
@@ -277,6 +293,15 @@ builder.Services.AddRateLimiter(options =>
             AutoReplenishment = true,
         }));
 });
+
+// Give in-flight requests time to drain on shutdown/redeploy instead of the
+// ASP.NET Core default 5s, which would abort AI calls mid-flight on every
+// deploy. 30s covers the vast majority of analyze/live-DIY calls without making
+// a rolling deploy wait on the 2-minute worst-case ceiling. Override with
+// SHUTDOWN_TIMEOUT_SECONDS if needed.
+builder.Services.Configure<HostOptions>(o =>
+    o.ShutdownTimeout = TimeSpan.FromSeconds(
+        int.TryParse(Environment.GetEnvironmentVariable("SHUTDOWN_TIMEOUT_SECONDS"), out var s) && s > 0 ? s : 30));
 
 var app = builder.Build();
 
@@ -352,6 +377,14 @@ string? openAiKey = SecretOrEnv("OPENAI_API_KEY");
     var aiKeys = app.Services.GetRequiredService<AiKeyStore>();
     aiKeys.OpenAiKey = openAiKey;
     aiKeys.AnthropicKey = SecretOrEnv("ANTHROPIC_API_KEY");
+    // Model selection is env-overridable; falls back to the cheap defaults
+    // baked into AiKeyStore. Set OPENAI_MODEL / ANTHROPIC_MODEL to change the
+    // whole app's model in one place without a redeploy of new code.
+    var openAiModelOverride = SecretOrEnv("OPENAI_MODEL");
+    if (!string.IsNullOrWhiteSpace(openAiModelOverride)) aiKeys.OpenAiModel = openAiModelOverride;
+    var anthropicModelOverride = SecretOrEnv("ANTHROPIC_MODEL");
+    if (!string.IsNullOrWhiteSpace(anthropicModelOverride)) aiKeys.AnthropicModel = anthropicModelOverride;
+    startupLogger.LogInformation("AI models: openai={OpenAiModel} anthropic={AnthropicModel}", aiKeys.OpenAiModel, aiKeys.AnthropicModel);
 }
 
 // Shared-secret app key. If configured, AppKeyMiddleware rejects any API
@@ -390,6 +423,12 @@ string? googleApiKey = SecretOrEnv("GOOGLE_API_KEY", "GOOGLE_TRANSLATE_API_KEY")
 var translationCache = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
 var translateHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 
+// Captured once for the AI endpoint handlers below: the process-wide daily AI
+// spend backstop and a logger for it (avoids threading these through every
+// handler's parameter list).
+var aiSpendGuard = app.Services.GetRequiredService<DIYHelper2.Api.Services.AiSpendGuard>();
+var aiCapLogger = app.Services.GetRequiredService<ILogger<Program>>();
+
 // Database schema setup.
 //  - Postgres: apply EF migrations (versioned, checked in under Migrations/).
 //    Safe to run on every startup — already-applied migrations are a no-op.
@@ -399,10 +438,97 @@ var translateHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    if (DatabaseConfig.ResolveProvider() == DatabaseConfig.Provider.Postgres)
-        db.Database.Migrate();
+    var startupLogger = app.Services.GetRequiredService<ILogger<Program>>();
+    var provider = DatabaseConfig.ResolveProvider();
+
+    // Fail-fast guard against silent SQLite fallback in production.
+    // Provider selection is purely "is DATABASE_URL set?" — so if Secrets
+    // Manager was slow/unreachable at boot (its failure is swallowed above),
+    // DATABASE_URL never gets populated and the app would otherwise start on an
+    // ephemeral local SQLite file, report healthy, and write customer data to a
+    // disk that vanishes on the next restart. Crash loudly instead: a
+    // non-Development environment MUST have Postgres configured.
+    if (provider != DatabaseConfig.Provider.Postgres && !app.Environment.IsDevelopment())
+    {
+        startupLogger.LogCritical(
+            "DATABASE_URL is not configured in environment '{Env}'. Refusing to start on ephemeral SQLite — " +
+            "check SECRET_ARN / Secrets Manager connectivity and the DATABASE_URL secret.",
+            app.Environment.EnvironmentName);
+        throw new InvalidOperationException(
+            $"Postgres is required in '{app.Environment.EnvironmentName}' but DATABASE_URL is not set. " +
+            "Aborting startup rather than silently using ephemeral SQLite.");
+    }
+
+    if (provider == DatabaseConfig.Provider.Postgres)
+    {
+        // Retry-with-backoff around the boot-time migration. On a rolling deploy
+        // the DB can briefly be unreachable (failover, cold RDS); without this a
+        // transient blip throws out of Main → the container exits non-zero →
+        // crash-loop. Retrying a handful of times rides out the blip; if the DB
+        // is genuinely down we still fail fast rather than hang forever.
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                db.Database.Migrate();
+                break;
+            }
+            catch (Exception ex) when (attempt < maxAttempts)
+            {
+                var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, attempt)));
+                startupLogger.LogWarning(ex,
+                    "Database migration attempt {Attempt}/{Max} failed; retrying in {Delay}s.",
+                    attempt, maxAttempts, delay.TotalSeconds);
+                await Task.Delay(delay);
+            }
+        }
+    }
     else
+    {
         db.Database.EnsureCreated();
+    }
+
+    // Seed white-label brands on first boot. Idempotent — skips if any exist,
+    // so editing a brand later (dashboard/DB) is never clobbered by a restart.
+    if (!db.Brands.Any())
+    {
+        var seedLogger = app.Services.GetRequiredService<ILogger<Program>>();
+        var now = DateTime.UtcNow;
+
+        // Flagship brand — routes leads to your own ops inbox and signs into the
+        // dashboard via the super-admin config creds, so it has no dashboard row.
+        db.Brands.Add(new Brand
+        {
+            Slug = "diyhelper",
+            CompanyName = "DIY Helper",
+            LeadEmail = SecretOrEnv("SEED_DIYHELPER_LEAD_EMAIL") ?? "",
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        // Demo client brand. Gets its own scoped dashboard login only when a seed
+        // password is configured; otherwise seeded inactive (fail-closed) so the
+        // account can't be logged into with a blank credential.
+        var acmePassword = SecretOrEnv("SEED_ACME_ADMIN_PASSWORD");
+        db.Brands.Add(new Brand
+        {
+            Slug = "acme-home",
+            CompanyName = "Acme Home Helper",
+            LeadEmail = SecretOrEnv("SEED_ACME_LEAD_EMAIL") ?? "",
+            DashboardUsername = "acme-admin",
+            DashboardPasswordHash = string.IsNullOrEmpty(acmePassword)
+                ? null
+                : Sburson.Shared.Auth.PasswordHasher.Hash(acmePassword),
+            IsActive = !string.IsNullOrEmpty(acmePassword),
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        db.SaveChanges();
+        seedLogger.LogInformation("Seeded white-label brands (diyhelper, acme-home).");
+    }
 }
 
 // Configure the HTTP request pipeline.
@@ -480,8 +606,30 @@ app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
 // Simple liveness probe for Docker / Caddy upstream healthcheck. Distinct
-// from /api/health so the container shows healthy even before any DB work.
+// from /readyz so a transient DB blip never causes the orchestrator to kill an
+// otherwise-healthy container (that would turn a brief DB hiccup into a
+// full restart). Stays shallow on purpose.
 app.MapGet("/healthz", () => Results.Ok());
+
+// Readiness probe — verifies the process can actually reach its database before
+// it should be sent traffic. Returns 503 (not 200) when the DB is unreachable
+// so a load balancer / readiness check can drain this instance instead of
+// routing requests that will only fail. This is what catches the "started but
+// pointed at the wrong/dead DB" case that the static /healthz cannot.
+app.MapGet("/readyz", async (AppDbContext db, CancellationToken ct) =>
+{
+    try
+    {
+        var canConnect = await db.Database.CanConnectAsync(ct);
+        return canConnect
+            ? Results.Ok(new { status = "ready", db = "up" })
+            : Results.Json(new { status = "not_ready", db = "down" }, statusCode: 503);
+    }
+    catch (Exception)
+    {
+        return Results.Json(new { status = "not_ready", db = "down" }, statusCode: 503);
+    }
+});
 
 // RFC 9116 responsible-disclosure contact is served by the earlier
 // MapGet("/.well-known/security.txt", ...) registration above, which reads
@@ -531,6 +679,14 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     if (features.AiKillSwitch)
         return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
 
+    // Fleet-wide daily spend backstop (last line of defence against runaway
+    // provider cost when per-device/per-IP limits are evaded at scale).
+    if (!aiSpendGuard.TryConsume(out _))
+    {
+        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
+    }
+
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
@@ -542,7 +698,7 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
-    var validationError = MediaValidation.Validate(request.Description, request.Media, context);
+    var validationError = MediaValidation.Validate(request.Description, request.Media, context, features.VideoAnalysis);
     if (validationError != null) return validationError;
 
     var modResult = await moderation.CheckAsync(request.Description);
@@ -551,7 +707,7 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
 
     var correlationId = context.Items["CorrelationId"] as string;
 
-    // Count images so GPT-4o can reference them by number
+    // Count images so the vision model can reference them by number
     int imageCount = 0;
     if (request.Media != null)
     {
@@ -886,6 +1042,14 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     if (features.AiKillSwitch)
         return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
 
+    // Fleet-wide daily spend backstop (last line of defence against runaway
+    // provider cost when per-device/per-IP limits are evaded at scale).
+    if (!aiSpendGuard.TryConsume(out _))
+    {
+        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
+    }
+
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
@@ -906,7 +1070,7 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
 
     var correlationId = context.Items["CorrelationId"] as string;
     OpenAIClientOptions clientOptions = new();
-    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(aiKeys.OpenAiKey), clientOptions);
+    ChatClient client = new(model: aiKeys.OpenAiModel, new ApiKeyCredential(aiKeys.OpenAiKey), clientOptions);
 
     // Serialize the project context as JSON (already structured / not raw user
     // text) but still wrap it in delimiter tags so the closing `}` of the JSON
@@ -922,15 +1086,21 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
         new UserChatMessage(PromptSanitizer.Wrap(request.Question))
     };
 
-    var aiCtx = new AiCallContext("ask-helper", "gpt-4o", request.Question?.Length ?? 0, 0, request.Language, correlationId);
-    string answer = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    var aiCtx = new AiCallContext("ask-helper", aiKeys.OpenAiModel, request.Question?.Length ?? 0, 0, request.Language, correlationId);
+    var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1024 };
+    string answer = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
 
     return Results.Ok(new { answer });
 });
 
 // ── Help Request endpoints ──────────────────────────────────────────
 
-app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async ([FromBody] CreateHelpRequestDto dto, HttpContext context, AppDbContext db) =>
+app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
+    [FromBody] CreateHelpRequestDto dto,
+    HttpContext context,
+    AppDbContext db,
+    Sburson.Shared.Email.IEmailService mailer,
+    ILogger<Program> logger) =>
 {
     // Reject oversize / malformed image payloads before persisting. Mobile app
     // compresses to well under 10 MB — anything larger is an abuse signal.
@@ -944,8 +1114,15 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async ([FromBod
     if (!string.IsNullOrEmpty(dto.UserDescription) && dto.UserDescription.Length > MediaValidation.MaxDescriptionLength)
         return ApiError.BadRequest(context, $"Description exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
 
+    // White-label attribution: which company's app produced this lead. Sourced
+    // from the X-Brand header (NOT the body) so a client can't spoof another
+    // tenant's attribution. Defaults to the flagship brand for un-branded builds.
+    var brandSlug = (context.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(brandSlug)) brandSlug = "diyhelper";
+
     var helpRequest = new HelpRequest
     {
+        Brand = brandSlug,
         CustomerName = dto.CustomerName,
         CustomerEmail = dto.CustomerEmail,
         CustomerPhone = dto.CustomerPhone,
@@ -959,20 +1136,62 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async ([FromBod
     };
     db.HelpRequests.Add(helpRequest);
     await db.SaveChangesAsync();
+
+    // Route the lead to the branding company by email. Falls back to the
+    // flagship inbox so a lead is never silently dropped. Best-effort: an email
+    // failure must not fail the customer's submit (they already got their guide).
+    await NotifyBrandOfLeadAsync(db, mailer, logger, brandSlug, helpRequest);
+
     return Results.Created($"/api/help-requests/{helpRequest.Id}", new { id = helpRequest.Id });
 });
 
-app.MapGet("/api/help-requests", async ([FromQuery] string? status, AppDbContext db) =>
+// Tenant scoping is applied by AdminAuthMiddleware, which sets Items["BrandScope"]
+// for a per-brand login (and Items["IsSuperAdmin"] for the operator). A scoped
+// caller only ever sees/edits their own brand's leads; cross-tenant ids 404
+// (not 403) so a scoped user can't probe another brand's id space.
+static string? BrandScopeOf(HttpContext http)
+    => http.Items.TryGetValue("BrandScope", out var s) ? s as string : null;
+
+// Shared shape for a campaign returned to the dashboard (list + detail).
+static object PushCampaignView(DIYHelper2.Api.Models.PushCampaign c) => new
+{
+    id = c.Id,
+    brand = c.Brand,
+    title = c.Title,
+    body = c.Body,
+    subtitle = c.Subtitle,
+    imageUrl = c.ImageUrl,
+    data = c.DataJson,
+    platform = c.PlatformFilter,
+    status = c.Status,
+    scheduledFor = c.ScheduledFor,
+    sentAt = c.SentAt,
+    recipientCount = c.RecipientCount,
+    deliveredCount = c.DeliveredCount,
+    failedCount = c.FailedCount,
+    createdBy = c.CreatedBy,
+    createdAt = c.CreatedAt,
+    updatedAt = c.UpdatedAt,
+};
+
+app.MapGet("/api/help-requests", async ([FromQuery] string? status, [FromQuery] string? brand, HttpContext http, AppDbContext db) =>
 {
     var query = db.HelpRequests.AsQueryable();
     if (!string.IsNullOrEmpty(status))
         query = query.Where(r => r.Status == status);
+
+    var scope = BrandScopeOf(http);
+    if (scope is not null)
+        query = query.Where(r => r.Brand == scope);       // brand login → own leads only
+    else if (!string.IsNullOrEmpty(brand))
+        query = query.Where(r => r.Brand == brand);        // super-admin optional filter
 
     var results = await query
         .OrderByDescending(r => r.CreatedAt)
         .Select(r => new
         {
             r.Id,
+            r.Brand,
             r.CustomerName,
             r.CustomerEmail,
             r.CustomerPhone,
@@ -988,16 +1207,21 @@ app.MapGet("/api/help-requests", async ([FromQuery] string? status, AppDbContext
     return Results.Ok(results);
 });
 
-app.MapGet("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
-{
-    var request = await db.HelpRequests.FindAsync(id);
-    return request is not null ? Results.Ok(request) : Results.NotFound();
-});
-
-app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, AppDbContext db) =>
+app.MapGet("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
 {
     var request = await db.HelpRequests.FindAsync(id);
     if (request is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && request.Brand != scope) return Results.NotFound();
+    return Results.Ok(request);
+});
+
+app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db) =>
+{
+    var request = await db.HelpRequests.FindAsync(id);
+    if (request is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && request.Brand != scope) return Results.NotFound();
 
     if (dto.Status is not null) request.Status = dto.Status;
     if (dto.Notes is not null) request.Notes = dto.Notes;
@@ -1008,14 +1232,239 @@ app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRe
     return Results.Ok(request);
 });
 
-app.MapDelete("/api/help-requests/{id:int}", async (int id, AppDbContext db) =>
+app.MapDelete("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
 {
     var request = await db.HelpRequests.FindAsync(id);
     if (request is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && request.Brand != scope) return Results.NotFound();
 
     db.HelpRequests.Remove(request);
     await db.SaveChangesAsync();
     return Results.NoContent();
+});
+
+// Brands available to the caller — powers the dashboard's brand filter.
+// Super-admin sees all; a scoped login sees only its own. Never exposes
+// credentials (projection is slug + company name only).
+app.MapGet("/api/brands", async (HttpContext http, AppDbContext db) =>
+{
+    var isSuper = http.Items.ContainsKey("IsSuperAdmin");
+    var scope = BrandScopeOf(http);
+    var q = db.Brands.AsQueryable();
+    if (!isSuper && scope is not null)
+        q = q.Where(b => b.Slug == scope);
+    var brands = await q
+        .OrderBy(b => b.CompanyName)
+        .Select(b => new { slug = b.Slug, companyName = b.CompanyName })
+        .ToListAsync();
+    return Results.Ok(new { isSuperAdmin = isSuper, brands });
+});
+
+// ── Push notifications ──────────────────────────────────────────────
+// Two surfaces:
+//   • Mobile (public, X-App-Key + rate-limited): register/unregister a device's
+//     Expo token. Brand attribution comes from the X-Brand header (never the
+//     body), exactly like a lead submit.
+//   • Owner portal (Basic Auth via AdminAuthMiddleware, brand-scoped): audience
+//     counts, compose/send (now or scheduled), test-send, and campaign history.
+//     A per-brand login only ever reaches its own devices/campaigns; a
+//     super-admin targets a brand via ?brand= / the send body's brand.
+
+// Register (or refresh) a device's push token. Upsert keyed by the Expo token.
+app.MapPost("/api/push/register", [EnableRateLimiting("submit")] async (
+    [FromBody] RegisterPushDto dto, HttpContext context, AppDbContext db) =>
+{
+    var validationError = PushValidation.ValidateRegister(dto.Token, context);
+    if (validationError != null) return validationError;
+
+    var brandSlug = (context.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(brandSlug)) brandSlug = "diyhelper";
+    var deviceId = context.Request.Headers["X-Device-Id"].FirstOrDefault();
+    var platform = PushValidation.NormalizePlatform(dto.Platform);
+    var now = DateTime.UtcNow;
+
+    var existing = await db.PushTokens.FirstOrDefaultAsync(t => t.Token == dto.Token);
+    if (existing is null)
+    {
+        db.PushTokens.Add(new PushToken
+        {
+            Brand = brandSlug,
+            DeviceId = deviceId,
+            Token = dto.Token!,
+            Platform = platform,
+            MarketingOptIn = dto.MarketingOptIn,
+            IsActive = true,
+            CreatedAt = now,
+            UpdatedAt = now,
+            LastSeenAt = now,
+        });
+    }
+    else
+    {
+        // Re-registration: the same device may have switched brands (unlikely) or
+        // toggled its promo consent. Reactivate and refresh liveness.
+        existing.Brand = brandSlug;
+        if (!string.IsNullOrEmpty(deviceId)) existing.DeviceId = deviceId;
+        if (!string.IsNullOrEmpty(platform)) existing.Platform = platform;
+        existing.MarketingOptIn = dto.MarketingOptIn;
+        existing.IsActive = true;
+        existing.UpdatedAt = now;
+        existing.LastSeenAt = now;
+    }
+    await db.SaveChangesAsync();
+    return Results.Created("/api/push/register", new { ok = true });
+});
+
+// Opt a device out (Settings toggle off / uninstall). Idempotent; never reveals
+// whether the token was known.
+app.MapPost("/api/push/unregister", [EnableRateLimiting("submit")] async (
+    [FromBody] UnregisterPushDto dto, AppDbContext db) =>
+{
+    if (PushValidation.IsExpoToken(dto.Token))
+    {
+        var existing = await db.PushTokens.FirstOrDefaultAsync(t => t.Token == dto.Token);
+        if (existing is not null)
+        {
+            existing.IsActive = false;
+            existing.MarketingOptIn = false;
+            existing.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+        }
+    }
+    return Results.Ok(new { ok = true });
+});
+
+// Audience size for the composer. Scoped login → own brand; super-admin → ?brand=.
+app.MapGet("/api/push/audience", async (
+    [FromQuery] string? brand, [FromQuery] string? platform,
+    HttpContext http, DIYHelper2.Api.Services.PushSendService push) =>
+{
+    var scope = BrandScopeOf(http);
+    var target = scope ?? (brand ?? "").Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(target))
+        return Results.Ok(new { brand = (string?)null, total = 0, ios = 0, android = 0 });
+    var a = await push.PreviewAudienceAsync(target, platform);
+    return Results.Ok(new { brand = target, total = a.Total, ios = a.Ios, android = a.Android });
+});
+
+// Compose + send (now or scheduled). Creates a PushCampaign and, for send-now,
+// dispatches inline; a future ScheduledFor is left for PushDispatchService.
+app.MapPost("/api/push/send", async (
+    [FromBody] SendPushDto dto, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.PushSendService push) =>
+{
+    var scope = BrandScopeOf(http);
+    var target = scope ?? (dto.Brand ?? "").Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(target))
+        return ApiError.BadRequest(http, "Select a brand to send to.");
+
+    var dataJson = dto.Data.HasValue ? dto.Data.Value.GetRawText() : null;
+    if (dataJson == "null") dataJson = null;
+
+    var validationError = PushValidation.ValidateSend(
+        dto.Title, dto.Body, dto.Subtitle, dto.ImageUrl, dataJson, dto.Platform, http);
+    if (validationError != null) return validationError;
+
+    var platform = PushValidation.NormalizePlatform(dto.Platform);
+    var now = DateTime.UtcNow;
+    // "Send now" is anything unset or within 5s of now; otherwise it's scheduled.
+    var sendNow = dto.ScheduledFor is null || dto.ScheduledFor.Value <= now.AddSeconds(5);
+
+    var campaign = new PushCampaign
+    {
+        Brand = target,
+        Title = dto.Title!.Trim(),
+        Body = dto.Body!.Trim(),
+        Subtitle = string.IsNullOrWhiteSpace(dto.Subtitle) ? null : dto.Subtitle!.Trim(),
+        ImageUrl = string.IsNullOrWhiteSpace(dto.ImageUrl) ? null : dto.ImageUrl!.Trim(),
+        DataJson = dataJson,
+        PlatformFilter = string.IsNullOrEmpty(platform) ? null : platform,
+        Status = "scheduled",
+        ScheduledFor = sendNow ? null : dto.ScheduledFor,
+        CreatedBy = scope ?? "__super__",
+        CreatedAt = now,
+        UpdatedAt = now,
+    };
+    db.PushCampaigns.Add(campaign);
+    await db.SaveChangesAsync();
+
+    if (sendNow) await push.DispatchAsync(campaign.Id);
+
+    var saved = await db.PushCampaigns.FindAsync(campaign.Id);
+    return Results.Ok(PushCampaignView(saved!));
+});
+
+// Fire a single notification at one token so a composer can preview on a real
+// device before broadcasting. Does not create a campaign.
+app.MapPost("/api/push/test", async (
+    [FromBody] TestPushDto dto, HttpContext http,
+    DIYHelper2.Api.Integrations.ExpoPushClient expo) =>
+{
+    if (!PushValidation.IsExpoToken(dto.Token))
+        return ApiError.BadRequest(http, "A valid Expo push token is required.");
+
+    var dataJson = dto.Data.HasValue ? dto.Data.Value.GetRawText() : null;
+    if (dataJson == "null") dataJson = null;
+
+    var validationError = PushValidation.ValidateSend(
+        dto.Title, dto.Body, dto.Subtitle, dto.ImageUrl, dataJson, null, http);
+    if (validationError != null) return validationError;
+
+    object? data = dto.Data.HasValue && dataJson != null ? dto.Data.Value : null;
+    var message = new DIYHelper2.Api.Integrations.ExpoPushMessage(
+        To: dto.Token!,
+        Title: dto.Title!.Trim(),
+        Body: dto.Body!.Trim(),
+        Subtitle: string.IsNullOrWhiteSpace(dto.Subtitle) ? null : dto.Subtitle!.Trim(),
+        ImageUrl: string.IsNullOrWhiteSpace(dto.ImageUrl) ? null : dto.ImageUrl!.Trim(),
+        Data: data);
+
+    var tickets = await expo.SendAsync(new[] { message });
+    var ticket = tickets.FirstOrDefault();
+    if (ticket is null || !ticket.Ok)
+        return ApiError.Response(http, 502,
+            ticket?.Message ?? ticket?.ErrorCode ?? "Expo rejected the test notification.",
+            "push_test_failed");
+    return Results.Ok(new { ok = true, ticketId = ticket.Id });
+});
+
+// Campaign history — brand-scoped list.
+app.MapGet("/api/push/campaigns", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var q = db.PushCampaigns.AsQueryable();
+    if (scope is not null)
+        q = q.Where(c => c.Brand == scope);
+    else if (!string.IsNullOrEmpty(brand))
+        q = q.Where(c => c.Brand == brand.Trim().ToLowerInvariant());
+
+    var rows = await q.OrderByDescending(c => c.CreatedAt).Take(100).ToListAsync();
+    return Results.Ok(rows.Select(PushCampaignView));
+});
+
+app.MapGet("/api/push/campaigns/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var c = await db.PushCampaigns.FindAsync(id);
+    if (c is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && c.Brand != scope) return Results.NotFound();
+    return Results.Ok(PushCampaignView(c));
+});
+
+// Cancel a not-yet-sent scheduled campaign.
+app.MapPost("/api/push/campaigns/{id:int}/cancel", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var c = await db.PushCampaigns.FindAsync(id);
+    if (c is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && c.Brand != scope) return Results.NotFound();
+    if (c.Status != "scheduled")
+        return ApiError.BadRequest(http, "Only scheduled campaigns can be canceled.");
+    c.Status = "canceled";
+    c.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(PushCampaignView(c));
 });
 
 // ── Privacy: server-side data deletion ──────────────────────────────
@@ -1203,6 +1652,14 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
     if (features.AiKillSwitch)
         return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
 
+    // Fleet-wide daily spend backstop (last line of defence against runaway
+    // provider cost when per-device/per-IP limits are evaded at scale).
+    if (!aiSpendGuard.TryConsume(out _))
+    {
+        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
+    }
+
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
@@ -1215,7 +1672,7 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
 
     var correlationId = context.Items["CorrelationId"] as string;
     var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
-    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(aiKeys.OpenAiKey), clientOptions);
+    ChatClient client = new(model: aiKeys.OpenAiModel, new ApiKeyCredential(aiKeys.OpenAiKey), clientOptions);
 
     bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
     string lang = isEs ? " Respond entirely in Spanish." : "";
@@ -1241,7 +1698,10 @@ Return JSON only:
         try
         {
             byte[] data = Convert.FromBase64String(req.Base64Image);
-            parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), req.MimeType ?? "image/jpeg"));
+            // Low detail: a single-tile (~85-token) vision encoding. Verifying
+            // "does this finished step look right" doesn't need high-res tiling,
+            // so this is a large per-image token saving at negligible quality cost.
+            parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), req.MimeType ?? "image/jpeg", ChatImageDetailLevel.Low));
             imgCount = 1;
         }
         catch (Exception ex)
@@ -1255,8 +1715,9 @@ Return JSON only:
         new SystemChatMessage("You are a DIY project quality inspector. Return valid JSON only."),
         new UserChatMessage(parts),
     };
-    var aiCtx = new AiCallContext("verify-step", "gpt-4o", req.StepText?.Length ?? 0, imgCount, req.Language, correlationId);
-    string raw = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    var aiCtx = new AiCallContext("verify-step", aiKeys.OpenAiModel, req.StepText?.Length ?? 0, imgCount, req.Language, correlationId);
+    var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1500 };
+    string raw = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
     return Results.Content(DIYHelper2.Api.AI.JsonExtractor.ExtractObject(raw), "application/json");
 });
 
@@ -1273,13 +1734,21 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
     if (features.AiKillSwitch)
         return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
 
+    // Fleet-wide daily spend backstop (last line of defence against runaway
+    // provider cost when per-device/per-IP limits are evaded at scale).
+    if (!aiSpendGuard.TryConsume(out _))
+    {
+        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
+    }
+
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
     if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
-    var validationError = MediaValidation.Validate(req.Description, req.Media, context);
+    var validationError = MediaValidation.Validate(req.Description, req.Media, context, features.VideoAnalysis);
     if (validationError != null) return validationError;
 
     var modResult = await moderation.CheckAsync(req.Description);
@@ -1288,7 +1757,7 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
 
     var correlationId = context.Items["CorrelationId"] as string;
     var clientOptions = new OpenAIClientOptions { NetworkTimeout = TimeSpan.FromMinutes(2) };
-    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(aiKeys.OpenAiKey), clientOptions);
+    ChatClient client = new(model: aiKeys.OpenAiModel, new ApiKeyCredential(aiKeys.OpenAiKey), clientOptions);
 
     bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
     string lang = isEs ? " Respond entirely in Spanish." : "";
@@ -1329,8 +1798,9 @@ Return JSON only:
         new SystemChatMessage("You are a home repair diagnostician. Return valid JSON only."),
         new UserChatMessage(parts),
     };
-    var aiCtx = new AiCallContext("diagnose", "gpt-4o", req.Description?.Length ?? 0, imgCount, req.Language, correlationId);
-    string raw = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    var aiCtx = new AiCallContext("diagnose", aiKeys.OpenAiModel, req.Description?.Length ?? 0, imgCount, req.Language, correlationId);
+    var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1500 };
+    string raw = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
     return Results.Content(DIYHelper2.Api.AI.JsonExtractor.ExtractObject(raw), "application/json");
 });
 
@@ -1347,13 +1817,21 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
     if (features.AiKillSwitch)
         return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
 
+    // Fleet-wide daily spend backstop (last line of defence against runaway
+    // provider cost when per-device/per-IP limits are evaded at scale).
+    if (!aiSpendGuard.TryConsume(out _))
+    {
+        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
+    }
+
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
 
     if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
 
-    var validationError = MediaValidation.Validate(req.Description, req.Media, context);
+    var validationError = MediaValidation.Validate(req.Description, req.Media, context, features.VideoAnalysis);
     if (validationError != null) return validationError;
 
     var modResult = await moderation.CheckAsync(req.Description);
@@ -1361,7 +1839,7 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
         return ApiError.Response(context, 400, "Your description violates our content policy.", "content_policy");
 
     var correlationId = context.Items["CorrelationId"] as string;
-    ChatClient client = new(model: "gpt-4o", new ApiKeyCredential(aiKeys.OpenAiKey));
+    ChatClient client = new(model: aiKeys.OpenAiModel, new ApiKeyCredential(aiKeys.OpenAiKey));
 
     bool isEs = string.Equals(req.Language, "es", StringComparison.OrdinalIgnoreCase);
     string lang = isEs ? " Respond in Spanish." : "";
@@ -1387,7 +1865,9 @@ If the description is already complete and unambiguous, return {{""questions"": 
             try
             {
                 byte[] data = Convert.FromBase64String(m.Base64);
-                parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg"));
+                // Low detail: clarifying questions only need a rough read of the
+                // scene, not pixel-level tiling — cheaper vision encoding.
+                parts.Add(ChatMessageContentPart.CreateImagePart(BinaryData.FromBytes(data), m.MimeType ?? "image/jpeg", ChatImageDetailLevel.Low));
                 imgCount++;
             }
             catch { }
@@ -1398,8 +1878,9 @@ If the description is already complete and unambiguous, return {{""questions"": 
         new SystemChatMessage("You ask short, useful clarifying questions for DIY projects. Return valid JSON only."),
         new UserChatMessage(parts),
     };
-    var aiCtx = new AiCallContext("clarify", "gpt-4o", req.Description?.Length ?? 0, imgCount, req.Language, correlationId);
-    string raw = await AiWorkflow.CompleteAsync(client, messages, null, aiCtx, logger);
+    var aiCtx = new AiCallContext("clarify", aiKeys.OpenAiModel, req.Description?.Length ?? 0, imgCount, req.Language, correlationId);
+    var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1024 };
+    string raw = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
     return Results.Content(DIYHelper2.Api.AI.JsonExtractor.ExtractObject(raw), "application/json");
 });
 
@@ -1426,6 +1907,14 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
 {
     if (features.AiKillSwitch)
         return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
+
+    // Fleet-wide daily spend backstop (last line of defence against runaway
+    // provider cost when per-device/per-IP limits are evaded at scale).
+    if (!aiSpendGuard.TryConsume(out _))
+    {
+        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
+    }
 
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey))
         return ApiError.NotConfigured(context, "OpenAI API key");
@@ -1490,7 +1979,8 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
         System: DIYHelper2.Api.Services.LiveDiyService.SystemPrompt,
         User: userPrompt,
         Images: images,
-        Timeout: TimeSpan.FromSeconds(45));
+        Timeout: TimeSpan.FromSeconds(45),
+        MaxOutputTokens: 1500);
 
     var aiCtx = new AiCallContext(
         Action: "live-diy-analyze",
@@ -1667,7 +2157,7 @@ app.MapGet("/api/property-value-impact", async (
 });
 
 // ── Receipt OCR (Mindee) ───────────────────────────────────────────
-app.MapPost("/api/receipt-ocr", async ([FromBody] ReceiptOcrRequest req, ReceiptOcrClient ocr) =>
+app.MapPost("/api/receipt-ocr", [EnableRateLimiting("ai")] async ([FromBody] ReceiptOcrRequest req, ReceiptOcrClient ocr) =>
 {
     if (!ocr.IsConfigured)
         return Results.Json(new { error = "Receipt OCR not configured." }, statusCode: 503);
@@ -1718,6 +2208,18 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
 {
     if (req.Q == null || req.Q.Length == 0 || string.IsNullOrWhiteSpace(req.Target))
         return Results.Json(new { error = "Missing q[] or target." }, statusCode: 400);
+
+    // Cost guard: Google Translate bills per character, so bound both the number
+    // of strings and each string's length. Without this a single request could
+    // ship arbitrarily large text and rack up spend (the IP rate limit only
+    // bounds request frequency, not payload size).
+    const int MaxStringsPerRequest = 128;
+    const int MaxCharsPerString = 5_000;
+    if (req.Q.Length > MaxStringsPerRequest)
+        return Results.Json(new { error = $"Too many strings. Maximum is {MaxStringsPerRequest} per request." }, statusCode: 400);
+    if (req.Q.Any(s => (s?.Length ?? 0) > MaxCharsPerString))
+        return Results.Json(new { error = $"A string exceeds the maximum length of {MaxCharsPerString} characters." }, statusCode: 400);
+
     if (string.IsNullOrEmpty(googleApiKey))
         return Results.Json(new { error = "GOOGLE_API_KEY is not configured on the server." }, statusCode: 500);
 
@@ -1781,7 +2283,12 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
             int origIdx = batchIndexes[j];
             results[origIdx] = translated;
             var cacheKey = $"{source}|{target}|{batch[j]}";
-            translationCache[cacheKey] = translated;
+            // Bound the process-lifetime cache so a flood of unique strings can't
+            // grow it without limit (memory-exhaustion DoS). Once full we simply
+            // stop caching new entries — correctness is unaffected, we just miss
+            // the cache for novel text.
+            if (translationCache.Count < 50_000)
+                translationCache[cacheKey] = translated;
         }
     }
 
@@ -1816,6 +2323,55 @@ app.MapGet("/api/admin/usage-digest", async (
         return Results.NotFound();
     return Results.Ok(await digest.BuildAsync(days, topN, ct));
 });
+
+// Emails a newly-created lead to its brand's configured recipient. Best-effort:
+// swallows all failures (logged) so a mail outage never fails the customer's
+// submit. Falls back to the flagship brand's inbox so a lead is never dropped.
+static async Task NotifyBrandOfLeadAsync(
+    AppDbContext db,
+    Sburson.Shared.Email.IEmailService mailer,
+    ILogger logger,
+    string brandSlug,
+    HelpRequest lead)
+{
+    try
+    {
+        var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+        var leadEmail = brand?.LeadEmail;
+        if (string.IsNullOrWhiteSpace(leadEmail))
+        {
+            var fallback = await db.Brands.FirstOrDefaultAsync(b => b.Slug == "diyhelper");
+            leadEmail = fallback?.LeadEmail;
+        }
+        if (string.IsNullOrWhiteSpace(leadEmail))
+        {
+            logger.LogWarning(
+                "No lead email configured for brand {Brand}; lead {LeadId} saved but not emailed.",
+                brandSlug, lead.Id);
+            return;
+        }
+
+        var contact = new List<string>();
+        if (!string.IsNullOrWhiteSpace(lead.CustomerName)) contact.Add($"Name:  {lead.CustomerName}");
+        if (!string.IsNullOrWhiteSpace(lead.CustomerPhone)) contact.Add($"Phone: {lead.CustomerPhone}");
+        if (!string.IsNullOrWhiteSpace(lead.CustomerEmail)) contact.Add($"Email: {lead.CustomerEmail}");
+
+        var subject = $"New job lead: {lead.ProjectTitle}";
+        var body =
+            "A customer requested a professional through your app.\n\n" +
+            $"Project: {lead.ProjectTitle}\n\n" +
+            string.Join("\n", contact) + "\n\n" +
+            $"What they described:\n{lead.UserDescription}\n\n" +
+            $"Lead #{lead.Id} · received {lead.CreatedAt:u}\n";
+
+        await mailer.SendAsync(leadEmail, subject, body);
+        logger.LogInformation("Lead {LeadId} for brand {Brand} emailed to its recipient.", lead.Id, brandSlug);
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "Failed to email lead {LeadId} for brand {Brand}.", lead.Id, brandSlug);
+    }
+}
 
 app.Run();
 
@@ -1860,6 +2416,36 @@ public record UpdateHelpRequestDto(
     [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("notes")] string? Notes,
     [property: JsonPropertyName("followUpDate")] DateTime? FollowUpDate
+);
+
+public record RegisterPushDto(
+    [property: JsonPropertyName("token")] string? Token,
+    [property: JsonPropertyName("platform")] string? Platform,
+    [property: JsonPropertyName("marketingOptIn")] bool MarketingOptIn
+);
+
+public record UnregisterPushDto(
+    [property: JsonPropertyName("token")] string? Token
+);
+
+public record SendPushDto(
+    [property: JsonPropertyName("brand")] string? Brand,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("body")] string? Body,
+    [property: JsonPropertyName("subtitle")] string? Subtitle,
+    [property: JsonPropertyName("imageUrl")] string? ImageUrl,
+    [property: JsonPropertyName("data")] System.Text.Json.JsonElement? Data,
+    [property: JsonPropertyName("platform")] string? Platform,
+    [property: JsonPropertyName("scheduledFor")] DateTime? ScheduledFor
+);
+
+public record TestPushDto(
+    [property: JsonPropertyName("token")] string? Token,
+    [property: JsonPropertyName("title")] string? Title,
+    [property: JsonPropertyName("body")] string? Body,
+    [property: JsonPropertyName("subtitle")] string? Subtitle,
+    [property: JsonPropertyName("imageUrl")] string? ImageUrl,
+    [property: JsonPropertyName("data")] System.Text.Json.JsonElement? Data
 );
 
 public record DeleteUserDataDto(

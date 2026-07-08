@@ -16,7 +16,7 @@ public class AnthropicVisionClient : IAIVisionClient
 
     public string ProviderName => "anthropic";
 
-    public AnthropicVisionClient(HttpClient http, string apiKey, ILogger<AnthropicVisionClient> logger, string model = "claude-opus-4-6")
+    public AnthropicVisionClient(HttpClient http, string apiKey, ILogger<AnthropicVisionClient> logger, string model = "claude-haiku-4-5")
     {
         _http = http;
         _apiKey = apiKey;
@@ -48,7 +48,7 @@ public class AnthropicVisionClient : IAIVisionClient
         var payload = new
         {
             model = _model,
-            max_tokens = 4096,
+            max_tokens = request.MaxOutputTokens ?? 4096,
             system = request.System,
             messages = new object[]
             {

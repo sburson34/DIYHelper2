@@ -28,7 +28,24 @@ public static class DatabaseConfig
         {
             case Provider.Postgres:
                 var dbUrl = Environment.GetEnvironmentVariable("DATABASE_URL")!;
-                options.UseNpgsql(NormalizeConnectionString(dbUrl));
+                options.UseNpgsql(NormalizeConnectionString(dbUrl), npgsql =>
+                {
+                    // Transient-fault resiliency. An RDS failover, reboot, or a
+                    // brief network blip otherwise surfaces as an unhandled
+                    // NpgsqlException on whatever request happened to be running.
+                    // EnableRetryOnFailure wraps every query/SaveChanges in an
+                    // execution strategy that retries transient errors with
+                    // exponential backoff. Safe here because the app uses no
+                    // manually-managed transactions (which the strategy would
+                    // otherwise reject).
+                    npgsql.EnableRetryOnFailure(
+                        maxRetryCount: 5,
+                        maxRetryDelay: TimeSpan.FromSeconds(10),
+                        errorCodesToAdd: null);
+                    // Bound how long a single command can hang so a wedged
+                    // connection fails fast instead of tying up a request thread.
+                    npgsql.CommandTimeout(30);
+                });
                 break;
             case Provider.Sqlite:
             default:

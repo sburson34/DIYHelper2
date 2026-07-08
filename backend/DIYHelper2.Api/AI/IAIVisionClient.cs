@@ -6,7 +6,10 @@ public record AIChatRequest(
     string System,
     string User,
     IReadOnlyList<AIImagePart> Images,
-    TimeSpan? Timeout = null
+    TimeSpan? Timeout = null,
+    // Hard ceiling on generated tokens. Bounds worst-case output cost and
+    // truncates runaway/abusive responses. Providers default to 4096 if null.
+    int? MaxOutputTokens = null
 );
 
 public interface IAIVisionClient

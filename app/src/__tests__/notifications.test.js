@@ -3,6 +3,7 @@
 
 let Notifications;
 let requestPermissions, scheduleProjectCheckin, scheduleWeatherAlert, cancelForProject;
+let registerForPushNotificationsAsync;
 let updateHoneyDoList, updateContractorList;
 
 beforeEach(() => {
@@ -20,8 +21,19 @@ beforeEach(() => {
     setNotificationChannelAsync: jest.fn(() => Promise.resolve()),
     scheduleNotificationAsync: jest.fn(() => Promise.resolve('notif-id-123')),
     cancelScheduledNotificationAsync: jest.fn(() => Promise.resolve()),
+    getExpoPushTokenAsync: jest.fn(() => Promise.resolve({ data: 'ExponentPushToken[abc]' })),
     setNotificationHandler: jest.fn(),
-    AndroidImportance: { DEFAULT: 3 },
+    AndroidImportance: { DEFAULT: 3, HIGH: 4 },
+  }));
+
+  // Read a global flag so a single test can simulate a simulator without
+  // resetModules gymnastics. Defaults to a physical device.
+  jest.mock('expo-device', () => ({ get isDevice() { return global.__EXPO_IS_DEVICE !== false; } }));
+  global.__EXPO_IS_DEVICE = true;
+
+  jest.mock('expo-constants', () => ({
+    __esModule: true,
+    default: { expoConfig: { extra: { eas: { projectId: 'test-project-id' } } } },
   }));
 
   jest.mock('../utils/storage', () => ({
@@ -39,6 +51,7 @@ beforeEach(() => {
   scheduleProjectCheckin = notifModule.scheduleProjectCheckin;
   scheduleWeatherAlert = notifModule.scheduleWeatherAlert;
   cancelForProject = notifModule.cancelForProject;
+  registerForPushNotificationsAsync = notifModule.registerForPushNotificationsAsync;
 });
 
 describe('requestPermissions', () => {
@@ -141,6 +154,40 @@ describe('cancelForProject', () => {
   it('handles null project', async () => {
     await cancelForProject(null);
     expect(Notifications.cancelScheduledNotificationAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe('registerForPushNotificationsAsync', () => {
+  it('returns an Expo token when permission granted on a device', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    const token = await registerForPushNotificationsAsync();
+    expect(token).toBe('ExponentPushToken[abc]');
+    expect(Notifications.getExpoPushTokenAsync).toHaveBeenCalledWith({ projectId: 'test-project-id' });
+  });
+
+  it('creates the high-importance promotions channel on Android', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    await registerForPushNotificationsAsync();
+    expect(Notifications.setNotificationChannelAsync).toHaveBeenCalledWith('promotions', expect.objectContaining({
+      name: 'Offers & promotions',
+    }));
+  });
+
+  it('returns null when permission denied', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
+    Notifications.requestPermissionsAsync.mockResolvedValue({ status: 'denied' });
+    const token = await registerForPushNotificationsAsync();
+    expect(token).toBeNull();
+    expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+  });
+
+  it('returns null on a non-physical device (simulator)', async () => {
+    global.__EXPO_IS_DEVICE = false;
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    const token = await registerForPushNotificationsAsync();
+    expect(token).toBeNull();
+    expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    global.__EXPO_IS_DEVICE = true;
   });
 });
 

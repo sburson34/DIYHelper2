@@ -3,6 +3,7 @@ using System;
 using DIYHelper2.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DIYHelper2.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260708193649_AddBrandsAndHelpRequestBrand")]
+    partial class AddBrandsAndHelpRequestBrand
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -191,130 +194,6 @@ namespace DIYHelper2.Api.Migrations
                         .HasDatabaseName("IX_HelpRequests_Brand");
 
                     b.ToTable("HelpRequests");
-                });
-
-            modelBuilder.Entity("DIYHelper2.Api.Models.PushCampaign", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Body")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Brand")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("CreatedBy")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DataJson")
-                        .HasColumnType("text");
-
-                    b.Property<int>("DeliveredCount")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("FailedCount")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("ImageUrl")
-                        .HasColumnType("text");
-
-                    b.Property<string>("PlatformFilter")
-                        .HasColumnType("text");
-
-                    b.Property<int>("RecipientCount")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("ScheduledFor")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("SentAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Subtitle")
-                        .HasColumnType("text");
-
-                    b.Property<string>("TicketsJson")
-                        .HasColumnType("text");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Brand")
-                        .HasDatabaseName("IX_PushCampaigns_Brand");
-
-                    b.HasIndex("Status", "ScheduledFor")
-                        .HasDatabaseName("IX_PushCampaigns_Status_ScheduledFor");
-
-                    b.ToTable("PushCampaigns");
-                });
-
-            modelBuilder.Entity("DIYHelper2.Api.Models.PushToken", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Brand")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("DeviceId")
-                        .HasColumnType("text");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastSeenAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("MarketingOptIn")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Platform")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Token")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Token")
-                        .IsUnique()
-                        .HasDatabaseName("IX_PushTokens_Token");
-
-                    b.HasIndex("Brand", "IsActive", "MarketingOptIn")
-                        .HasDatabaseName("IX_PushTokens_Brand_Active_OptIn");
-
-                    b.ToTable("PushTokens");
                 });
 
             modelBuilder.Entity("Sburson.Shared.DataDeletion.DataDeletionRequest", b =>

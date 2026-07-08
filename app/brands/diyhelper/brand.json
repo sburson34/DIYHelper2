@@ -1,0 +1,18 @@
+{
+  "id": "diyhelper",
+  "name": "DIYHelper2",
+  "slug": "diyhelper2",
+  "scheme": "diyhelper",
+  "bundleId": "com.diyhelper2",
+  "companyShortName": "DIY Helper",
+  "releasePrefix": "diyhelper2",
+  "privacyPolicyUrl": "https://api.diyhelper.org/privacy-policy.html",
+  "termsUrl": "https://api.diyhelper.org/terms-of-service.html",
+  "colors": {
+    "primary": "#FCA004",
+    "secondary": "#0A4FA6",
+    "accent": "#FDD314"
+  },
+  "splashBackground": "#0F2253",
+  "iconBackground": "#0F2253"
+}

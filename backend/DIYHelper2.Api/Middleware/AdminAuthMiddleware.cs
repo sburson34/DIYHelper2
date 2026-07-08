@@ -1,12 +1,16 @@
 using System.Security.Cryptography;
 using System.Text;
+using DIYHelper2.Api.Data;
+using Microsoft.EntityFrameworkCore;
+using Sburson.Shared.Auth;
 
 namespace DIYHelper2.Api.Middleware;
 
 /// <summary>
-/// Configuration for <see cref="AdminAuthMiddleware"/>. If either credential
-/// is null/empty the middleware is a no-op so local <c>dotnet run</c> keeps
-/// working without extra setup.
+/// Configuration for <see cref="AdminAuthMiddleware"/>. These are the
+/// SUPER-ADMIN credentials (you) — a super-admin sees every brand's leads. If
+/// either is null/empty the super-admin path is disabled, but per-brand logins
+/// (from the Brands table) still work.
 /// </summary>
 public sealed class AdminAuthOptions
 {
@@ -15,25 +19,49 @@ public sealed class AdminAuthOptions
 }
 
 /// <summary>
-/// HTTP Basic Auth gate for admin surfaces:
-///   - /admin/*        (dashboard HTML/JS/CSS)
-///   - /api/help-requests  GET (list, detail), PUT, DELETE
+/// Multi-tenant HTTP Basic Auth gate for admin surfaces:
+///   - /admin/*             (dashboard HTML/JS/CSS)
+///   - /api/help-requests   GET (list, detail), PUT, DELETE
+///   - /api/brands          GET (brand list for the dashboard)
 ///   - /api/feedback        GET (list)
 ///
-/// The mobile app still reaches /api/help-requests POST (creating a request)
-/// and /api/feedback POST (submitting beta feedback) without Basic Auth,
-/// because those are user-initiated submit flows gated by X-App-Key instead.
+/// Two credential tiers, checked in order:
+///   1. SUPER-ADMIN — the <see cref="AdminAuthOptions"/> config creds
+///      (ADMIN_USERNAME / ADMIN_PASSWORD). Sets <c>Items["IsSuperAdmin"]=true</c>
+///      and grants access to all brands' data.
+///   2. PER-BRAND — a <c>Brand.DashboardUsername</c> + BCrypt
+///      <c>DashboardPasswordHash</c> row (white-label tenant). Sets
+///      <c>Items["BrandScope"]=slug</c>; handlers must scope their queries to it.
 ///
-/// Credentials come from AWS Secrets Manager (fields ADMIN_USERNAME,
-/// ADMIN_PASSWORD) or the equivalent env vars for local dev. If neither is
-/// configured the middleware is a no-op and nothing is protected — set
-/// credentials before enabling public DNS or the admin surface is open.
+/// Fail-closed: <c>_next</c> is reached only on a positive super-admin or brand
+/// match; anything else returns 401. The per-brand path always runs a BCrypt
+/// verify (against <see cref="PasswordHasher.DummyHash"/> on a lookup miss) so
+/// response time never reveals whether a username exists.
+///
+/// The mobile app still reaches /api/help-requests POST and /api/feedback POST
+/// without Basic Auth — those are user submit flows gated by X-App-Key instead.
 /// </summary>
 public class AdminAuthMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly string? _username;
     private readonly string? _password;
+
+    // ── Brute-force throttle ──────────────────────────────────────────
+    // Per-IP failed-login accounting. The dashboard is the branding company's
+    // primary interface with the product, so its login is a high-value target;
+    // BCrypt already slows guessing, but a lockout caps online brute force.
+    private const int MaxFailures = 10;                                  // per window
+    private static readonly TimeSpan FailureWindow = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, AttemptRecord> _attempts = new();
+
+    private sealed class AttemptRecord
+    {
+        public int Failures;
+        public DateTime WindowStart;
+        public DateTime? LockedUntil;
+    }
 
     public AdminAuthMiddleware(RequestDelegate next, AdminAuthOptions options)
     {
@@ -42,7 +70,10 @@ public class AdminAuthMiddleware
         _password = options.Password;
     }
 
-    public async Task InvokeAsync(HttpContext context)
+    // AppDbContext is injected per-request via convention-based middleware method
+    // injection (the middleware itself stays a singleton, so no captive
+    // dependency). Needed to validate per-brand dashboard credentials.
+    public async Task InvokeAsync(HttpContext context, AppDbContext db)
     {
         if (!RequiresAuth(context.Request))
         {
@@ -50,12 +81,23 @@ public class AdminAuthMiddleware
             return;
         }
 
-        if (string.IsNullOrEmpty(_username) || string.IsNullOrEmpty(_password))
+        // Strict, self-contained CSP + no-store on every admin response
+        // (documents and API). The shared SecurityHeadersMiddleware sets
+        // nosniff / frame-options / referrer-policy but no CSP; the portal is a
+        // same-origin app with zero inline script/style, so a strict policy adds
+        // real XSS defense-in-depth without breaking it.
+        ApplyAdminSecurityHeaders(context);
+
+        var clientIp = ClientIp(context);
+
+        // Refuse early if this IP is in a lockout window.
+        if (IsLockedOut(clientIp))
         {
-            // No credentials configured → refuse access rather than leak data.
-            // This is deliberately fail-closed: a missing admin password must
-            // NOT silently disable the gate.
-            await WriteChallenge(context, "Admin credentials not configured.");
+            context.Response.StatusCode = 429;
+            context.Response.Headers["Retry-After"] = ((int)LockoutDuration.TotalSeconds).ToString();
+            context.Response.ContentType = "application/json";
+            await context.Response.WriteAsync(
+                System.Text.Json.JsonSerializer.Serialize(new { error = "Too many failed attempts. Try again later.", code = "admin_locked_out" }));
             return;
         }
 
@@ -65,14 +107,103 @@ public class AdminAuthMiddleware
             return;
         }
 
-        if (!FixedTimeEquals(user, _username) || !FixedTimeEquals(pass, _password))
+        // Tier 1: super-admin config creds → full cross-brand access.
+        if (!string.IsNullOrEmpty(_username) && !string.IsNullOrEmpty(_password)
+            && FixedTimeEquals(user, _username) && FixedTimeEquals(pass, _password))
         {
-            await WriteChallenge(context, "Invalid credentials.");
+            RegisterSuccess(clientIp);
+            context.Items["IsSuperAdmin"] = true;
+            await _next(context);
             return;
         }
 
-        await _next(context);
+        // Tier 2: per-brand scoped login. Always verify against a hash (dummy on
+        // miss) so a missing username is timing-indistinguishable from a wrong
+        // password — BCrypt's cost dominates the DB-lookup variance.
+        var brand = await db.Brands
+            .Where(b => b.DashboardUsername == user)
+            .Select(b => new { b.Slug, b.DashboardPasswordHash, b.IsActive })
+            .FirstOrDefaultAsync();
+
+        var passwordOk = PasswordHasher.Verify(pass, brand?.DashboardPasswordHash ?? PasswordHasher.DummyHash);
+
+        if (brand is not null && brand.IsActive && passwordOk)
+        {
+            RegisterSuccess(clientIp);
+            context.Items["BrandScope"] = brand.Slug;
+            await _next(context);
+            return;
+        }
+
+        RegisterFailure(clientIp);
+        await WriteChallenge(context, "Invalid credentials.");
     }
+
+    // Registers strict security headers on the response just before it starts,
+    // so they land on static-file (HTML/JS/CSS) responses too.
+    private static void ApplyAdminSecurityHeaders(HttpContext context)
+    {
+        var isDocument = (context.Request.Path.Value ?? "")
+            .StartsWith("/admin", StringComparison.OrdinalIgnoreCase);
+        context.Response.OnStarting(() =>
+        {
+            var headers = context.Response.Headers;
+            // Sensitive lead/customer data — never cache in a shared browser.
+            headers["Cache-Control"] = "no-store";
+            headers["Pragma"] = "no-cache";
+            if (isDocument)
+            {
+                // Self-contained app: only same-origin script/style, data: images
+                // for base64 thumbnails, no framing, no external anything.
+                headers["Content-Security-Policy"] =
+                    "default-src 'self'; " +
+                    "script-src 'self'; " +
+                    "style-src 'self'; " +
+                    "img-src 'self' data: https:; " +
+                    "font-src 'self'; " +
+                    "connect-src 'self'; " +
+                    "object-src 'none'; " +
+                    "base-uri 'none'; " +
+                    "form-action 'self'; " +
+                    "frame-ancestors 'none'";
+            }
+            return Task.CompletedTask;
+        });
+    }
+
+    private static string ClientIp(HttpContext context) =>
+        context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
+        ?? context.Connection.RemoteIpAddress?.ToString()
+        ?? "unknown";
+
+    private static bool IsLockedOut(string ip) =>
+        ip != "unknown"
+        && _attempts.TryGetValue(ip, out var rec)
+        && rec.LockedUntil is { } until
+        && until > DateTime.UtcNow;
+
+    private static void RegisterFailure(string ip)
+    {
+        // No resolvable client IP (in-memory test host) → nothing to throttle by.
+        // In production the ALB always sets X-Forwarded-For / RemoteIpAddress.
+        if (ip == "unknown") return;
+        var rec = _attempts.GetOrAdd(ip, _ => new AttemptRecord { WindowStart = DateTime.UtcNow });
+        lock (rec)
+        {
+            var now = DateTime.UtcNow;
+            // Reset the counting window if it has elapsed (and no active lock).
+            if (rec.LockedUntil is null && now - rec.WindowStart > FailureWindow)
+            {
+                rec.WindowStart = now;
+                rec.Failures = 0;
+            }
+            rec.Failures++;
+            if (rec.Failures >= MaxFailures)
+                rec.LockedUntil = now + LockoutDuration;
+        }
+    }
+
+    private static void RegisterSuccess(string ip) => _attempts.TryRemove(ip, out _);
 
     private static bool RequiresAuth(HttpRequest req)
     {
@@ -85,6 +216,18 @@ public class AdminAuthMiddleware
         // update (PUT), delete (DELETE). POST is the customer create flow.
         if (path.StartsWith("/api/help-requests", StringComparison.OrdinalIgnoreCase)
             && !HttpMethods.IsPost(req.Method))
+            return true;
+
+        // Brand list for the dashboard (super-admin: all; scoped: own).
+        if (path.StartsWith("/api/brands", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Push composer surfaces (audience, send, test, campaigns, cancel) are
+        // admin-only. The mobile register/unregister POSTs stay public (gated by
+        // X-App-Key), like /api/help-requests POST.
+        if (path.StartsWith("/api/push", StringComparison.OrdinalIgnoreCase)
+            && !path.Equals("/api/push/register", StringComparison.OrdinalIgnoreCase)
+            && !path.Equals("/api/push/unregister", StringComparison.OrdinalIgnoreCase))
             return true;
 
         // Admin-only /api/feedback list (GET). POST is customer submit.

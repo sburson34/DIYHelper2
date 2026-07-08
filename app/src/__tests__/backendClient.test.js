@@ -30,6 +30,8 @@ const {
   getPropertyValueImpact,
   uploadReceipt,
   matchPaintColor,
+  registerPushToken,
+  unregisterPushToken,
 } = require('../api/backendClient');
 
 const { reportError, reportHandledError, addBreadcrumb } = require('../services/monitoring');
@@ -341,6 +343,30 @@ describe('External API calls', () => {
     await matchPaintColor({ base64Image: 'abc', mimeType: 'image/jpeg' });
     const body = JSON.parse(global.fetch.mock.calls[0][1].body);
     expect(body.base64Image).toBe('abc');
+  });
+});
+
+// ── Push notifications ──────────────────────────────────────────
+describe('Push notifications', () => {
+  it('registerPushToken posts token, platform, and opt-in to /api/push/register', async () => {
+    mockJsonResponse({ ok: true });
+    await registerPushToken('ExponentPushToken[abc]', 'ios', true);
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://test-api:5206/api/push/register');
+    expect(opts.method).toBe('POST');
+    const body = JSON.parse(opts.body);
+    expect(body.token).toBe('ExponentPushToken[abc]');
+    expect(body.platform).toBe('ios');
+    expect(body.marketingOptIn).toBe(true);
+  });
+
+  it('unregisterPushToken posts the token to /api/push/unregister', async () => {
+    mockJsonResponse({ ok: true });
+    await unregisterPushToken('ExponentPushToken[abc]');
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://test-api:5206/api/push/unregister');
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body).token).toBe('ExponentPushToken[abc]');
   });
 });
 

@@ -9,15 +9,16 @@ import {
   getCommunityOptIn, setCommunityOptIn,
   clearAllUserData,
 } from '../utils/storage';
-import { requestPermissions as requestNotificationPermissions } from '../utils/notifications';
+import { requestPermissions as requestNotificationPermissions, registerForPushNotificationsAsync, devicePlatform } from '../utils/notifications';
+import { getPromoConsent, setPromoConsent } from '../utils/storage';
 import { useTranslation } from '../i18n/I18nContext';
 import { useAppTheme } from '../ThemeContext';
 import theme from '../theme';
 import { reportError, reportHandledError, reportWarning, addBreadcrumb } from '../services/monitoring';
 import { Sentry } from '../services/sentry';
 import { useMLTranslation } from '../mlkit/TranslationProvider';
-import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL } from '../config/appInfo';
-import { requestServerSideDeletion } from '../api/backendClient';
+import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL, BRAND_NAME } from '../config/appInfo';
+import { requestServerSideDeletion, registerPushToken, unregisterPushToken } from '../api/backendClient';
 
 // Privacy-policy SLA: server-side deletion within 30 days of a verified request.
 // Falls back to a pre-filled mailto: when the backend is unreachable so the user
@@ -34,6 +35,8 @@ export default function Settings() {
   const [zip, setZip] = useState('');
   const [skillLevel, setSkillLevel] = useState('intermediate');
   const [reminders, setReminders] = useState(true);
+  const [promos, setPromos] = useState(false);
+  const [promoBusy, setPromoBusy] = useState(false);
   const [community, setCommunity] = useState(false);
   const [saved, setSaved] = useState(false);
   const [langPickerOpen, setLangPickerOpen] = useState(false);
@@ -51,6 +54,8 @@ export default function Settings() {
       setZip(prefs.zip || '');
       setSkillLevel(prefs.skillLevel || 'intermediate');
       setReminders(prefs.remindersEnabled !== false);
+      const promo = await getPromoConsent();
+      setPromos(!!(promo && promo.granted) && prefs.pushEnabled === true);
       setCommunity(await getCommunityOptIn());
     })();
   }, []);
@@ -77,6 +82,38 @@ export default function Settings() {
       setTimeout(() => setSaved(false), 2000);
     } else {
       Alert.alert(t('error'), t('save_failed'));
+    }
+  };
+
+  // Promotional-push opt-in. Independent of the "Reminders" (local) toggle and
+  // fully revocable. Enabling gets an Expo token + registers it (marketingOptIn
+  // true); disabling unregisters it server-side so no further promos are sent.
+  const handlePromosToggle = async (val) => {
+    setPromoBusy(true);
+    try {
+      if (val) {
+        const token = await registerForPushNotificationsAsync();
+        if (!token) {
+          Alert.alert('Permission needed', 'Enable notifications in system settings to receive offers.');
+          setPromos(false);
+          await setPromoConsent(false);
+          return;
+        }
+        try { await registerPushToken(token, devicePlatform(), true); } catch {}
+        await setAppPrefs({ pushEnabled: true });
+        await setPromoConsent(true);
+        setPromos(true);
+      } else {
+        // Best-effort: fetch the current token (no new prompt if already granted)
+        // and tell the server to stop sending to it.
+        const token = await registerForPushNotificationsAsync();
+        if (token) { try { await unregisterPushToken(token); } catch {} }
+        await setAppPrefs({ pushEnabled: false });
+        await setPromoConsent(false);
+        setPromos(false);
+      }
+    } finally {
+      setPromoBusy(false);
     }
   };
 
@@ -199,6 +236,21 @@ export default function Settings() {
               accessibilityLabel="Reminders for unfinished projects"
               accessibilityRole="switch"
               accessibilityState={{ checked: reminders }}
+            />
+          </View>
+
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.toggleLabel}>Offers &amp; promotions</Text>
+              <Text style={styles.toggleSub}>{`Get deals and seasonal tips from ${BRAND_NAME}.`}</Text>
+            </View>
+            <Switch
+              value={promos}
+              disabled={promoBusy}
+              onValueChange={handlePromosToggle}
+              accessibilityLabel="Offers and promotions notifications"
+              accessibilityRole="switch"
+              accessibilityState={{ checked: promos, disabled: promoBusy }}
             />
           </View>
 

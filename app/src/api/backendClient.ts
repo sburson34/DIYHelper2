@@ -2,7 +2,7 @@ import { API_BASE_URL } from '../config/api';
 import { getCachedAnalysis, setCachedAnalysis, getAppPrefs, getToolInventory, getAiConsent, getOrCreateDeviceId } from '../utils/storage';
 import { reportError, reportHandledError, addBreadcrumb } from '../services/monitoring';
 import { requestIntegrityToken } from '../services/playIntegrity';
-import { RELEASE } from '../config/appInfo';
+import { RELEASE, BRAND_ID } from '../config/appInfo';
 
 // Endpoints that warrant the extra latency of a Play Integrity attestation.
 // Keep this tight — every integrity call takes ~1–3s on a cold fetch, so
@@ -147,6 +147,7 @@ const apiFetch = async (url: string, options: RequestInit = {}): Promise<Respons
     'Content-Type': 'application/json',
     'X-Correlation-ID': correlationId,
     'X-App-Version': RELEASE,
+    'X-Brand': BRAND_ID,
     'X-Device-Id': deviceId,
     ...(APP_KEY ? { 'X-App-Key': APP_KEY } : {}),
     ...(integrityToken ? { 'X-Play-Integrity-Token': integrityToken } : {}),
@@ -563,6 +564,26 @@ const confirmServerSideDeletion = async (requestId: string, code: string): Promi
   return jsonPost<DeletionResponse>(`${BASE_URL}/api/confirm-deletion`, { requestId, code });
 };
 
+// ── Promotional push notifications ────────────────────────────────────
+// Register this device's Expo push token so the branding company can send it
+// promotional notifications. Brand + device id ride along automatically as the
+// X-Brand / X-Device-Id headers (set in apiFetch), so the backend keys the
+// token to the right tenant without the client passing either.
+const registerPushToken = async (
+  token: string,
+  platform: string,
+  marketingOptIn: boolean,
+): Promise<unknown> => {
+  addBreadcrumb('push: register token', 'user.action', { platform, marketingOptIn });
+  return jsonPost(`${BASE_URL}/api/push/register`, { token, platform, marketingOptIn });
+};
+
+// Opt this device out of promotional pushes (Settings toggle off). Best-effort.
+const unregisterPushToken = async (token: string): Promise<unknown> => {
+  addBreadcrumb('push: unregister token', 'user.action', {});
+  return jsonPost(`${BASE_URL}/api/push/unregister`, { token });
+};
+
 export {
   analyzeProject,
   analyzeLive,
@@ -586,4 +607,6 @@ export {
   translateStrings,
   requestServerSideDeletion,
   confirmServerSideDeletion,
+  registerPushToken,
+  unregisterPushToken,
 };

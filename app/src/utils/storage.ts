@@ -12,6 +12,7 @@ const HELP_REQUESTS_KEY = '@help_requests_local';
 const COMMUNITY_OPT_IN_KEY = '@community_opt_in';
 const ONBOARDING_SEEN_KEY = '@onboarding_seen';
 const AI_CONSENT_KEY = '@ai_consent';
+const PROMO_CONSENT_KEY = '@promo_consent';
 const DEVICE_ID_KEY = '@device_id';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -77,6 +78,7 @@ export interface AppPrefs {
   zip: string;
   remindersEnabled: boolean;
   reminderDays: number;
+  pushEnabled: boolean;
   [extra: string]: unknown;
 }
 
@@ -137,6 +139,40 @@ export const setAiConsent = async (granted: boolean): Promise<void> => {
       version: AI_CONSENT_VERSION,
     };
     await AsyncStorage.setItem(AI_CONSENT_KEY, JSON.stringify(record));
+  } catch {}
+};
+
+// ── Promotional-push consent ───────────────────────────────────────
+// Separate from AI consent AND from the functional "reminders" toggle: this is
+// the marketing/advertising opt-in the branding company's pushes depend on. A
+// null record means the user hasn't been asked yet (so the first-run priming
+// screen shows once); { granted:false } means they were asked and declined.
+// App functionality never depends on this — declining just means no promos.
+
+export interface PromoConsent {
+  granted: boolean;
+  grantedAt?: string;
+  version: number;
+}
+
+// Bump when the promo disclosure copy materially changes.
+export const PROMO_CONSENT_VERSION = 1;
+
+export const getPromoConsent = async (): Promise<PromoConsent | null> => {
+  try {
+    const raw = await AsyncStorage.getItem(PROMO_CONSENT_KEY);
+    return raw ? (JSON.parse(raw) as PromoConsent) : null;
+  } catch { return null; }
+};
+
+export const setPromoConsent = async (granted: boolean): Promise<void> => {
+  try {
+    const record: PromoConsent = {
+      granted,
+      grantedAt: granted ? new Date().toISOString() : undefined,
+      version: PROMO_CONSENT_VERSION,
+    };
+    await AsyncStorage.setItem(PROMO_CONSENT_KEY, JSON.stringify(record));
   } catch {}
 };
 
@@ -398,6 +434,7 @@ const DEFAULT_PREFS: AppPrefs = {
   zip: '',
   remindersEnabled: true,
   reminderDays: 3,
+  pushEnabled: false,
 };
 
 export const getAppPrefs = async (): Promise<AppPrefs> => {

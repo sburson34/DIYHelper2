@@ -12,7 +12,7 @@ public class OpenAIVisionClient : IAIVisionClient
 
     public string ProviderName => "openai";
 
-    public OpenAIVisionClient(string apiKey, ILogger<OpenAIVisionClient> logger, string model = "gpt-4o")
+    public OpenAIVisionClient(string apiKey, ILogger<OpenAIVisionClient> logger, string model = "gpt-4o-mini")
     {
         _apiKey = apiKey;
         _model = model;
@@ -30,7 +30,11 @@ public class OpenAIVisionClient : IAIVisionClient
         };
 
         var client = new ChatClient(model: _model, new ApiKeyCredential(_apiKey), clientOptions);
-        var options = new ChatCompletionOptions { EndUserId = "diy-helper-app" };
+        var options = new ChatCompletionOptions
+        {
+            EndUserId = "diy-helper-app",
+            MaxOutputTokenCount = request.MaxOutputTokens ?? 4096,
+        };
 
         var parts = new List<ChatMessageContentPart>
         {

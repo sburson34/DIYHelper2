@@ -11,7 +11,10 @@ public static class MediaValidation
     // Per-image limits. A 10 MB base64 string decodes to ~7.5 MB of raw image,
     // which is already larger than anything a phone camera produces after the
     // mobile-side compression step.
-    public const int MaxMediaItems = 8;
+    // Images are the dominant AI cost driver (each one is billed as a chunk of
+    // vision tokens). 3 covers virtually every real DIY project (a wide shot +
+    // two close-ups) while capping worst-case spend per call. Was 8.
+    public const int MaxMediaItems = 3;
     public const int MaxBase64LengthPerItem = 10 * 1024 * 1024;
     public const int MaxDescriptionLength = 8_000;
 
@@ -20,7 +23,7 @@ public static class MediaValidation
         "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif",
     };
 
-    public static IResult? Validate(string? description, MediaItem[]? media, HttpContext context)
+    public static IResult? Validate(string? description, MediaItem[]? media, HttpContext context, bool allowVideo = false)
     {
         if (!string.IsNullOrEmpty(description) && description.Length > MaxDescriptionLength)
             return ApiError.BadRequest(context, $"Description exceeds maximum length of {MaxDescriptionLength} characters.");
@@ -34,9 +37,18 @@ public static class MediaValidation
         foreach (var item in media)
         {
             if (item == null) continue;
-            // Video items are skipped downstream; no need to validate their payload.
             if (string.Equals(item.Type, "video", StringComparison.OrdinalIgnoreCase))
+            {
+                // Video is gated (FeatureFlags.VideoAnalysis). Vision models can't
+                // read video, and video payloads bypass the per-item size cap —
+                // reject at the edge rather than accept-and-ignore a large upload.
+                if (!allowVideo)
+                    return ApiError.Response(context, 400,
+                        "Video is not currently supported. Please attach a photo instead.",
+                        "video_not_supported");
+                // When enabled, skip payload validation (no frame pipeline yet).
                 continue;
+            }
 
             if (string.IsNullOrEmpty(item.Base64))
                 continue;

@@ -1,5 +1,21 @@
+import Constants from 'expo-constants';
+
+// ── White-label brand hues ────────────────────────────────────────────
+// The active brand (brands/<id>/brand.json → app.config.js → expo-constants)
+// supplies primary/secondary/accent. Everything else — backgrounds, text,
+// semantic colors — is derived per light/dark mode from the defaults below.
+// Falls back to the DIYHelper palette when no brand is present (e.g. Jest,
+// where expo-constants exposes no expoConfig).
+type BrandHues = Partial<Pick<typeof baseLight, 'primary' | 'secondary' | 'accent'>>;
+const C = Constants as unknown as {
+  expoConfig?: { extra?: { brand?: { colors?: BrandHues } } };
+  manifest?: { extra?: { brand?: { colors?: BrandHues } } };
+};
+const brandHues: BrandHues =
+  C.expoConfig?.extra?.brand?.colors ?? C.manifest?.extra?.brand?.colors ?? {};
+
 // Light theme palette (kept as default export so legacy `import theme from '../theme'` still works)
-const light = {
+const baseLight = {
   primary: '#FCA004', // Action Orange
   secondary: '#0A4FA6', // Professional Blue
   accent: '#FDD314', // Construction Yellow
@@ -14,7 +30,7 @@ const light = {
   shadow: '#000000',
 };
 
-const dark: typeof light = {
+const baseDark: typeof baseLight = {
   primary: '#FCA004',
   secondary: '#3A82E0',
   accent: '#FDD314',
@@ -28,6 +44,10 @@ const dark: typeof light = {
   border: '#2A3550',
   shadow: '#000000',
 };
+
+// Brand hues override the base palette in both modes.
+const light = { ...baseLight, ...brandHues };
+const dark = { ...baseDark, ...brandHues };
 
 const shared = {
   roundness: { small: 8, medium: 16, large: 24, full: 999 },

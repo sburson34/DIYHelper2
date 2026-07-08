@@ -13,7 +13,17 @@ type ExpoConfigShape = {
   version?: string;
   android?: { versionCode?: number | string };
   ios?: { buildNumber?: string };
-  extra?: { sentryDsn?: string };
+  extra?: {
+    sentryDsn?: string;
+    brand?: {
+      id?: string;
+      name?: string;
+      companyShortName?: string;
+      releasePrefix?: string;
+      privacyPolicyUrl?: string;
+      termsUrl?: string;
+    };
+  };
 };
 
 const C = Constants as unknown as {
@@ -23,6 +33,15 @@ const C = Constants as unknown as {
 };
 
 const expoConfig: ExpoConfigShape = C.expoConfig ?? C.manifest ?? {};
+
+// ── Active brand (white-label) ────────────────────────────────────────
+// Supplied by app.config.js (brands/<id>/brand.json). Defaults keep the
+// flagship DIYHelper identity when no brand is present (e.g. Jest).
+const brand = expoConfig.extra?.brand ?? {};
+export const BRAND_ID: string = brand.id ?? 'diyhelper';
+// User-facing company name for the active brand (e.g. promo-consent copy).
+export const BRAND_NAME: string = brand.companyShortName ?? brand.name ?? 'DIY Helper';
+const RELEASE_PREFIX: string = brand.releasePrefix ?? 'diyhelper2';
 
 // ── Version ───────────────────────────────────────────────────────────
 // app.json "version" is the user-facing version string.
@@ -63,10 +82,12 @@ export const APP_PLATFORM: typeof Platform.OS = Platform.OS;
 export const OS_VERSION: string = String(Platform.Version);
 
 // ── Release identifier ────────────────────────────────────────────────
-// Format: diyhelper2@1.0.0+3 (version+buildNumber, matches Sentry convention)
+// Format: <brand>@1.0.0+3 (version+buildNumber, matches Sentry convention).
+// The prefix is the active brand's releasePrefix so per-company builds are
+// distinguishable in Sentry / usage telemetry.
 export const RELEASE: string = GIT_COMMIT
-  ? `diyhelper2@${APP_VERSION}+${BUILD_NUMBER} (${GIT_COMMIT})`
-  : `diyhelper2@${APP_VERSION}+${BUILD_NUMBER}`;
+  ? `${RELEASE_PREFIX}@${APP_VERSION}+${BUILD_NUMBER} (${GIT_COMMIT})`
+  : `${RELEASE_PREFIX}@${APP_VERSION}+${BUILD_NUMBER}`;
 
 // ── Legal URLs ────────────────────────────────────────────────────────
 // Single source of truth for the privacy policy link. The same URL must go
@@ -76,11 +97,13 @@ export const RELEASE: string = GIT_COMMIT
 //
 // The HTML source lives at backend/DIYHelper2.Api/wwwroot/privacy-policy.html
 // and is served by the API host's static-files middleware.
-export const PRIVACY_POLICY_URL: string = 'https://api.diyhelper.org/privacy-policy.html';
+export const PRIVACY_POLICY_URL: string =
+  brand.privacyPolicyUrl ?? 'https://api.diyhelper.org/privacy-policy.html';
 
 // Terms of Service — same deploy mechanism as the privacy policy. Source HTML
 // lives at backend/DIYHelper2.Api/wwwroot/terms-of-service.html.
-export const TERMS_OF_SERVICE_URL: string = 'https://api.diyhelper.org/terms-of-service.html';
+export const TERMS_OF_SERVICE_URL: string =
+  brand.termsUrl ?? 'https://api.diyhelper.org/terms-of-service.html';
 
 export interface AppInfo {
   appVersion: string;
