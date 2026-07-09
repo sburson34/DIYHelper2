@@ -216,6 +216,7 @@ function wireLeads() {
   el('delete-btn').addEventListener('click', deleteCurrentRequest);
   el('detail-content').addEventListener('click', (e) => {
     if (e.target.closest('#save-lead-btn')) saveChanges();
+    else if (e.target.closest('#resend-report-btn')) resendReport();
     else if (e.target.closest('#quote-add-item')) {
       const sel = el('quote-item');
       const item = state.priceBook.find((p) => String(p.id) === sel.value);
@@ -393,7 +394,14 @@ function renderDetail(data) {
             <div class="price-edit-amt"><span class="price-dollar">$</span><input type="number" min="0" step="0.01" id="edit-parts" value="${data.partsCost != null ? escapeHtml(String(data.partsCost)) : ''}"></div>
           </div>
         </div>
+        <div class="form-group">
+          <label for="edit-maint">Maintenance reminder</label>
+          <select id="edit-maint">
+            ${[[0, 'None'], [3, 'Every 3 months'], [6, 'Every 6 months'], [12, 'Every 12 months']].map(([v, label]) => `<option value="${v}" ${(data.maintenanceIntervalMonths || 0) === v ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </div>
         ${costingLine(data)}
+        ${data.completedAt ? `<button class="btn ghost" id="resend-report-btn" type="button">${data.reportSentAt ? 'Resend' : 'Send'} job report</button>` : ''}
         <button class="save-btn" id="save-lead-btn" type="button">Save changes</button>
       </div>
     </div>`;
@@ -422,10 +430,11 @@ async function saveChanges() {
   const partsRaw = el('edit-parts').value.trim();
   const laborCost = laborRaw === '' ? -1 : parseFloat(laborRaw);
   const partsCost = partsRaw === '' ? -1 : parseFloat(partsRaw);
+  const maintenanceIntervalMonths = Number(el('edit-maint').value) || 0;
   const btn = el('save-lead-btn');
   btn.disabled = true;
   try {
-    const updated = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}`, 'PUT', { status, notes, followUpDate, laborCost, partsCost });
+    const updated = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}`, 'PUT', { status, notes, followUpDate, laborCost, partsCost, maintenanceIntervalMonths });
     state.quoteLines = [];
     await loadPriceBookForBrand();
     renderDetail(updated);
@@ -991,6 +1000,15 @@ async function sendCustomerSms() {
     toast(err.message || 'Could not send text.', 'error');
   } finally {
     btn.disabled = false;
+  }
+}
+
+async function resendReport() {
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/report`, 'PUT', {});
+    toast(res.sent ? 'Report emailed to the customer.' : (res.reason || 'Could not send report.'), res.sent ? 'success' : 'error');
+  } catch (err) {
+    toast(err.message || 'Could not send report.', 'error');
   }
 }
 

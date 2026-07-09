@@ -12,7 +12,7 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 ## Thread list (priority order)
 1. [DONE ✅] SMS / communication layer (Twilio seam): reminders, on-the-way texts, missed-call text-back, review-request automation
 2. [DONE ✅] Field payment loop (Stripe payment links / collect on completion, deposits, invoice follow-ups)
-3. [ ] Job report (HTML email) + warranty/maintenance reminders + recurring maintenance auto-scheduling
+3. [DONE ✅] Job report (HTML email) + warranty/maintenance reminders + recurring maintenance auto-scheduling
 4. [ ] Tiered "Good/Better/Best" quotes
 5. [ ] Service history per property/asset
 6. [ ] Deeper analytics (conversion funnel, tech utilization)
@@ -48,3 +48,10 @@ _(newest last)_
 - Stripe webhook `POST /api/stripe/webhook` (public, `/api/stripe/` added to AppKey exempt prefixes) → marks job paid from `metadata.jobId`. HMAC-SHA256 signature validation when `STRIPE_WEBHOOK_SECRET` set; accepts in dev when unset.
 - Env: reuses `STRIPE_SECRET_KEY`; adds `STRIPE_WEBHOOK_SECRET`. Dormant until keys set.
 - Tests: `PaymentTests` (link unavailable when unconfigured, webhook marks paid from metadata). 2 tests.
+
+### Thread 3 — Job report + maintenance (DONE, 253 backend tests green)
+- **Refactor:** all completion side-effects consolidated into `JobCompletionService.HandleAsync` (invoice sync + report email + maintenance scheduling + review SMS), called from BOTH the owner PUT and tech PUT on the transition into "completed". Removed the old inline `TrySyncInvoiceAsync` static helper. This means a tech completing a job now also triggers the report/review, which it didn't before.
+- **Job report:** branded HTML email (before/after photos, work notes, total, signature as inline data URIs) sent once on completion (`HelpRequest.ReportSentAt`). Owner "Send/Resend job report" button + `PUT /api/help-requests/{id}/report`.
+- **Maintenance:** `MaintenanceReminder` table — deliberately SEPARATE from HelpRequest because RetentionService purges help-requests at 90 days; a months-out reminder must survive. `HelpRequest.MaintenanceIntervalMonths` (owner picks None/3/6/12 in the console); on completion a reminder is scheduled. `MaintenanceReminderService` (daily BackgroundService) sweeps due+unsent reminders, emails (+texts if SMS configured), marks sent. Scan logic is a static `ProcessDueAsync` for testability.
+- Migration `AddReportsAndMaintenance`. Tests: `ReportAndMaintenanceTests` (report+maintenance on completion, reminder sweep sends+marks). 2 tests.
+- **DECISION:** recurring auto-scheduling implemented as reminder-nudges (email/SMS "time for your next service"), not auto-created leads. Auto-creating a full booking is a bigger commitment and needs a confirmed availability model — deferred. The nudge drives the customer back into the booking flow, which is the same outcome with less risk.

@@ -108,6 +108,14 @@ public class HelpRequest
     /// <summary>Amount paid, in the brand's currency.</summary>
     public decimal? AmountPaid { get; set; }
 
+    // ── Reporting + recurring maintenance ──────────────────────────────────
+    /// <summary>When the completed-job report was emailed to the customer.</summary>
+    public DateTime? ReportSentAt { get; set; }
+
+    /// <summary>If set, completing this job schedules a maintenance reminder this
+    /// many months out (recurring-revenue engine). Null = no recurring reminder.</summary>
+    public int? MaintenanceIntervalMonths { get; set; }
+
     /// <summary>Id of the record created in the brand's external CRM when this
     /// lead was pushed there (see <see cref="Integrations.Crm.CrmLeadDispatcher"/>).
     /// Null when the brand has no CRM connection, when the push failed, or when

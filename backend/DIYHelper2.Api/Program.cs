@@ -277,6 +277,10 @@ builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.RetentionService>();
+// Job-completion side effects (invoice, report email, maintenance, review SMS)
+// + the daily maintenance-reminder sweep.
+builder.Services.AddScoped<DIYHelper2.Api.Services.JobCompletionService>();
+builder.Services.AddHostedService<DIYHelper2.Api.Services.MaintenanceReminderService>();
 
 // Push notifications: the send service is scoped (per-request / per-tick DbContext),
 // with two background workers — one to dispatch scheduled campaigns, one to poll
@@ -1390,60 +1394,8 @@ static DIYHelper2.Api.Services.TechPrincipal? TechPrincipalOf(
     return tokens.Validate(token);
 }
 
-// Best-effort push of a completed job to the brand's accounting system as an
-// invoice. Only invoices approved quotes, exactly once (guarded by
-// InvoiceRemoteId). Never throws into the request — invoice sync is a side effect
-// of completing a job, not a precondition.
-static async Task TrySyncInvoiceAsync(
-    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices,
-    AppDbContext db, HelpRequest r, ILogger logger)
-{
-    try
-    {
-        if (r.InvoiceRemoteId is not null) return;   // idempotent — already invoiced
-        if (r.QuoteStatus != "approved") return;     // only bill work the customer approved
-        if (!invoices.IsConfigured) return;
-
-        var lines = new List<DIYHelper2.Api.Integrations.Billing.InvoiceLine>();
-        if (!string.IsNullOrWhiteSpace(r.QuoteLinesJson))
-        {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(r.QuoteLinesJson);
-                foreach (var el in doc.RootElement.EnumerateArray())
-                {
-                    var desc = el.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
-                    var amount = el.TryGetProperty("amount", out var a) ? a.GetDecimal() : 0m;
-                    var qty = el.TryGetProperty("quantity", out var q) ? q.GetInt32() : 1;
-                    lines.Add(new DIYHelper2.Api.Integrations.Billing.InvoiceLine(desc, amount, qty));
-                }
-            }
-            catch { /* malformed lines → fall back to total below */ }
-        }
-        if (lines.Count == 0 && r.QuoteTotal is { } total)
-            lines.Add(new DIYHelper2.Api.Integrations.Billing.InvoiceLine(r.ProjectTitle ?? "Service", total, 1));
-        if (lines.Count == 0) return;
-
-        var result = await invoices.CreateInvoiceAsync(
-            new DIYHelper2.Api.Integrations.Billing.InvoiceRequest(
-                r.Brand, r.CustomerEmail, r.CustomerName, lines, $"Job #{r.Id}: {r.ProjectTitle}"));
-        if (result.Ok && result.RemoteInvoiceId is not null)
-        {
-            r.InvoiceRemoteId = result.RemoteInvoiceId;
-            r.UpdatedAt = DateTime.UtcNow;
-            await db.SaveChangesAsync();
-            logger.LogInformation("Job {Id} synced to invoice {Inv} for brand {Brand}.", r.Id, result.RemoteInvoiceId, r.Brand);
-        }
-        else
-        {
-            logger.LogInformation("Invoice sync for job {Id} unavailable: {Reason}", r.Id, result.Error);
-        }
-    }
-    catch (Exception ex)
-    {
-        logger.LogWarning(ex, "Invoice sync threw for job {Id}.", r.Id);
-    }
-}
+// (Job-completion side effects — invoice, report, maintenance, review — now live
+// in JobCompletionService so the owner and tech PUTs share identical behavior.)
 
 // Parse a brand's JSON service-type array; malformed/empty → no configured types
 // (the app falls back to a single generic option).
@@ -1558,8 +1510,8 @@ app.MapGet("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDb
 });
 
 app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db,
-    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices,
-    DIYHelper2.Api.Services.MessagingService messaging, ILogger<Program> logger) =>
+    DIYHelper2.Api.Services.MessagingService messaging,
+    DIYHelper2.Api.Services.JobCompletionService completion, ILogger<Program> logger) =>
 {
     var request = await db.HelpRequests.FindAsync(id);
     if (request is null) return Results.NotFound();
@@ -1580,22 +1532,22 @@ app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRe
         request.AssignedTechId = dto.AssignedTechId.Value < 0 ? null : dto.AssignedTechId.Value;
     if (dto.LaborCost.HasValue) request.LaborCost = dto.LaborCost.Value < 0 ? null : dto.LaborCost.Value;
     if (dto.PartsCost.HasValue) request.PartsCost = dto.PartsCost.Value < 0 ? null : dto.PartsCost.Value;
+    if (dto.MaintenanceIntervalMonths.HasValue)
+        request.MaintenanceIntervalMonths = dto.MaintenanceIntervalMonths.Value <= 0 ? null : dto.MaintenanceIntervalMonths.Value;
     request.UpdatedAt = DateTime.UtcNow;
 
     await db.SaveChangesAsync();
-    if (request.Status == "completed") await TrySyncInvoiceAsync(invoices, db, request, logger);
 
-    // Fire an automated customer text on a real status transition (best-effort).
-    if (dto.Status is not null && dto.Status != prevStatus && messaging.IsConfigured)
+    var transitioned = dto.Status is not null && dto.Status != prevStatus;
+    // On completion: invoice + report email + maintenance reminder + review SMS.
+    if (transitioned && request.Status == "completed")
+        await completion.HandleAsync(request);
+    // Other transitions fire the confirm / on-the-way texts (best-effort).
+    else if (transitioned && messaging.IsConfigured)
     {
         var company = (await db.Brands.FirstOrDefaultAsync(b => b.Slug == request.Brand))?.CompanyName ?? "";
         if (request.Status == "scheduled") await messaging.NotifyScheduledAsync(request, company);
         else if (request.Status == "on_the_way") await messaging.NotifyOnTheWayAsync(request, company);
-        else if (request.Status == "completed")
-        {
-            var reviewUrl = (await db.Brands.FirstOrDefaultAsync(b => b.Slug == request.Brand))?.ReviewUrl;
-            await messaging.RequestReviewAsync(request, company, reviewUrl);
-        }
     }
     return Results.Ok(request);
 });
@@ -1944,12 +1896,13 @@ app.MapGet("/api/tech/jobs/{id:int}", async (
 app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
     int id, [FromBody] TechJobUpdateDto dto, HttpContext http, AppDbContext db,
     DIYHelper2.Api.Services.TechTokenService tokens,
-    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices, ILogger<Program> logger) =>
+    DIYHelper2.Api.Services.JobCompletionService completion) =>
 {
     var who = TechPrincipalOf(http, tokens);
     if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
     var r = await db.HelpRequests.FindAsync(id);
     if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
+    var prevStatus = r.Status;
 
     // Guard oversize images the same way the customer submit does.
     foreach (var img in new[] { dto.BeforePhotoBase64, dto.AfterPhotoBase64, dto.SignatureBase64 })
@@ -1968,7 +1921,8 @@ app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
     if (dto.Status == "completed" && r.CompletedAt is null) r.CompletedAt = DateTime.UtcNow;
     r.UpdatedAt = DateTime.UtcNow;
     await db.SaveChangesAsync();
-    if (r.Status == "completed") await TrySyncInvoiceAsync(invoices, db, r, logger);
+    // On the transition into completed: invoice + report + maintenance + review.
+    if (r.Status == "completed" && prevStatus != "completed") await completion.HandleAsync(r);
     return Results.Ok(new { r.Id, r.Status, r.TechEtaMinutes, r.CompletedAt });
 });
 
@@ -2248,6 +2202,26 @@ app.MapPost("/api/sms/voice", async (HttpContext http, AppDbContext db,
     return Results.Content(
         $"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Say>Thanks for calling {System.Security.SecurityElement.Escape(company)}. We'll text you right back.</Say><Hangup/></Response>",
         "application/xml");
+});
+
+// Re-send the completed-job report email (owner action). Clears ReportSentAt
+// then re-runs the report step of the completion service.
+app.MapPut("/api/help-requests/{id:int}/report", async (
+    int id, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.JobCompletionService completion) =>
+{
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && r.Brand != scope) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(r.CustomerEmail))
+        return Results.Ok(new { sent = false, reason = "This customer has no email on file." });
+
+    r.ReportSentAt = null;                 // allow the (idempotent) report step to re-send
+    await db.SaveChangesAsync();
+    await completion.HandleAsync(r);        // re-runs report (+ other idempotent steps)
+    var updated = await db.HelpRequests.FindAsync(id);
+    return Results.Ok(new { sent = updated?.ReportSentAt is not null });
 });
 
 // ── Collect payment (Stripe) ──────────────────────────────────────────────
@@ -3775,7 +3749,9 @@ public record UpdateHelpRequestDto(
     [property: JsonPropertyName("assignedTechId")] int? AssignedTechId = null,
     // Job costing (owner-entered). Any value >= 0 sets it.
     [property: JsonPropertyName("laborCost")] decimal? LaborCost = null,
-    [property: JsonPropertyName("partsCost")] decimal? PartsCost = null
+    [property: JsonPropertyName("partsCost")] decimal? PartsCost = null,
+    // Recurring maintenance: schedule a reminder this many months after completion.
+    [property: JsonPropertyName("maintenanceIntervalMonths")] int? MaintenanceIntervalMonths = null
 );
 
 public record CreateTechnicianDto(
