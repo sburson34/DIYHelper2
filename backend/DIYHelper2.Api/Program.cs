@@ -698,13 +698,17 @@ app.UseMiddleware<AppKeyMiddleware>(new AppKeyOptions
     ExpectedKey = appKey,
     // Defaults + external webhook paths that can't carry X-App-Key. Twilio calls
     // /api/sms/* directly; a shared webhook token (TWILIO_WEBHOOK_TOKEN) guards
-    // those handlers instead. (Note: the OAuth /callback endpoints likely need
-    // the same treatment for prod when APP_KEY is set — see OVERNIGHT-PROGRESS.)
+    // those handlers instead. OAuth callbacks are exact-match entries (no trailing
+    // slash): providers redirect the browser there without our headers; the signed
+    // 10-minute state parameter is what authenticates those requests.
     PublicPathPrefixes = new[]
     {
         "/", "/healthz", "/api/health", "/openapi", "/openapi/", "/.well-known/",
         "/api/sms/",       // Twilio webhooks
         "/api/stripe/",    // Stripe payment webhooks
+        "/api/crm/jobber/callback",
+        "/api/crm/housecall/callback",
+        "/api/accounting/qbo/callback",
     },
 });
 app.UseMiddleware<ExceptionHandlerMiddleware>();

@@ -68,6 +68,10 @@ public class ApiFactory : BaseApiFactory<Program>
         // it OFF here so a leftover "true" from KillSwitchApiFactory doesn't
         // poison a sibling test class.
         Environment.SetEnvironmentVariable("AI_KILL_SWITCH", null);
+
+        // Same defense for APP_KEY: AppKeyApiFactory sets it before its host
+        // builds; make sure a plain ApiFactory never inherits it.
+        Environment.SetEnvironmentVariable("APP_KEY", null);
     }
 
     /// <summary>
