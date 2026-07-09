@@ -699,7 +699,8 @@ app.UseMiddleware<AppKeyMiddleware>(new AppKeyOptions
     PublicPathPrefixes = new[]
     {
         "/", "/healthz", "/api/health", "/openapi", "/openapi/", "/.well-known/",
-        "/api/sms/",
+        "/api/sms/",       // Twilio webhooks
+        "/api/stripe/",    // Stripe payment webhooks
     },
 });
 app.UseMiddleware<ExceptionHandlerMiddleware>();
@@ -1289,6 +1290,29 @@ static bool WebhookTokenOk(HttpContext http)
     if (string.IsNullOrEmpty(expected)) return true;
     var provided = http.Request.Query["token"].FirstOrDefault();
     return !string.IsNullOrEmpty(provided) && provided == expected;
+}
+
+// Validate a Stripe webhook signature ("Stripe-Signature: t=...,v1=...") by
+// recomputing HMAC-SHA256 over "{t}.{payload}" with the signing secret.
+static bool StripeSignatureValid(string payload, string? sigHeader, string secret)
+{
+    if (string.IsNullOrEmpty(sigHeader)) return false;
+    string? t = null;
+    var v1s = new List<string>();
+    foreach (var part in sigHeader.Split(','))
+    {
+        var kv = part.Split('=', 2);
+        if (kv.Length != 2) continue;
+        if (kv[0] == "t") t = kv[1];
+        else if (kv[0] == "v1") v1s.Add(kv[1]);
+    }
+    if (t is null || v1s.Count == 0) return false;
+
+    using var h = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(secret));
+    var computed = Convert.ToHexString(h.ComputeHash(System.Text.Encoding.UTF8.GetBytes($"{t}.{payload}")))
+        .ToLowerInvariant();
+    return v1s.Any(v => System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+        System.Text.Encoding.UTF8.GetBytes(v), System.Text.Encoding.UTF8.GetBytes(computed)));
 }
 
 static string BrandFromHeader(HttpContext http)
@@ -1948,6 +1972,34 @@ app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
     return Results.Ok(new { r.Id, r.Status, r.TechEtaMinutes, r.CompletedAt });
 });
 
+// Tech requests payment on-site — returns a hosted checkout URL to show/QR to the
+// customer. Token-gated + scoped to the tech's own job. Fail-soft.
+app.MapPost("/api/tech/jobs/{id:int}/payment-link", [EnableRateLimiting("submit")] async (
+    int id, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.TechTokenService tokens,
+    DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
+{
+    var who = TechPrincipalOf(http, tokens);
+    if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
+    if (!payments.IsConfigured)
+        return Results.Ok(new { available = false, reason = "Payments aren't set up yet." });
+
+    var amount = (r.QuoteStatus == "approved" ? r.QuoteTotal : null) ?? r.QuoteTotal;
+    if (amount is null || amount <= 0)
+        return Results.Ok(new { available = false, reason = "No approved amount to charge yet." });
+
+    var result = await payments.CreateJobPaymentAsync(
+        new DIYHelper2.Api.Integrations.Billing.JobPaymentRequest(
+            r.Brand, r.Id, amount.Value, r.ProjectTitle ?? "Service", r.CustomerEmail,
+            "https://api.diyhelper.org/payment-success.html",
+            "https://api.diyhelper.org/payment-cancel.html"));
+    return result.Ok
+        ? Results.Ok(new { available = true, url = result.CheckoutUrl, amount = amount.Value })
+        : Results.Ok(new { available = false, reason = result.Error });
+});
+
 // ── Price book (owner-managed flat-rate items; admin-gated) ───────────────
 app.MapGet("/api/pricebook", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
 {
@@ -2196,6 +2248,84 @@ app.MapPost("/api/sms/voice", async (HttpContext http, AppDbContext db,
     return Results.Content(
         $"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Say>Thanks for calling {System.Security.SecurityElement.Escape(company)}. We'll text you right back.</Say><Hangup/></Response>",
         "application/xml");
+});
+
+// ── Collect payment (Stripe) ──────────────────────────────────────────────
+// Owner creates a payment link for a job (admin-gated under /api/help-requests),
+// optionally texting it to the customer. Amount defaults to the approved quote.
+app.MapPut("/api/help-requests/{id:int}/payment-link", async (
+    int id, [FromBody] PaymentLinkDto dto, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments,
+    DIYHelper2.Api.Services.MessagingService messaging) =>
+{
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && r.Brand != scope) return Results.NotFound();
+    if (!payments.IsConfigured)
+        return Results.Ok(new { available = false, reason = "Payments aren't set up yet." });
+
+    var amount = dto.Amount ?? (r.QuoteStatus == "approved" ? r.QuoteTotal : null) ?? r.QuoteTotal;
+    if (amount is null || amount <= 0)
+        return ApiError.BadRequest(http, "No amount to charge — approve a quote or pass an amount.");
+
+    var result = await payments.CreateJobPaymentAsync(
+        new DIYHelper2.Api.Integrations.Billing.JobPaymentRequest(
+            r.Brand, r.Id, amount.Value, r.ProjectTitle ?? "Service", r.CustomerEmail,
+            "https://api.diyhelper.org/payment-success.html",
+            "https://api.diyhelper.org/payment-cancel.html"));
+    if (!result.Ok) return Results.Ok(new { available = false, reason = result.Error });
+    if (dto.SendSms == true && messaging.IsConfigured)
+        await messaging.SendToLeadAsync(r, $"Here's your secure payment link: {result.CheckoutUrl}");
+    return Results.Ok(new { available = true, url = result.CheckoutUrl });
+});
+
+// Stripe payment webhook (PUBLIC — /api/stripe/ is AppKey-exempt). Signature-
+// validated when STRIPE_WEBHOOK_SECRET is set; marks the job paid on success.
+app.MapPost("/api/stripe/webhook", async (HttpContext http, AppDbContext db, ILogger<Program> logger) =>
+{
+    using var reader = new StreamReader(http.Request.Body);
+    var payload = await reader.ReadToEndAsync();
+
+    var secret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET");
+    if (!string.IsNullOrEmpty(secret))
+    {
+        var sig = http.Request.Headers["Stripe-Signature"].FirstOrDefault();
+        if (!StripeSignatureValid(payload, sig, secret)) return Results.Unauthorized();
+    }
+
+    try
+    {
+        using var doc = System.Text.Json.JsonDocument.Parse(payload);
+        var type = doc.RootElement.TryGetProperty("type", out var t) ? t.GetString() : null;
+        if (type == "checkout.session.completed")
+        {
+            var obj = doc.RootElement.GetProperty("data").GetProperty("object");
+            var jobId = 0;
+            if (obj.TryGetProperty("metadata", out var meta) && meta.ValueKind == System.Text.Json.JsonValueKind.Object
+                && meta.TryGetProperty("jobId", out var j))
+                int.TryParse(j.GetString(), out jobId);
+
+            if (jobId > 0)
+            {
+                var r = await db.HelpRequests.FindAsync(jobId);
+                if (r is not null && r.PaidAt is null)
+                {
+                    r.PaidAt = DateTime.UtcNow;
+                    if (obj.TryGetProperty("amount_total", out var at) && at.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        r.AmountPaid = at.GetInt64() / 100m;
+                    r.UpdatedAt = DateTime.UtcNow;
+                    await db.SaveChangesAsync();
+                    logger.LogInformation("Job {Id} marked paid via Stripe webhook.", jobId);
+                }
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Stripe webhook parse failed.");
+    }
+    return Results.Ok();   // always 200 so Stripe doesn't retry a parse error forever
 });
 
 // ── Ops summary (job costing + KPIs; admin-gated) ─────────────────────────
@@ -3698,6 +3828,11 @@ public record QuoteDecisionDto(
 
 public record SendMessageDto(
     [property: JsonPropertyName("body")] string? Body
+);
+
+public record PaymentLinkDto(
+    [property: JsonPropertyName("amount")] decimal? Amount,
+    [property: JsonPropertyName("sendSms")] bool? SendSms
 );
 
 public record MembershipCheckoutDto(

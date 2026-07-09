@@ -144,6 +144,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<HelpRequest>()
             .Property(r => r.PartsCost)
             .HasPrecision(12, 2);
+        modelBuilder.Entity<HelpRequest>()
+            .Property(r => r.AmountPaid)
+            .HasPrecision(12, 2);
 
         // ── CRM connections ───────────────────────────────────────────────
         // One CRM connection per brand: the dispatcher looks a brand's connection

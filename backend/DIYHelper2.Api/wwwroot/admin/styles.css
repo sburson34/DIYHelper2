@@ -584,3 +584,10 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-
   flex: 1; background: var(--inset); border: 1px solid var(--border); border-radius: 10px;
   padding: 10px 12px; color: var(--text); min-height: 44px; resize: vertical;
 }
+
+/* ── Payment ─────────────────────────────────────────────────────────── */
+.paid-badge { color: var(--success); font-weight: 800; font-size: 15px; }
+.pay-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pay-link-result { margin-top: 10px; }
+.pay-ok { color: var(--success); font-weight: 700; margin-bottom: 4px; }
+.pay-url { word-break: break-all; }

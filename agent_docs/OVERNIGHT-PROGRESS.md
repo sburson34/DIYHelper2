@@ -11,7 +11,7 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 
 ## Thread list (priority order)
 1. [DONE ✅] SMS / communication layer (Twilio seam): reminders, on-the-way texts, missed-call text-back, review-request automation
-2. [ ] Field payment loop (Stripe payment links / collect on completion, deposits, invoice follow-ups)
+2. [DONE ✅] Field payment loop (Stripe payment links / collect on completion, deposits, invoice follow-ups)
 3. [ ] Job report (HTML email) + warranty/maintenance reminders + recurring maintenance auto-scheduling
 4. [ ] Tiered "Good/Better/Best" quotes
 5. [ ] Service history per property/asset
@@ -41,3 +41,10 @@ _(newest last)_
 - Twilio webhooks (public): `POST /api/sms/incoming` (records replies, links to lead by phone), `POST /api/sms/voice` (missed-call text-back → TwiML + auto-text). Guarded by optional `TWILIO_WEBHOOK_TOKEN` (?token=).
 - **DECISION/FINDING:** external webhooks can't send `X-App-Key`, so I added `/api/sms/` to `AppKeyOptions.PublicPathPrefixes`. ⚠️ **The existing OAuth `/callback` endpoints (Jobber/QBO/Housecall) are NOT in that list** — if `APP_KEY` is set in prod, those callbacks would be rejected by AppKeyMiddleware. Left untouched (parallel-owned CRM territory) but flagging: verify whether APP_KEY is set in prod, and if so add the callback paths too.
 - Tests: `SmsTests` (fail-soft manual send, status transition doesn't fail, inbound webhook records + links). 3 tests.
+
+### Thread 2 — Field payments (DONE, 251 backend tests green)
+- Extended `IPaymentProvider` with `CreateJobPaymentAsync` (Stripe Checkout, payment mode, dynamic amount) — StripePaymentProvider impl. `HelpRequest.PaidAt/AmountPaid`. Migration `AddJobPayments`.
+- Owner: `PUT /api/help-requests/{id}/payment-link` (amount defaults to approved quote; optional `sendSms` texts the link). Tech: `POST /api/tech/jobs/{id}/payment-link` (collect on-site → opens Stripe URL). Console "Payment" panel (create link / create-&-text / paid badge); tech app "Collect payment" button.
+- Stripe webhook `POST /api/stripe/webhook` (public, `/api/stripe/` added to AppKey exempt prefixes) → marks job paid from `metadata.jobId`. HMAC-SHA256 signature validation when `STRIPE_WEBHOOK_SECRET` set; accepts in dev when unset.
+- Env: reuses `STRIPE_SECRET_KEY`; adds `STRIPE_WEBHOOK_SECRET`. Dormant until keys set.
+- Tests: `PaymentTests` (link unavailable when unconfigured, webhook marks paid from metadata). 2 tests.

@@ -100,6 +100,14 @@ public class HelpRequest
     /// <summary>Parts/materials cost the shop incurred on this job.</summary>
     public decimal? PartsCost { get; set; }
 
+    // ── Payment (collected via Stripe) ─────────────────────────────────────
+    /// <summary>When the customer paid (Stripe checkout.session.completed). Null
+    /// = unpaid.</summary>
+    public DateTime? PaidAt { get; set; }
+
+    /// <summary>Amount paid, in the brand's currency.</summary>
+    public decimal? AmountPaid { get; set; }
+
     /// <summary>Id of the record created in the brand's external CRM when this
     /// lead was pushed there (see <see cref="Integrations.Crm.CrmLeadDispatcher"/>).
     /// Null when the brand has no CRM connection, when the push failed, or when

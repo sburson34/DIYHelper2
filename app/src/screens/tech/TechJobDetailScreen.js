@@ -10,7 +10,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { techGetJob } from '../../api/backendClient';
+import { techGetJob, techRequestPayment } from '../../api/backendClient';
 import { enqueuePatch, flushQueue, pendingPatch } from '../../tech/techQueue';
 import { pickPhoto } from '../../utils/pickPhoto';
 import { useTranslation } from '../../i18n/I18nContext';
@@ -95,6 +95,19 @@ export default function TechJobDetailScreen({ route, navigation }) {
   };
 
   const clearSignature = () => { setSigStrokes([]); setSigKey((k) => k + 1); };
+
+  const collectPayment = async () => {
+    try {
+      const res = await techRequestPayment(jobId);
+      if (res.available && res.url) {
+        Linking.openURL(res.url).catch(() => {});
+      } else {
+        Alert.alert(t('tech_pay_unavailable_title'), res.reason || t('tech_pay_unavailable_msg'));
+      }
+    } catch (e) {
+      Alert.alert(t('tech_pay_unavailable_title'), e.message || '');
+    }
+  };
 
   const onMyWay = () => {
     const n = Number(eta);
@@ -213,6 +226,16 @@ export default function TechJobDetailScreen({ route, navigation }) {
           </View>
         )}
 
+        {/* Collect payment on-site */}
+        {!done && (
+          <View style={styles.block}>
+            <TouchableOpacity style={styles.payBtn} onPress={collectPayment} accessibilityRole="button" testID="tech-collect-payment">
+              <Icon name="card" size={18} color="#fff" />
+              <Text style={styles.actionText}>{t('tech_collect_payment')}</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Notes + complete */}
         {!done ? (
           <View style={styles.block}>
@@ -265,6 +288,7 @@ const styles = StyleSheet.create({
   ghost: { borderWidth: 1, borderColor: theme.colors.border },
   ghostText: { color: theme.colors.textSecondary, fontWeight: '700' },
   saveSig: { backgroundColor: theme.colors.primary },
+  payBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.colors.secondary, padding: 15, borderRadius: 14 },
   notes: { backgroundColor: theme.colors.surface, borderWidth: 1, borderColor: theme.colors.border, borderRadius: 12, padding: 14, minHeight: 90, color: theme.colors.text, textAlignVertical: 'top' },
   completeBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: theme.colors.success, padding: 16, borderRadius: 16, marginTop: 14 },
   completeText: { color: '#fff', fontWeight: '800', fontSize: 16 },

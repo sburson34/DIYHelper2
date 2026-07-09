@@ -495,6 +495,9 @@ export const translations = {
     tech_complete_confirm_title: 'Complete this job?',
     tech_complete_confirm_msg: 'This marks the job done and notifies the office.',
     tech_done_banner: 'This job is complete.',
+    tech_collect_payment: 'Collect payment',
+    tech_pay_unavailable_title: 'Payment unavailable',
+    tech_pay_unavailable_msg: 'Payments aren’t set up, or there’s no approved amount yet.',
   },
   es: {
     // Navigation / Drawer
@@ -989,6 +992,9 @@ export const translations = {
     tech_complete_confirm_title: '¿Completar este trabajo?',
     tech_complete_confirm_msg: 'Esto marca el trabajo como hecho y notifica a la oficina.',
     tech_done_banner: 'Este trabajo está completo.',
+    tech_collect_payment: 'Cobrar pago',
+    tech_pay_unavailable_title: 'Pago no disponible',
+    tech_pay_unavailable_msg: 'Los pagos no están configurados o aún no hay un monto aprobado.',
   } as Record<string, string>,
 };
 

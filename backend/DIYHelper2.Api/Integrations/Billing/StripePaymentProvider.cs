@@ -86,4 +86,59 @@ public class StripePaymentProvider : IPaymentProvider
             return CheckoutResult.Unavailable("Could not reach the payment provider.");
         }
     }
+
+    public async Task<CheckoutResult> CreateJobPaymentAsync(JobPaymentRequest request, CancellationToken ct = default)
+    {
+        // Only the secret key is needed for one-off payments (no recurring Price).
+        if (string.IsNullOrWhiteSpace(_options.SecretKey))
+            return CheckoutResult.Unavailable("Stripe is not configured for this deployment.");
+        if (request.Amount <= 0)
+            return CheckoutResult.Unavailable("The amount must be greater than zero.");
+
+        try
+        {
+            var cents = (long)Math.Round(request.Amount * 100m, MidpointRounding.AwayFromZero);
+            var form = new List<KeyValuePair<string, string>>
+            {
+                new("mode", "payment"),
+                new("line_items[0][price_data][currency]", "usd"),
+                new("line_items[0][price_data][product_data][name]",
+                    string.IsNullOrWhiteSpace(request.Description) ? "Service" : request.Description),
+                new("line_items[0][price_data][unit_amount]", cents.ToString()),
+                new("line_items[0][quantity]", "1"),
+                new("success_url", request.SuccessUrl),
+                new("cancel_url", request.CancelUrl),
+                // Metadata so the webhook can mark the right job paid.
+                new("client_reference_id", $"{request.Brand}:{request.JobId}"),
+                new("metadata[brand]", request.Brand),
+                new("metadata[jobId]", request.JobId.ToString()),
+            };
+            if (!string.IsNullOrWhiteSpace(request.CustomerEmail))
+                form.Add(new("customer_email", request.CustomerEmail));
+
+            using var msg = new HttpRequestMessage(HttpMethod.Post, $"{ApiBase}/checkout/sessions")
+            {
+                Content = new FormUrlEncodedContent(form),
+            };
+            msg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.SecretKey);
+
+            using var resp = await _http.SendAsync(msg, ct);
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogWarning("Stripe job payment for brand {Brand} failed: {Status}", request.Brand, resp.StatusCode);
+                return CheckoutResult.Unavailable("Payment provider rejected the request.");
+            }
+            using var doc = System.Text.Json.JsonDocument.Parse(body);
+            var url = doc.RootElement.TryGetProperty("url", out var u) ? u.GetString() : null;
+            return string.IsNullOrEmpty(url)
+                ? CheckoutResult.Unavailable("Payment provider returned no checkout URL.")
+                : CheckoutResult.Success(url);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Stripe job payment threw for brand {Brand}.", request.Brand);
+            return CheckoutResult.Unavailable("Could not reach the payment provider.");
+        }
+    }
 }

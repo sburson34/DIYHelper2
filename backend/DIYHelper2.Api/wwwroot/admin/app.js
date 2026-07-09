@@ -233,6 +233,10 @@ function wireLeads() {
       sendQuote();
     } else if (e.target.closest('#sms-send-btn')) {
       sendCustomerSms();
+    } else if (e.target.closest('#pay-link-btn')) {
+      requestPaymentLink(false);
+    } else if (e.target.closest('#pay-sms-btn')) {
+      requestPaymentLink(true);
     }
   });
   // Live total as the operator edits line amounts/quantities.
@@ -344,6 +348,16 @@ function renderDetail(data) {
     ${arrTags('Safety tips', projectData.safety_tips)}
     ${arrTags('When to call a pro', projectData.when_to_call_pro)}
     ${quoteBuilderHtml(data)}
+    <div class="detail-section">
+      <h3>Payment</h3>
+      ${data.paidAt
+        ? `<div class="paid-badge">✓ Paid $${escapeHtml(Number(data.amountPaid || 0).toFixed(2))} on ${escapeHtml(fmtDate(data.paidAt))}</div>`
+        : `<div class="pay-actions">
+             <button class="btn accent" id="pay-link-btn" type="button">Create payment link</button>
+             <button class="btn ghost" id="pay-sms-btn" type="button">Create &amp; text to customer</button>
+           </div>
+           <div id="pay-link-result" class="pay-link-result"></div>`}
+    </div>
     <div class="detail-section">
       <h3>Text customer</h3>
       <div id="sms-log" class="sms-log"></div>
@@ -975,6 +989,26 @@ async function sendCustomerSms() {
     loadMessages(state.currentRequestId);
   } catch (err) {
     toast(err.message || 'Could not send text.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ── Collect payment (in the lead detail) ───────────────────────────────── */
+async function requestPaymentLink(sendSms) {
+  const host = el('pay-link-result');
+  const btn = el(sendSms ? 'pay-sms-btn' : 'pay-link-btn');
+  btn.disabled = true;
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/payment-link`, 'PUT', { sendSms });
+    if (res.available && res.url) {
+      host.innerHTML = `<div class="pay-ok">Payment link ready${sendSms ? ' and texted to the customer' : ''}:</div><a class="link pay-url" href="${escapeHtml(res.url)}" target="_blank" rel="noopener">${escapeHtml(res.url)}</a>`;
+      if (sendSms) { toast('Payment link texted.', 'success'); loadMessages(state.currentRequestId); }
+    } else {
+      host.innerHTML = `<div class="muted">${escapeHtml(res.reason || 'Payments are not available.')}</div>`;
+    }
+  } catch (err) {
+    toast(err.message || 'Could not create payment link.', 'error');
   } finally {
     btn.disabled = false;
   }
