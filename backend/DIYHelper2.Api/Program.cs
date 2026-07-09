@@ -2364,6 +2364,38 @@ app.MapGet("/api/ops/summary", async ([FromQuery] string? brand, HttpContext htt
     });
 });
 
+// Smart dispatch: suggest the best tech for a job. Rule-based (deterministic +
+// explainable): the active technician with the fewest open jobs, so work spreads
+// evenly. Admin-gated (under /api/help-requests, non-POST).
+app.MapGet("/api/help-requests/{id:int}/suggest-tech", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && r.Brand != scope) return Results.NotFound();
+
+    var techs = await db.Technicians
+        .Where(t => t.Brand == r.Brand && t.IsActive)
+        .Select(t => new { t.Id, t.Name })
+        .ToListAsync();
+    if (techs.Count == 0) return Results.Ok(new { techId = (int?)null, reason = "No active technicians." });
+
+    // Open-job load per tech (anything not completed/cancelled).
+    var loads = await db.HelpRequests
+        .Where(h => h.Brand == r.Brand && h.AssignedTechId != null
+            && h.Status != "completed" && h.Status != "cancelled")
+        .GroupBy(h => h.AssignedTechId!.Value)
+        .Select(g => new { techId = g.Key, count = g.Count() })
+        .ToListAsync();
+    var loadMap = loads.ToDictionary(x => x.techId, x => x.count);
+
+    var best = techs
+        .OrderBy(t => loadMap.TryGetValue(t.Id, out var c) ? c : 0)
+        .ThenBy(t => t.Name)
+        .First();
+    return Results.Ok(new { techId = best.Id, name = best.Name, currentJobs = loadMap.TryGetValue(best.Id, out var cc) ? cc : 0 });
+});
+
 // ── Inventory / truck stock (owner-managed; admin-gated) ──────────────────
 app.MapGet("/api/inventory", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
 {

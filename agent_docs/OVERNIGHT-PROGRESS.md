@@ -24,7 +24,7 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 12. [ ] Multi-property / property-manager accounts
 13. [ ] Timesheets / payroll export (partial — derive from status timestamps)
 14. [ ] Route optimization (needs address capture first — may be partial)
-15. [ ] AI dispatcher (auto-assign by skill/location/availability)
+15. [DONE ✅] AI dispatcher — rule-based least-loaded-tech suggestion (deterministic + explainable)
 
 ## Log
 _(newest last)_
@@ -67,3 +67,6 @@ _(newest last)_
 - **Analytics:** extended `/api/ops/summary` with booking rate (booked/leads), completion rate, quote win rate (approved/decided), collected vs outstanding revenue, avg jobs/tech. New KPI cards on Overview. No new table.
 - **Inventory:** `InventoryItem` table (name, sku, quantity, reorderAt) + full CRUD `/api/inventory` + a "low" flag when quantity ≤ reorderAt. New "Inventory" console tab with inline qty/reorder editing + LOW badge. Migration `AddInventory`.
 - Tests: `InventoryTests` (low-stock flag, admin-gated). 2 tests.
+
+### Thread 15 — Smart dispatch (DONE, 259 backend tests green)
+- **DECISION:** built the dispatcher as a **rule-based** least-loaded-tech suggestion (`GET /api/help-requests/{id}/suggest-tech` → active tech with fewest open jobs), not an LLM call. Rationale: deterministic, explainable ("Aaron — 2 open jobs"), free, and testable. True skill/location-aware AI dispatch needs a skills model + geocoded addresses (see route optimization below), so this is the right first version. Console "Suggest" link in the scheduler assignee row. Test: `DispatchTests`. No migration.

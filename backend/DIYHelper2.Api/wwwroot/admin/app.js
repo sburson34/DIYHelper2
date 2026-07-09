@@ -524,7 +524,22 @@ function wireSchedule() {
   el('sched-back-btn').addEventListener('click', showBoard);
   el('schedule-editor-content').addEventListener('click', (e) => {
     if (e.target.closest('#sched-save-btn')) saveSchedule();
+    else if (e.target.closest('#sched-suggest-tech')) suggestTech(e.target.closest('#sched-suggest-tech').dataset.job);
   });
+}
+
+async function suggestTech(jobId) {
+  try {
+    const res = await getJson(`/api/help-requests/${encodeURIComponent(jobId)}/suggest-tech`);
+    if (res.techId) {
+      el('sched-tech').value = String(res.techId);
+      toast(`Suggested ${res.name} (${res.currentJobs} open job${res.currentJobs === 1 ? '' : 's'}).`, 'success');
+    } else {
+      toast(res.reason || 'No technician to suggest.', 'error');
+    }
+  } catch (err) {
+    toast('Could not suggest a technician.', 'error');
+  }
 }
 
 // Local YYYY-MM-DD key for grouping (avoids UTC day-boundary drift).
@@ -668,7 +683,7 @@ function renderScheduleEditor(j) {
             <select id="sched-status">${JOB_STATUSES.map((s) => `<option value="${s}" ${j.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}</select>
           </div>
           <div class="form-group">
-            <label for="sched-tech">Assign to</label>
+            <label for="sched-tech">Assign to <button class="link-btn" id="sched-suggest-tech" type="button" data-job="${escapeHtml(String(j.id))}">Suggest</button></label>
             <select id="sched-tech">
               <option value="">Unassigned</option>
               ${state.techs.filter((tt) => tt.isActive || tt.id === j.assignedTechId).map((tt) => `<option value="${escapeHtml(String(tt.id))}" ${j.assignedTechId === tt.id ? 'selected' : ''}>${escapeHtml(tt.name)}</option>`).join('')}
