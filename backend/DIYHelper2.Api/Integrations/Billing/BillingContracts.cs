@@ -46,7 +46,19 @@ public record InvoiceResult(bool Ok, string? RemoteInvoiceId, string? Error)
     public static InvoiceResult Unavailable(string reason) => new(false, null, reason);
 }
 
-/// <summary>Payment provider (Stripe). Charges customers for memberships.</summary>
+/// <summary>Request a one-off payment for a job (collect in the field or by
+/// link). Amount is the exact total the customer owes.</summary>
+public record JobPaymentRequest(
+    string Brand,
+    int JobId,
+    decimal Amount,
+    string Description,
+    string? CustomerEmail,
+    string SuccessUrl,
+    string CancelUrl);
+
+/// <summary>Payment provider (Stripe). Charges customers for memberships and
+/// one-off jobs.</summary>
 public interface IPaymentProvider
 {
     /// <summary>True once credentials are present. Endpoints check this to decide
@@ -55,6 +67,11 @@ public interface IPaymentProvider
 
     Task<CheckoutResult> CreateMembershipCheckoutAsync(
         MembershipCheckoutRequest request, CancellationToken ct = default);
+
+    /// <summary>Create a hosted one-off payment (Stripe Checkout, payment mode)
+    /// for a job total and return its URL for the customer to pay.</summary>
+    Task<CheckoutResult> CreateJobPaymentAsync(
+        JobPaymentRequest request, CancellationToken ct = default);
 }
 
 /// <summary>Accounting provider (QuickBooks). Syncs invoices for completed jobs.</summary>

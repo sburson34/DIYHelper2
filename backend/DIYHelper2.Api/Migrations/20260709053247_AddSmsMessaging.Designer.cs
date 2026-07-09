@@ -3,6 +3,7 @@ using System;
 using DIYHelper2.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DIYHelper2.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260709053247_AddSmsMessaging")]
+    partial class AddSmsMessaging
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -295,10 +298,6 @@ namespace DIYHelper2.Api.Migrations
                     b.Property<string>("AfterPhotoBase64")
                         .HasColumnType("text");
 
-                    b.Property<decimal?>("AmountPaid")
-                        .HasPrecision(12, 2)
-                        .HasColumnType("numeric(12,2)");
-
                     b.Property<int?>("AssignedTechId")
                         .HasColumnType("integer");
 
@@ -351,14 +350,8 @@ namespace DIYHelper2.Api.Migrations
                         .HasPrecision(12, 2)
                         .HasColumnType("numeric(12,2)");
 
-                    b.Property<int?>("MaintenanceIntervalMonths")
-                        .HasColumnType("integer");
-
                     b.Property<string>("Notes")
                         .HasColumnType("text");
-
-                    b.Property<DateTime?>("PaidAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<decimal?>("PartsCost")
                         .HasPrecision(12, 2)
@@ -394,9 +387,6 @@ namespace DIYHelper2.Api.Migrations
                         .HasPrecision(12, 2)
                         .HasColumnType("numeric(12,2)");
 
-                    b.Property<DateTime?>("ReportSentAt")
-                        .HasColumnType("timestamp with time zone");
-
                     b.Property<DateTime?>("ScheduledFor")
                         .HasColumnType("timestamp with time zone");
 
@@ -405,9 +395,6 @@ namespace DIYHelper2.Api.Migrations
 
                     b.Property<string>("SignatureBase64")
                         .HasColumnType("text");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -435,90 +422,6 @@ namespace DIYHelper2.Api.Migrations
                         .HasDatabaseName("IX_HelpRequests_Brand_DeviceId");
 
                     b.ToTable("HelpRequests");
-                });
-
-            modelBuilder.Entity("DIYHelper2.Api.Models.InventoryItem", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Brand")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<int>("Quantity")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("ReorderAt")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Sku")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("Brand")
-                        .HasDatabaseName("IX_InventoryItems_Brand");
-
-                    b.ToTable("InventoryItems");
-                });
-
-            modelBuilder.Entity("DIYHelper2.Api.Models.MaintenanceReminder", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("Brand")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("CustomerEmail")
-                        .HasColumnType("text");
-
-                    b.Property<string>("CustomerName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("CustomerPhone")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("DueAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int?>("HelpRequestId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime?>("SentAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("ServiceType")
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SentAt", "DueAt")
-                        .HasDatabaseName("IX_MaintenanceReminders_SentAt_DueAt");
-
-                    b.ToTable("MaintenanceReminders");
                 });
 
             modelBuilder.Entity("DIYHelper2.Api.Models.PriceBookItem", b =>

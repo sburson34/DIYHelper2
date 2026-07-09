@@ -786,6 +786,14 @@ const techUpdateJob = async (id: number | string, patch: TechJobPatch): Promise<
   return jsonPut(`${BASE_URL}/api/tech/jobs/${id}`, patch);
 };
 
+// Ask the backend for a Stripe checkout link to collect payment on this job.
+const techRequestPayment = async (
+  id: number | string,
+): Promise<{ available: boolean; url?: string; amount?: number; reason?: string }> => {
+  addBreadcrumb('tech: request payment', 'user.action', { id });
+  return jsonPost(`${BASE_URL}/api/tech/jobs/${id}/payment-link`, {});
+};
+
 export {
   getBrandConfig,
   submitBooking,
@@ -797,6 +805,7 @@ export {
   techListJobs,
   techGetJob,
   techUpdateJob,
+  techRequestPayment,
   analyzeProject,
   analyzeLive,
   askHelper,

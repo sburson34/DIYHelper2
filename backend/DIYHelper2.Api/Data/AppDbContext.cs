@@ -20,6 +20,9 @@ public class AppDbContext : DbContext
     public DbSet<Technician> Technicians => Set<Technician>();
     public DbSet<PriceBookItem> PriceBookItems => Set<PriceBookItem>();
     public DbSet<BrandAccountingConnection> BrandAccountingConnections => Set<BrandAccountingConnection>();
+    public DbSet<SmsMessage> SmsMessages => Set<SmsMessage>();
+    public DbSet<MaintenanceReminder> MaintenanceReminders => Set<MaintenanceReminder>();
+    public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -143,6 +146,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<HelpRequest>()
             .Property(r => r.PartsCost)
             .HasPrecision(12, 2);
+        modelBuilder.Entity<HelpRequest>()
+            .Property(r => r.AmountPaid)
+            .HasPrecision(12, 2);
 
         // ── CRM connections ───────────────────────────────────────────────
         // One CRM connection per brand: the dispatcher looks a brand's connection
@@ -157,5 +163,20 @@ public class AppDbContext : DbContext
             .HasIndex(c => c.BrandSlug)
             .IsUnique()
             .HasDatabaseName("IX_BrandAccountingConnections_BrandSlug");
+
+        // SMS log is read per lead (conversation) and per brand (recent activity).
+        modelBuilder.Entity<SmsMessage>()
+            .HasIndex(m => new { m.Brand, m.HelpRequestId })
+            .HasDatabaseName("IX_SmsMessages_Brand_HelpRequestId");
+
+        // The reminder worker scans for due, unsent rows by (SentAt, DueAt).
+        modelBuilder.Entity<MaintenanceReminder>()
+            .HasIndex(m => new { m.SentAt, m.DueAt })
+            .HasDatabaseName("IX_MaintenanceReminders_SentAt_DueAt");
+
+        // Inventory is listed per brand.
+        modelBuilder.Entity<InventoryItem>()
+            .HasIndex(i => i.Brand)
+            .HasDatabaseName("IX_InventoryItems_Brand");
     }
 }

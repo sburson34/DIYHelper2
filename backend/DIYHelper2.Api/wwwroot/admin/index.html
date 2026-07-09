@@ -23,6 +23,7 @@
       <button class="tab" data-section="schedule" type="button">Schedule</button>
       <button class="tab" data-section="technicians" type="button">Technicians</button>
       <button class="tab" data-section="pricing" type="button">Pricing</button>
+      <button class="tab" data-section="inventory" type="button">Inventory</button>
       <button class="tab" data-section="push" type="button">Push Notifications</button>
       <button class="tab" data-section="studio" type="button">Brand Studio</button>
     </nav>
@@ -48,6 +49,19 @@
       </div>
       <div class="kpi-grid" id="kpi-grid">
         <div class="spinner"></div>
+      </div>
+      <div id="next-actions" class="next-actions hidden"></div>
+      <div class="review-tool">
+        <div class="section-head"><h3>AI review reply</h3><p>Paste a customer review and draft a warm response.</p></div>
+        <textarea id="review-input" placeholder="Paste the customer's review here…" maxlength="1000"></textarea>
+        <div class="review-tool-row">
+          <select id="review-rating">
+            <option value="">Rating…</option>
+            <option value="5">★★★★★</option><option value="4">★★★★</option><option value="3">★★★</option><option value="2">★★</option><option value="1">★</option>
+          </select>
+          <button class="btn accent" id="review-draft-btn" type="button">Draft reply</button>
+        </div>
+        <div id="review-output" class="review-output"></div>
       </div>
       <div class="overview-recent">
         <div class="section-head"><h3>Recent leads</h3></div>
@@ -132,6 +146,22 @@
         <button class="btn accent" id="price-add-btn" type="button">Add item</button>
       </div>
       <div id="price-list" class="tech-list"></div>
+    </section>
+
+    <!-- ── INVENTORY (truck stock) ──────────────────────────────────── -->
+    <section id="inventory-section" class="section hidden">
+      <div class="section-head">
+        <h2>Inventory</h2>
+        <p>Track truck stock and get low-stock flags. Update counts as you use or restock parts.</p>
+      </div>
+      <div class="tech-add">
+        <input id="inv-name" type="text" placeholder="Part name" maxlength="80">
+        <input id="inv-sku" type="text" placeholder="SKU (optional)" maxlength="40">
+        <input id="inv-qty" type="number" min="0" placeholder="Qty">
+        <input id="inv-reorder" type="number" min="0" placeholder="Reorder at">
+        <button class="btn accent" id="inv-add-btn" type="button">Add item</button>
+      </div>
+      <div id="inv-list" class="tech-list"></div>
     </section>
 
     <!-- ── PUSH NOTIFICATIONS ───────────────────────────────────────── -->

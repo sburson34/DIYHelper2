@@ -70,6 +70,10 @@ public class HelpRequest
     /// <summary>Free-text notes the tech adds from the field (what was done).</summary>
     public string? CompletionNotes { get; set; }
 
+    /// <summary>When work started (status → in_progress). Paired with
+    /// <see cref="CompletedAt"/> to derive labor hours for timesheets.</summary>
+    public DateTime? StartedAt { get; set; }
+
     /// <summary>When the tech marked the job completed.</summary>
     public DateTime? CompletedAt { get; set; }
 
@@ -99,6 +103,22 @@ public class HelpRequest
 
     /// <summary>Parts/materials cost the shop incurred on this job.</summary>
     public decimal? PartsCost { get; set; }
+
+    // ── Payment (collected via Stripe) ─────────────────────────────────────
+    /// <summary>When the customer paid (Stripe checkout.session.completed). Null
+    /// = unpaid.</summary>
+    public DateTime? PaidAt { get; set; }
+
+    /// <summary>Amount paid, in the brand's currency.</summary>
+    public decimal? AmountPaid { get; set; }
+
+    // ── Reporting + recurring maintenance ──────────────────────────────────
+    /// <summary>When the completed-job report was emailed to the customer.</summary>
+    public DateTime? ReportSentAt { get; set; }
+
+    /// <summary>If set, completing this job schedules a maintenance reminder this
+    /// many months out (recurring-revenue engine). Null = no recurring reminder.</summary>
+    public int? MaintenanceIntervalMonths { get; set; }
 
     /// <summary>Id of the record created in the brand's external CRM when this
     /// lead was pushed there (see <see cref="Integrations.Crm.CrmLeadDispatcher"/>).

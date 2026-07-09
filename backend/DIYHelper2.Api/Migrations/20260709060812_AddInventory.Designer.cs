@@ -3,6 +3,7 @@ using System;
 using DIYHelper2.Api.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DIYHelper2.Api.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260709060812_AddInventory")]
+    partial class AddInventory
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -405,9 +408,6 @@ namespace DIYHelper2.Api.Migrations
 
                     b.Property<string>("SignatureBase64")
                         .HasColumnType("text");
-
-                    b.Property<DateTime?>("StartedAt")
-                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Status")
                         .IsRequired()

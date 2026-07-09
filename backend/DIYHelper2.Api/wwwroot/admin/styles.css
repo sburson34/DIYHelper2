@@ -568,3 +568,53 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-
 .costing-line { margin: 12px 0; font-size: 14px; color: var(--muted); }
 .costing-line .ok { color: var(--success); font-weight: 800; }
 .costing-line .warn { color: var(--danger); font-weight: 800; }
+
+/* ── Customer SMS ────────────────────────────────────────────────────── */
+.sms-log { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; max-height: 280px; overflow-y: auto; }
+.sms-empty { padding: 8px 0; }
+.sms-bubble { max-width: 80%; padding: 9px 12px; border-radius: 12px; }
+.sms-bubble.out { align-self: flex-end; background: var(--blue); }
+.sms-bubble.in { align-self: flex-start; background: var(--inset); border: 1px solid var(--border); }
+.sms-bubble.failed { background: var(--danger); }
+.sms-text { font-size: 14px; }
+.sms-meta { font-size: 11px; color: rgba(255,255,255,0.7); margin-top: 3px; }
+.sms-bubble.in .sms-meta { color: var(--muted); }
+.sms-compose { display: flex; gap: 8px; align-items: flex-end; }
+.sms-compose textarea {
+  flex: 1; background: var(--inset); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; color: var(--text); min-height: 44px; resize: vertical;
+}
+
+/* ── Payment ─────────────────────────────────────────────────────────── */
+.paid-badge { color: var(--success); font-weight: 800; font-size: 15px; }
+.pay-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.pay-link-result { margin-top: 10px; }
+.pay-ok { color: var(--success); font-weight: 700; margin-bottom: 4px; }
+.pay-url { word-break: break-all; }
+
+/* ── Next actions + AI review tool ───────────────────────────────────── */
+.next-actions { margin-bottom: 20px; }
+.todo-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.todo-chip {
+  display: flex; align-items: center; gap: 8px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 100px; padding: 8px 14px; font-size: 13px;
+}
+.todo-count { background: var(--primary); color: #10151F; font-weight: 800; border-radius: 100px; padding: 1px 9px; }
+.review-tool { margin-bottom: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
+.review-tool textarea {
+  width: 100%; background: var(--inset); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; color: var(--text); min-height: 70px; resize: vertical; margin-bottom: 10px;
+}
+.review-tool-row { display: flex; gap: 8px; align-items: center; }
+.review-tool-row select {
+  background: var(--inset); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text);
+}
+.review-output { margin-top: 12px; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.review-output:empty { display: none; }
+
+/* ── Inventory ───────────────────────────────────────────────────────── */
+.inv-low { border-color: var(--primary); }
+.inv-low-tag { background: var(--primary); color: #10151F; font-size: 10px; font-weight: 800; border-radius: 6px; padding: 1px 6px; }
+.inv-nums { display: flex; gap: 12px; }
+.inv-nums label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.inv-nums input { width: 80px; background: var(--inset); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text); }

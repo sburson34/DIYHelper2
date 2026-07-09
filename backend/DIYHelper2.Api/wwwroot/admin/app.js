@@ -40,6 +40,7 @@ const sections = {
   schedule: el('schedule-section'),
   technicians: el('technicians-section'),
   pricing: el('pricing-section'),
+  inventory: el('inventory-section'),
   push: el('push-section'),
   studio: el('studio-section'),
 };
@@ -60,6 +61,7 @@ async function init() {
   wireSchedule();
   wireTechnicians();
   wirePricing();
+  wireInventory();
   wirePush();
   wireStudio();
   el('signout').addEventListener('click', signOut);
@@ -109,6 +111,7 @@ function wireBrandScope() {
     else if (state.section === 'schedule') loadSchedule();
     else if (state.section === 'technicians') loadTechnicians();
     else if (state.section === 'pricing') loadPricing();
+    else if (state.section === 'inventory') loadInventory();
     else if (state.section === 'push') { loadAudience(); loadCampaigns(); updatePreviewAppName(); }
   });
 }
@@ -137,6 +140,7 @@ function showSection(name) {
   else if (name === 'schedule') loadSchedule();
   else if (name === 'technicians') loadTechnicians();
   else if (name === 'pricing') loadPricing();
+  else if (name === 'inventory') loadInventory();
   else if (name === 'push') { loadAudience(); loadCampaigns(); updatePreview(); updatePreviewAppName(); }
   else if (name === 'studio') updateStudio();
 }
@@ -174,7 +178,10 @@ async function loadOverview() {
         opsCards = `
       <div class="kpi green"><div class="kpi-label">Revenue</div><div class="kpi-value">${money(ops.revenue)}</div><div class="kpi-hint">approved quotes</div></div>
       <div class="kpi"><div class="kpi-label">Margin</div><div class="kpi-value">${money(ops.margin)}</div><div class="kpi-hint">after labor + parts</div></div>
-      <div class="kpi"><div class="kpi-label">Completed jobs</div><div class="kpi-value">${ops.completedJobs}</div><div class="kpi-hint">avg ticket ${money(ops.avgTicket)}</div></div>`;
+      <div class="kpi"><div class="kpi-label">Completed jobs</div><div class="kpi-value">${ops.completedJobs}</div><div class="kpi-hint">avg ticket ${money(ops.avgTicket)}</div></div>
+      <div class="kpi"><div class="kpi-label">Booking rate</div><div class="kpi-value">${Number(ops.bookingRate || 0)}%</div><div class="kpi-hint">${ops.bookedJobs} of ${ops.totalLeads} leads</div></div>
+      <div class="kpi"><div class="kpi-label">Quote win rate</div><div class="kpi-value">${Number(ops.quoteWinRate || 0)}%</div><div class="kpi-hint">${ops.quotesSent} quotes sent</div></div>
+      <div class="kpi"><div class="kpi-label">Outstanding</div><div class="kpi-value">${money(ops.outstandingRevenue)}</div><div class="kpi-hint">unpaid vs ${money(ops.collectedRevenue)} collected</div></div>`;
       } catch (e) { /* ops summary optional */ }
     }
 
@@ -186,8 +193,55 @@ async function loadOverview() {
       ${opsCards}`;
 
     renderCards(el('overview-recent-list'), leads.slice(0, 5), 'No leads yet.');
+    loadNextActions();
   } catch (err) {
     grid.innerHTML = '<div class="empty-state"><h2>Could not load overview</h2></div>';
+  }
+}
+
+// Rule-based "what needs attention" rollup.
+async function loadNextActions() {
+  const host = el('next-actions');
+  const bp = brandParam();
+  if (state.isSuperAdmin && !bp) { host.classList.add('hidden'); return; }
+  try {
+    const a = await getJson('/api/ops/next-actions' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+    const items = [
+      ['New leads to respond to', a.newLeads],
+      ['Quotes to chase (2+ days)', a.quotesToChase],
+      ['Completed & unpaid', a.unpaidCompleted],
+      ['Scheduled, no tech assigned', a.unassignedScheduled],
+      ['Maintenance due soon', a.maintenanceDue],
+    ].filter(([, n]) => n > 0);
+    if (!items.length) { host.classList.add('hidden'); return; }
+    host.classList.remove('hidden');
+    host.innerHTML = '<div class="section-head"><h3>Needs your attention</h3></div>' +
+      '<div class="todo-row">' +
+      items.map(([label, n]) => `<div class="todo-chip"><span class="todo-count">${n}</span>${escapeHtml(label)}</div>`).join('') +
+      '</div>';
+  } catch (err) {
+    host.classList.add('hidden');
+  }
+}
+
+async function draftReviewReply() {
+  const review = el('review-input').value.trim();
+  if (!review) { toast('Paste a review first.', 'error'); return; }
+  const rating = el('review-rating').value;
+  const btn = el('review-draft-btn');
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Drafting…';
+  try {
+    const body = { review };
+    if (rating) body.rating = Number(rating);
+    const res = await sendJson('/api/ai/review-response', 'POST', body);
+    el('review-output').textContent = res.response || '';
+  } catch (err) {
+    toast(err.message || 'Could not draft a reply.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
   }
 }
 
@@ -211,11 +265,13 @@ function wireLeads() {
     const card = e.target.closest('.request-card');
     if (card && card.dataset.id) { showSection('leads'); viewRequest(card.dataset.id); }
   });
+  el('review-draft-btn').addEventListener('click', draftReviewReply);
 
   el('back-btn').addEventListener('click', showLeadList);
   el('delete-btn').addEventListener('click', deleteCurrentRequest);
   el('detail-content').addEventListener('click', (e) => {
     if (e.target.closest('#save-lead-btn')) saveChanges();
+    else if (e.target.closest('#resend-report-btn')) resendReport();
     else if (e.target.closest('#quote-add-item')) {
       const sel = el('quote-item');
       const item = state.priceBook.find((p) => String(p.id) === sel.value);
@@ -229,8 +285,16 @@ function wireLeads() {
       state.quoteLines = readQuoteLinesFromDom();
       state.quoteLines.splice(idx, 1);
       renderQuoteLines();
+    } else if (e.target.closest('#quote-suggest-ai')) {
+      suggestQuoteWithAi();
     } else if (e.target.closest('#send-quote-btn')) {
       sendQuote();
+    } else if (e.target.closest('#sms-send-btn')) {
+      sendCustomerSms();
+    } else if (e.target.closest('#pay-link-btn')) {
+      requestPaymentLink(false);
+    } else if (e.target.closest('#pay-sms-btn')) {
+      requestPaymentLink(true);
     }
   });
   // Live total as the operator edits line amounts/quantities.
@@ -290,6 +354,7 @@ async function viewRequest(id) {
     await loadPriceBookForBrand();       // populate the quote item picker
     renderDetail(data);
     renderQuoteLines();
+    loadMessages(id);
     el('request-list').classList.add('hidden');
     document.getElementById('lead-filters').classList.add('hidden');
     el('detail-panel').classList.remove('hidden');
@@ -342,6 +407,24 @@ function renderDetail(data) {
     ${arrTags('When to call a pro', projectData.when_to_call_pro)}
     ${quoteBuilderHtml(data)}
     <div class="detail-section">
+      <h3>Payment</h3>
+      ${data.paidAt
+        ? `<div class="paid-badge">✓ Paid $${escapeHtml(Number(data.amountPaid || 0).toFixed(2))} on ${escapeHtml(fmtDate(data.paidAt))}</div>`
+        : `<div class="pay-actions">
+             <button class="btn accent" id="pay-link-btn" type="button">Create payment link</button>
+             <button class="btn ghost" id="pay-sms-btn" type="button">Create &amp; text to customer</button>
+           </div>
+           <div id="pay-link-result" class="pay-link-result"></div>`}
+    </div>
+    <div class="detail-section">
+      <h3>Text customer</h3>
+      <div id="sms-log" class="sms-log"></div>
+      <div class="sms-compose">
+        <textarea id="sms-body" placeholder="Type a text to the customer…" maxlength="480"></textarea>
+        <button class="btn accent" id="sms-send-btn" type="button">Send text</button>
+      </div>
+    </div>
+    <div class="detail-section">
       <h3>Manage lead</h3>
       <div class="edit-form">
         <div class="form-group">
@@ -368,7 +451,14 @@ function renderDetail(data) {
             <div class="price-edit-amt"><span class="price-dollar">$</span><input type="number" min="0" step="0.01" id="edit-parts" value="${data.partsCost != null ? escapeHtml(String(data.partsCost)) : ''}"></div>
           </div>
         </div>
+        <div class="form-group">
+          <label for="edit-maint">Maintenance reminder</label>
+          <select id="edit-maint">
+            ${[[0, 'None'], [3, 'Every 3 months'], [6, 'Every 6 months'], [12, 'Every 12 months']].map(([v, label]) => `<option value="${v}" ${(data.maintenanceIntervalMonths || 0) === v ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </div>
         ${costingLine(data)}
+        ${data.completedAt ? `<button class="btn ghost" id="resend-report-btn" type="button">${data.reportSentAt ? 'Resend' : 'Send'} job report</button>` : ''}
         <button class="save-btn" id="save-lead-btn" type="button">Save changes</button>
       </div>
     </div>`;
@@ -397,10 +487,11 @@ async function saveChanges() {
   const partsRaw = el('edit-parts').value.trim();
   const laborCost = laborRaw === '' ? -1 : parseFloat(laborRaw);
   const partsCost = partsRaw === '' ? -1 : parseFloat(partsRaw);
+  const maintenanceIntervalMonths = Number(el('edit-maint').value) || 0;
   const btn = el('save-lead-btn');
   btn.disabled = true;
   try {
-    const updated = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}`, 'PUT', { status, notes, followUpDate, laborCost, partsCost });
+    const updated = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}`, 'PUT', { status, notes, followUpDate, laborCost, partsCost, maintenanceIntervalMonths });
     state.quoteLines = [];
     await loadPriceBookForBrand();
     renderDetail(updated);
@@ -433,7 +524,22 @@ function wireSchedule() {
   el('sched-back-btn').addEventListener('click', showBoard);
   el('schedule-editor-content').addEventListener('click', (e) => {
     if (e.target.closest('#sched-save-btn')) saveSchedule();
+    else if (e.target.closest('#sched-suggest-tech')) suggestTech(e.target.closest('#sched-suggest-tech').dataset.job);
   });
+}
+
+async function suggestTech(jobId) {
+  try {
+    const res = await getJson(`/api/help-requests/${encodeURIComponent(jobId)}/suggest-tech`);
+    if (res.techId) {
+      el('sched-tech').value = String(res.techId);
+      toast(`Suggested ${res.name} (${res.currentJobs} open job${res.currentJobs === 1 ? '' : 's'}).`, 'success');
+    } else {
+      toast(res.reason || 'No technician to suggest.', 'error');
+    }
+  } catch (err) {
+    toast('Could not suggest a technician.', 'error');
+  }
 }
 
 // Local YYYY-MM-DD key for grouping (avoids UTC day-boundary drift).
@@ -577,7 +683,7 @@ function renderScheduleEditor(j) {
             <select id="sched-status">${JOB_STATUSES.map((s) => `<option value="${s}" ${j.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}</select>
           </div>
           <div class="form-group">
-            <label for="sched-tech">Assign to</label>
+            <label for="sched-tech">Assign to <button class="link-btn" id="sched-suggest-tech" type="button" data-job="${escapeHtml(String(j.id))}">Suggest</button></label>
             <select id="sched-tech">
               <option value="">Unassigned</option>
               ${state.techs.filter((tt) => tt.isActive || tt.id === j.assignedTechId).map((tt) => `<option value="${escapeHtml(String(tt.id))}" ${j.assignedTechId === tt.id ? 'selected' : ''}>${escapeHtml(tt.name)}</option>`).join('')}
@@ -870,6 +976,78 @@ async function deletePriceItem(id) {
   }
 }
 
+/* ── Inventory / truck stock ────────────────────────────────────────────── */
+function wireInventory() {
+  el('inv-add-btn').addEventListener('click', addInventoryItem);
+  el('inv-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-inv-action]');
+    if (!btn) return;
+    if (btn.dataset.invAction === 'delete') deleteInventoryItem(btn.dataset.invId);
+    else if (btn.dataset.invAction === 'save') saveInventoryItem(btn.dataset.invId);
+  });
+}
+
+async function loadInventory() {
+  const host = el('inv-list');
+  host.innerHTML = '<div class="spinner"></div>';
+  if (state.isSuperAdmin && !brandParam()) {
+    host.innerHTML = '<div class="empty-state"><h2>Select a brand to manage its inventory.</h2></div>';
+    return;
+  }
+  const bp = brandParam();
+  let items = [];
+  try { items = await getJson('/api/inventory' + (bp ? `?brand=${encodeURIComponent(bp)}` : '')); } catch (e) { items = []; }
+  if (!items.length) {
+    host.innerHTML = '<div class="empty-state"><h2>No inventory yet.</h2><p>Add the parts you keep on the truck.</p></div>';
+    return;
+  }
+  host.innerHTML = items.map((it) => `
+    <div class="tech-card${it.low ? ' inv-low' : ''}">
+      <div class="tech-main" style="flex:1">
+        <div class="tech-name">${escapeHtml(it.name)}${it.low ? ' <span class="inv-low-tag">LOW</span>' : ''}</div>
+        <div class="tech-meta">${escapeHtml(it.sku || '')}</div>
+      </div>
+      <div class="inv-nums">
+        <label>Qty <input class="inv-edit-qty" data-inv-id="${escapeHtml(String(it.id))}" type="number" min="0" value="${escapeHtml(String(it.quantity))}"></label>
+        <label>Reorder <input class="inv-edit-reorder" data-inv-id="${escapeHtml(String(it.id))}" type="number" min="0" value="${escapeHtml(String(it.reorderAt))}"></label>
+      </div>
+      <div class="tech-actions">
+        <button class="btn ghost" type="button" data-inv-action="save" data-inv-id="${escapeHtml(String(it.id))}">Save</button>
+        <button class="btn danger" type="button" data-inv-action="delete" data-inv-id="${escapeHtml(String(it.id))}">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+async function addInventoryItem() {
+  const name = el('inv-name').value.trim();
+  if (!name) { toast('Enter a part name.', 'error'); return; }
+  if (state.isSuperAdmin && !brandParam()) { toast('Select a brand first.', 'error'); return; }
+  const body = { name, sku: el('inv-sku').value.trim() || null, quantity: parseInt(el('inv-qty').value, 10) || 0, reorderAt: parseInt(el('inv-reorder').value, 10) || 0 };
+  if (state.isSuperAdmin && state.brand) body.brand = state.brand;
+  try {
+    await sendJson('/api/inventory', 'POST', body);
+    ['inv-name', 'inv-sku', 'inv-qty', 'inv-reorder'].forEach((id) => { el(id).value = ''; });
+    loadInventory();
+  } catch (err) { toast(err.message || 'Could not add item.', 'error'); }
+}
+
+async function saveInventoryItem(id) {
+  const qty = parseInt(document.querySelector(`.inv-edit-qty[data-inv-id="${id}"]`).value, 10) || 0;
+  const reorder = parseInt(document.querySelector(`.inv-edit-reorder[data-inv-id="${id}"]`).value, 10) || 0;
+  try {
+    await sendJson(`/api/inventory/${encodeURIComponent(id)}`, 'PUT', { quantity: qty, reorderAt: reorder });
+    loadInventory();
+  } catch (err) { toast(err.message || 'Could not save.', 'error'); }
+}
+
+async function deleteInventoryItem(id) {
+  if (!confirm('Delete this inventory item?')) return;
+  try {
+    await fetch(`${API}/api/inventory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    loadInventory();
+  } catch (err) { toast('Could not delete item.', 'error'); }
+}
+
 /* ── Quote builder (rendered inside the lead detail) ────────────────────── */
 function quoteBuilderHtml(data) {
   const status = data.quoteStatus;
@@ -886,6 +1064,7 @@ function quoteBuilderHtml(data) {
         <select id="quote-item"><option value="">Add from price book…</option>${options}</select>
         <button class="btn ghost" id="quote-add-item" type="button">Add</button>
         <button class="btn ghost" id="quote-add-custom" type="button">Custom line</button>
+        <button class="btn ghost" id="quote-suggest-ai" type="button">✨ Suggest with AI</button>
       </div>
       <div id="quote-lines" class="quote-lines"></div>
       <div class="quote-total-row">Total: <span id="quote-total">$0.00</span></div>
@@ -920,6 +1099,27 @@ function updateQuoteTotal() {
   if (node) node.textContent = `$${total.toFixed(2)}`;
 }
 
+async function suggestQuoteWithAi() {
+  const btn = el('quote-suggest-ai');
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Thinking…';
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/suggest-quote`, 'PUT', {});
+    const lines = (res.lines || []).filter((l) => l.description || l.amount);
+    if (!lines.length) { toast('AI had no suggestions.', 'error'); return; }
+    // Merge current edits, append AI suggestions.
+    state.quoteLines = readQuoteLinesFromDom().concat(lines.map((l) => ({ description: l.description, amount: l.amount, quantity: l.quantity || 1 })));
+    renderQuoteLines();
+    toast(`Added ${lines.length} AI-suggested line${lines.length === 1 ? '' : 's'}. Review before sending.`, 'success');
+  } catch (err) {
+    toast(err.message || 'AI suggestion failed.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
+}
+
 async function sendQuote() {
   const lines = readQuoteLinesFromDom().filter((l) => l.description || l.amount);
   if (!lines.length) { toast('Add at least one line to the quote.', 'error'); return; }
@@ -931,6 +1131,69 @@ async function sendQuote() {
     viewRequest(state.currentRequestId);
   } catch (err) {
     toast(err.message || 'Could not send quote.', 'error');
+    btn.disabled = false;
+  }
+}
+
+/* ── Customer SMS (in the lead detail) ──────────────────────────────────── */
+async function loadMessages(id) {
+  const host = el('sms-log');
+  if (!host) return;
+  try {
+    const msgs = await getJson(`/api/help-requests/${encodeURIComponent(id)}/messages`);
+    if (!msgs.length) { host.innerHTML = '<div class="muted sms-empty">No texts yet.</div>'; return; }
+    host.innerHTML = msgs.map((m) => `
+      <div class="sms-bubble ${m.direction === 'in' ? 'in' : 'out'}${m.sent === false ? ' failed' : ''}">
+        <div class="sms-text">${escapeHtml(m.body)}</div>
+        <div class="sms-meta">${m.direction === 'in' ? 'Customer' : 'You'} · ${escapeHtml(fmtDateTime(m.createdAt))}${m.sent === false ? ' · not sent' : ''}</div>
+      </div>`).join('');
+  } catch (err) {
+    host.innerHTML = '<div class="muted sms-empty">Could not load messages.</div>';
+  }
+}
+
+async function sendCustomerSms() {
+  const body = el('sms-body').value.trim();
+  if (!body) { toast('Type a message first.', 'error'); return; }
+  const btn = el('sms-send-btn');
+  btn.disabled = true;
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/message`, 'PUT', { body });
+    if (res.sent) { toast('Text sent.', 'success'); el('sms-body').value = ''; }
+    else toast(res.reason || 'SMS is not configured.', 'error');
+    loadMessages(state.currentRequestId);
+  } catch (err) {
+    toast(err.message || 'Could not send text.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function resendReport() {
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/report`, 'PUT', {});
+    toast(res.sent ? 'Report emailed to the customer.' : (res.reason || 'Could not send report.'), res.sent ? 'success' : 'error');
+  } catch (err) {
+    toast(err.message || 'Could not send report.', 'error');
+  }
+}
+
+/* ── Collect payment (in the lead detail) ───────────────────────────────── */
+async function requestPaymentLink(sendSms) {
+  const host = el('pay-link-result');
+  const btn = el(sendSms ? 'pay-sms-btn' : 'pay-link-btn');
+  btn.disabled = true;
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/payment-link`, 'PUT', { sendSms });
+    if (res.available && res.url) {
+      host.innerHTML = `<div class="pay-ok">Payment link ready${sendSms ? ' and texted to the customer' : ''}:</div><a class="link pay-url" href="${escapeHtml(res.url)}" target="_blank" rel="noopener">${escapeHtml(res.url)}</a>`;
+      if (sendSms) { toast('Payment link texted.', 'success'); loadMessages(state.currentRequestId); }
+    } else {
+      host.innerHTML = `<div class="muted">${escapeHtml(res.reason || 'Payments are not available.')}</div>`;
+    }
+  } catch (err) {
+    toast(err.message || 'Could not create payment link.', 'error');
+  } finally {
     btn.disabled = false;
   }
 }
