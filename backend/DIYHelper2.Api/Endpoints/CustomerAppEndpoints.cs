@@ -1,0 +1,244 @@
+using DIYHelper2.Api;
+using DIYHelper2.Api.Data;
+using DIYHelper2.Api.Models;
+using DIYHelper2.Api.Validation;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.EntityFrameworkCore;
+using static DIYHelper2.Api.Endpoints.EndpointHelpers;
+
+namespace DIYHelper2.Api.Endpoints;
+
+/// <summary>
+/// Customer-facing app surfaces (public; X-App-Key + X-Brand/X-Device-Id
+/// scoped): the booking submit, per-brand config, the "My Jobs" tracker,
+/// quote responses, and membership checkout.
+/// </summary>
+public static class CustomerAppEndpoints
+{
+    public static IEndpointRouteBuilder MapCustomerApp(this IEndpointRouteBuilder app)
+    {
+        app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
+            [FromBody] CreateHelpRequestDto dto,
+            HttpContext context,
+            AppDbContext db,
+            Sburson.Shared.Email.IEmailService mailer,
+            DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher crmDispatcher,
+            ILogger<Program> logger) =>
+        {
+            // Reject oversize / malformed image payloads before persisting. Mobile app
+            // compresses to well under 10 MB — anything larger is an abuse signal.
+            if (!string.IsNullOrEmpty(dto.ImageBase64))
+            {
+                if (dto.ImageBase64.Length > MediaValidation.MaxBase64LengthPerItem)
+                    return ApiError.BadRequest(context, "Image exceeds maximum size of 10 MB.");
+                try { _ = Convert.FromBase64String(dto.ImageBase64); }
+                catch { return ApiError.BadRequest(context, "imageBase64 is not valid base64."); }
+            }
+            if (!string.IsNullOrEmpty(dto.UserDescription) && dto.UserDescription.Length > MediaValidation.MaxDescriptionLength)
+                return ApiError.BadRequest(context, $"Description exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
+
+            // White-label attribution: which company's app produced this lead. Sourced
+            // from the X-Brand header (NOT the body) so a client can't spoof another
+            // tenant's attribution. Defaults to the flagship brand for un-branded builds.
+            var brandSlug = (context.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(brandSlug)) brandSlug = "diyhelper";
+
+            // Device id (per-install) lets the customer see this job later in "My Jobs"
+            // without a login. Sourced from the header, never the body.
+            var deviceId = context.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+
+            var helpRequest = new HelpRequest
+            {
+                Brand = brandSlug,
+                CustomerName = dto.CustomerName,
+                CustomerEmail = dto.CustomerEmail,
+                CustomerPhone = dto.CustomerPhone,
+                ProjectTitle = dto.ProjectTitle,
+                UserDescription = dto.UserDescription,
+                ProjectData = dto.ProjectData,
+                ImageBase64 = dto.ImageBase64,
+                DeviceId = string.IsNullOrEmpty(deviceId) ? null : deviceId,
+                ServiceType = dto.ServiceType,
+                PreferredDate = dto.PreferredDate,
+                PreferredWindow = dto.PreferredWindow,
+                Status = "new",
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            db.HelpRequests.Add(helpRequest);
+
+            // Upsert the lightweight, password-less customer record so return visits are
+            // recognized (by device, or by email on a new install) and later features
+            // (memberships, reminders) have a stable anchor. Best-effort: a failure here
+            // must not fail the booking, so it shares the same SaveChanges and any
+            // exception bubbles only to the catch-all handler (the lead is still saved
+            // first-class above). Match newest-first on device, then email.
+            await UpsertCustomerAsync(db, brandSlug, deviceId, dto.CustomerName, dto.CustomerEmail, dto.CustomerPhone);
+
+            await db.SaveChangesAsync();
+
+            // Route the lead to the branding company by email. Falls back to the
+            // flagship inbox so a lead is never silently dropped. Best-effort: an email
+            // failure must not fail the customer's submit (they already got their guide).
+            await NotifyBrandOfLeadAsync(db, mailer, logger, brandSlug, helpRequest);
+
+            // Second delivery channel: push into the brand's CRM if it's connected to one
+            // (webhook today). Best-effort like the email above — never fails the submit.
+            await crmDispatcher.PushLeadAsync(brandSlug, helpRequest);
+
+            return Results.Created($"/api/help-requests/{helpRequest.Id}", new { id = helpRequest.Id });
+        });
+
+        // ── Customer-facing app config + "My Jobs" ────────────────────────────────
+        // These are PUBLIC (not admin-gated): they don't match any RequiresAuth pattern,
+        // so they're protected only by the shared X-App-Key like the other mobile POSTs.
+        // Brand comes from X-Brand; per-customer scoping is by the X-Device-Id header.
+
+        // Per-brand configuration the branded app reads once at launch: company info,
+        // which customer features are on, service categories, review link, and whether
+        // the paid membership flow is actually available (brand opt-in AND a live
+        // payment provider). Lets one binary behave differently per tenant, no rebuild.
+        app.MapGet("/api/config", async (
+            HttpContext http,
+            AppDbContext db,
+            DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+
+            var membershipEffective = (brand?.MembershipEnabled ?? false) && payments.IsConfigured;
+            return Results.Ok(new
+            {
+                brand = brandSlug,
+                companyName = brand?.CompanyName ?? "",
+                phone = brand?.Phone,
+                reviewUrl = brand?.ReviewUrl,
+                serviceTypes = ParseServiceTypes(brand?.ServiceTypesJson),
+                membershipEnabled = membershipEffective,
+                features = BuildBrandFeatures(brand?.FeaturesJson, membershipEffective),
+            });
+        });
+
+        // The customer's own jobs, scoped to their device. No auth/account — the app's
+        // per-install X-Device-Id is the key. Projection is deliberately customer-safe
+        // (no ImageBase64, no operator Notes, no other customers' rows).
+        app.MapGet("/api/my/requests", async (HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+            if (string.IsNullOrEmpty(deviceId)) return Results.Ok(Array.Empty<object>());
+
+            var results = await db.HelpRequests
+                .Where(r => r.Brand == brandSlug && r.DeviceId == deviceId)
+                .OrderByDescending(r => r.CreatedAt)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.ProjectTitle,
+                    r.ServiceType,
+                    r.Status,
+                    r.PreferredDate,
+                    r.PreferredWindow,
+                    r.ScheduledFor,
+                    r.TechEtaMinutes,
+                    r.QuoteStatus,
+                    r.QuoteTotal,
+                    r.CreatedAt,
+                    r.UpdatedAt,
+                })
+                .ToListAsync();
+            return Results.Ok(results);
+        });
+
+        app.MapGet("/api/my/requests/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+            var r = await db.HelpRequests.FindAsync(id);
+            // 404 (not 403) when the row isn't this device's, so a customer can't probe
+            // another customer's id space — same posture as the admin cross-tenant guard.
+            if (r is null || r.Brand != brandSlug || string.IsNullOrEmpty(deviceId) || r.DeviceId != deviceId)
+                return Results.NotFound();
+
+            return Results.Ok(new
+            {
+                r.Id,
+                r.ProjectTitle,
+                r.ServiceType,
+                r.UserDescription,
+                r.ProjectData,
+                r.Status,
+                r.PreferredDate,
+                r.PreferredWindow,
+                r.ScheduledFor,
+                r.TechEtaMinutes,
+                r.QuoteLinesJson,
+                r.QuoteTotal,
+                r.QuoteStatus,
+                r.QuoteSentAt,
+                r.CreatedAt,
+                r.UpdatedAt,
+            });
+        });
+
+        // Customer responds to a quote from the app (approve/decline). Device-scoped
+        // exactly like the other /api/my endpoints; only a "sent" quote can be answered.
+        app.MapPut("/api/my/requests/{id:int}/quote", [EnableRateLimiting("submit")] async (
+            int id, [FromBody] QuoteDecisionDto dto, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+            var r = await db.HelpRequests.FindAsync(id);
+            if (r is null || r.Brand != brandSlug || string.IsNullOrEmpty(deviceId) || r.DeviceId != deviceId)
+                return Results.NotFound();
+            if (r.QuoteStatus != "sent")
+                return ApiError.BadRequest(http, "There's no open quote to respond to.");
+
+            var decision = (dto.Decision ?? "").Trim().ToLowerInvariant();
+            if (decision != "approved" && decision != "declined")
+                return ApiError.BadRequest(http, "decision must be 'approved' or 'declined'.");
+
+            r.QuoteStatus = decision;
+            r.QuoteRespondedAt = DateTime.UtcNow;
+            r.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { r.Id, quoteStatus = r.QuoteStatus });
+        });
+
+        // Start a membership / maintenance-plan checkout. Fail-soft and honest: returns
+        // available=false with a reason whenever the brand hasn't opted in or the
+        // payment provider isn't wired, so the app hides or greys the CTA rather than
+        // erroring. When live, returns a hosted Stripe Checkout URL for the app to open.
+        app.MapPost("/api/memberships/checkout", [EnableRateLimiting("submit")] async (
+            [FromBody] MembershipCheckoutDto dto,
+            HttpContext http,
+            AppDbContext db,
+            DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+            if (brand is null || !brand.MembershipEnabled)
+                return Results.Ok(new { available = false, reason = "Memberships aren't offered by this company." });
+            if (!payments.IsConfigured)
+                return Results.Ok(new { available = false, reason = "Membership signup isn't available yet." });
+            if (string.IsNullOrWhiteSpace(dto.CustomerEmail))
+                return ApiError.BadRequest(http, "customerEmail is required.");
+
+            var success = string.IsNullOrWhiteSpace(dto.SuccessUrl)
+                ? "https://api.diyhelper.org/membership-success.html" : dto.SuccessUrl!;
+            var cancel = string.IsNullOrWhiteSpace(dto.CancelUrl)
+                ? "https://api.diyhelper.org/membership-cancel.html" : dto.CancelUrl!;
+
+            var result = await payments.CreateMembershipCheckoutAsync(
+                new DIYHelper2.Api.Integrations.Billing.MembershipCheckoutRequest(
+                    brandSlug, dto.PlanId ?? "default", dto.CustomerEmail!, dto.CustomerName, success, cancel));
+
+            return result.Ok
+                ? Results.Ok(new { available = true, checkoutUrl = result.CheckoutUrl })
+                : Results.Ok(new { available = false, reason = result.Error });
+        });
+
+        return app;
+    }
+}
