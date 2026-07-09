@@ -26,6 +26,40 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 14. [ ] Route optimization (needs address capture first — may be partial)
 15. [DONE ✅] AI dispatcher — rule-based least-loaded-tech suggestion (deterministic + explainable)
 
+## Remaining threads — NOT built (specs to execute next)
+Stopped here at a clean, green, fully-committed state (context budget, not a blocker).
+None are blocked on you; each is a straightforward multi-file feature. Specs:
+
+### 4. Tiered "Good/Better/Best" quotes
+- Backend: change the quote from a single line-set to up to 3 named options. Simplest non-breaking path: store `QuoteOptionsJson` on HelpRequest (`[{name,lines:[...],total}]`) alongside the existing single-quote columns; `QuoteStatus`/`QuoteTotal` reflect the option the customer approves. New `PUT /api/help-requests/{id}/quote` variant accepting `options`, and the customer approve endpoint takes an `optionName`.
+- App: MyJobs quote card renders the options as selectable cards; approving one sets QuoteTotal to that option.
+- Console: quote builder gets tabs/sections per option. Test: send 3 options, approve "Better", assert QuoteTotal.
+
+### 5. Service history per property/asset
+- Backend: `Asset` table (Brand, CustomerEmail/DeviceId, Label e.g. "Water heater", Make, Model, Serial, InstalledAt, WarrantyExpiresAt). `HelpRequest.AssetId?`. Endpoints: owner CRUD `/api/assets`, customer `GET /api/my/assets` + `GET /api/my/assets/{id}/history` (device-scoped, lists that asset's past jobs). Warranty-expiry can feed the existing MaintenanceReminder sweep.
+- App: an "Equipment" screen listing assets + per-asset history; booking can attach to an asset.
+- Test: create asset, complete 2 jobs against it, assert history returns both.
+
+### 11. Online self-scheduling into real slots
+- Backend: `AvailabilitySlot` or a rules model (business hours + per-tech capacity). `GET /api/availability?date=` (public, brand) returns open slots; booking can claim a slot (validate not double-booked). Reuse the dispatch load logic for capacity.
+- App: booking screen shows real slots instead of just a preferred-day chip.
+- Test: define capacity 1/slot, book it, assert the slot no longer returns.
+
+### 12. Multi-property / property-manager accounts
+- Backend: `CustomerProperty` table (Customer + Address/Label). `HelpRequest.PropertyId?`. `/api/my/properties` CRUD (device-scoped). Booking picks a property.
+- Mostly plumbing on the existing Customer table. Test: add 2 properties, book against one, assert linkage.
+
+### 14. Route optimization (needs address capture FIRST)
+- Blocked-ish: we don't collect job addresses/coords today. Step 1: add `HelpRequest.Address` + `Lat`/`Lng` (geocode on booking via a maps API, or manual entry). Step 2: `GET /api/ops/route?techId=&date=` orders that tech's scheduled jobs by nearest-neighbor over the coords (haversine, no external API needed once coords exist). Do NOT attempt without addresses — it would be a no-op.
+
+## FINAL STATE (end of run)
+- Branch `feat/home-services-growth`, 8 feature commits on top of `main`. Working tree clean.
+- **10 of 15 threads shipped**, each with tests: SMS/comms, field payments, job report + maintenance, AI quote assistant, AI review responder, next-best-action, analytics, inventory, smart dispatch, timesheets.
+- **Verification:** backend 260 tests pass (0 fail); frontend ESLint 0 errors, nav scan OK, 174 Jest pass. 6 EF migrations added (all additive, non-destructive).
+- **Remaining 5 threads** (tiered quotes, service history/assets, self-scheduling, multi-property, route optimization) are spec'd above — none blocked on you; stopped for context budget at a clean state.
+- **One thing to check (not a blocker):** OAuth `/callback` endpoints (Jobber/QBO/Housecall) are not in `AppKeyOptions.PublicPathPrefixes`; if `APP_KEY` is set in prod they'd be rejected by AppKeyMiddleware. Verify prod APP_KEY usage and add those paths if needed (I only added `/api/sms/` + `/api/stripe/` for my webhooks). Left CRM callbacks untouched (parallel-owned).
+- **To go live** on the new integrations, set env: `TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM_NUMBER` (+ optional `TWILIO_WEBHOOK_TOKEN`), `STRIPE_SECRET_KEY` + `STRIPE_WEBHOOK_SECRET`, `QBO_*`. All dormant + fail-soft until then.
+
 ## Log
 _(newest last)_
 
