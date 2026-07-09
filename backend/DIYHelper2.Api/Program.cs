@@ -1702,63 +1702,7 @@ app.MapPost("/api/tech/jobs/{id:int}/payment-link", [EnableRateLimiting("submit"
         : Results.Ok(new { available = false, reason = result.Error });
 });
 
-// ── Price book (owner-managed flat-rate items; admin-gated) ───────────────
-app.MapGet("/api/pricebook", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
-{
-    var scope = BrandScopeOf(http);
-    var q = db.PriceBookItems.AsQueryable();
-    if (scope is not null) q = q.Where(p => p.Brand == scope);
-    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(p => p.Brand == brand);
-    var items = await q.OrderBy(p => p.Name)
-        .Select(p => new { p.Id, p.Brand, p.Name, p.DefaultPrice, p.IsActive })
-        .ToListAsync();
-    return Results.Ok(items);
-});
-
-app.MapPost("/api/pricebook", async ([FromBody] PriceBookItemDto dto, HttpContext http, AppDbContext db) =>
-{
-    var scope = BrandScopeOf(http);
-    var brand = scope ?? dto.Brand?.Trim().ToLowerInvariant();
-    if (string.IsNullOrEmpty(brand)) return ApiError.BadRequest(http, "A brand is required.");
-    if (string.IsNullOrWhiteSpace(dto.Name)) return ApiError.BadRequest(http, "An item name is required.");
-
-    var item = new PriceBookItem
-    {
-        Brand = brand,
-        Name = dto.Name.Trim(),
-        DefaultPrice = dto.DefaultPrice ?? 0m,
-        IsActive = true,
-    };
-    db.PriceBookItems.Add(item);
-    await db.SaveChangesAsync();
-    return Results.Created($"/api/pricebook/{item.Id}",
-        new { item.Id, item.Name, item.DefaultPrice, item.IsActive });
-});
-
-app.MapPut("/api/pricebook/{id:int}", async (int id, [FromBody] PriceBookItemDto dto, HttpContext http, AppDbContext db) =>
-{
-    var item = await db.PriceBookItems.FindAsync(id);
-    if (item is null) return Results.NotFound();
-    var scope = BrandScopeOf(http);
-    if (scope is not null && item.Brand != scope) return Results.NotFound();
-    if (dto.Name is not null) item.Name = dto.Name.Trim();
-    if (dto.DefaultPrice.HasValue) item.DefaultPrice = dto.DefaultPrice.Value;
-    if (dto.IsActive.HasValue) item.IsActive = dto.IsActive.Value;
-    item.UpdatedAt = DateTime.UtcNow;
-    await db.SaveChangesAsync();
-    return Results.Ok(new { item.Id, item.Name, item.DefaultPrice, item.IsActive });
-});
-
-app.MapDelete("/api/pricebook/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
-{
-    var item = await db.PriceBookItems.FindAsync(id);
-    if (item is null) return Results.NotFound();
-    var scope = BrandScopeOf(http);
-    if (scope is not null && item.Brand != scope) return Results.NotFound();
-    db.PriceBookItems.Remove(item);
-    await db.SaveChangesAsync();
-    return Results.NoContent();
-});
+app.MapCatalog();
 
 // Owner sends a quote for a job. PUT (not POST) so it falls under the admin gate
 // on /api/help-requests; POST there is the public customer-create flow. Computes
@@ -1971,64 +1915,6 @@ app.MapGet("/api/help-requests/{id:int}/suggest-tech", async (int id, HttpContex
         .ThenBy(t => t.Name)
         .First();
     return Results.Ok(new { techId = best.Id, name = best.Name, currentJobs = loadMap.TryGetValue(best.Id, out var cc) ? cc : 0 });
-});
-
-// ── Inventory / truck stock (owner-managed; admin-gated) ──────────────────
-app.MapGet("/api/inventory", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
-{
-    var scope = BrandScopeOf(http);
-    var q = db.InventoryItems.AsQueryable();
-    if (scope is not null) q = q.Where(i => i.Brand == scope);
-    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(i => i.Brand == brand);
-    var items = await q.OrderBy(i => i.Name)
-        .Select(i => new { i.Id, i.Brand, i.Name, i.Sku, i.Quantity, i.ReorderAt, low = i.ReorderAt > 0 && i.Quantity <= i.ReorderAt })
-        .ToListAsync();
-    return Results.Ok(items);
-});
-
-app.MapPost("/api/inventory", async ([FromBody] InventoryItemDto dto, HttpContext http, AppDbContext db) =>
-{
-    var scope = BrandScopeOf(http);
-    var brand = scope ?? dto.Brand?.Trim().ToLowerInvariant();
-    if (string.IsNullOrEmpty(brand)) return ApiError.BadRequest(http, "A brand is required.");
-    if (string.IsNullOrWhiteSpace(dto.Name)) return ApiError.BadRequest(http, "An item name is required.");
-    var item = new InventoryItem
-    {
-        Brand = brand,
-        Name = dto.Name.Trim(),
-        Sku = dto.Sku,
-        Quantity = dto.Quantity ?? 0,
-        ReorderAt = dto.ReorderAt ?? 0,
-    };
-    db.InventoryItems.Add(item);
-    await db.SaveChangesAsync();
-    return Results.Created($"/api/inventory/{item.Id}", new { item.Id, item.Name, item.Sku, item.Quantity, item.ReorderAt });
-});
-
-app.MapPut("/api/inventory/{id:int}", async (int id, [FromBody] InventoryItemDto dto, HttpContext http, AppDbContext db) =>
-{
-    var item = await db.InventoryItems.FindAsync(id);
-    if (item is null) return Results.NotFound();
-    var scope = BrandScopeOf(http);
-    if (scope is not null && item.Brand != scope) return Results.NotFound();
-    if (dto.Name is not null) item.Name = dto.Name.Trim();
-    if (dto.Sku is not null) item.Sku = dto.Sku;
-    if (dto.Quantity.HasValue) item.Quantity = dto.Quantity.Value;
-    if (dto.ReorderAt.HasValue) item.ReorderAt = dto.ReorderAt.Value;
-    item.UpdatedAt = DateTime.UtcNow;
-    await db.SaveChangesAsync();
-    return Results.Ok(new { item.Id, item.Name, item.Sku, item.Quantity, item.ReorderAt });
-});
-
-app.MapDelete("/api/inventory/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
-{
-    var item = await db.InventoryItems.FindAsync(id);
-    if (item is null) return Results.NotFound();
-    var scope = BrandScopeOf(http);
-    if (scope is not null && item.Brand != scope) return Results.NotFound();
-    db.InventoryItems.Remove(item);
-    await db.SaveChangesAsync();
-    return Results.NoContent();
 });
 
 // ── AI owner tools (admin-gated; rate-limited "ai"; spend-guarded) ────────
