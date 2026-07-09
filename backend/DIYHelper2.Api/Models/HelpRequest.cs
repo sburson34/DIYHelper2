@@ -70,6 +70,10 @@ public class HelpRequest
     /// <summary>Free-text notes the tech adds from the field (what was done).</summary>
     public string? CompletionNotes { get; set; }
 
+    /// <summary>When work started (status → in_progress). Paired with
+    /// <see cref="CompletedAt"/> to derive labor hours for timesheets.</summary>
+    public DateTime? StartedAt { get; set; }
+
     /// <summary>When the tech marked the job completed.</summary>
     public DateTime? CompletedAt { get; set; }
 

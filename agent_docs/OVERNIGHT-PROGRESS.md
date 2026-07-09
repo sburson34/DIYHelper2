@@ -22,7 +22,7 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 10. [DONE ✅] Inventory / truck stock
 11. [ ] Online self-scheduling into real slots
 12. [ ] Multi-property / property-manager accounts
-13. [ ] Timesheets / payroll export (partial — derive from status timestamps)
+13. [DONE ✅] Timesheets — labor hours per tech (StartedAt→CompletedAt rollup)
 14. [ ] Route optimization (needs address capture first — may be partial)
 15. [DONE ✅] AI dispatcher — rule-based least-loaded-tech suggestion (deterministic + explainable)
 

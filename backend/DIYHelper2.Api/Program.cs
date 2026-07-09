@@ -1520,6 +1520,7 @@ app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRe
 
     var prevStatus = request.Status;
     if (dto.Status is not null) request.Status = dto.Status;
+    if (request.Status == "in_progress" && request.StartedAt is null) request.StartedAt = DateTime.UtcNow;
     if (dto.Notes is not null) request.Notes = dto.Notes;
     if (dto.FollowUpDate.HasValue) request.FollowUpDate = dto.FollowUpDate;
     if (dto.ScheduledFor.HasValue) request.ScheduledFor = dto.ScheduledFor;
@@ -1912,6 +1913,7 @@ app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
     }
 
     if (dto.Status is not null) r.Status = dto.Status;
+    if (r.Status == "in_progress" && r.StartedAt is null) r.StartedAt = DateTime.UtcNow;
     if (dto.TechEtaMinutes.HasValue)
         r.TechEtaMinutes = dto.TechEtaMinutes.Value < 0 ? null : dto.TechEtaMinutes.Value;
     if (dto.CompletionNotes is not null) r.CompletionNotes = dto.CompletionNotes;
@@ -2531,6 +2533,33 @@ app.MapPost("/api/ai/review-response", [EnableRateLimiting("ai")] async (
     var aiCtx = new AiCallContext("review-response", aiClient.ProviderName, dto.Review!.Length, 0, null, http.Items["CorrelationId"] as string);
     var raw = await AiWorkflow.CompleteAsync(aiClient, aiReq, aiCtx, logger);
     return Results.Ok(new { response = raw.Trim() });
+});
+
+// Timesheet: labor hours per tech, derived from StartedAt→CompletedAt on
+// completed jobs in the window. Admin-gated (/api/ops).
+app.MapGet("/api/ops/timesheet", async ([FromQuery] string? brand, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
+    HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var q = db.HelpRequests.Where(r => r.Status == "completed" && r.AssignedTechId != null
+        && r.StartedAt != null && r.CompletedAt != null);
+    if (scope is not null) q = q.Where(r => r.Brand == scope);
+    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(r => r.Brand == brand);
+    if (from is { } f) q = q.Where(r => r.CompletedAt >= f);
+    if (to is { } t) q = q.Where(r => r.CompletedAt <= t);
+
+    var rows = await q.Select(r => new { r.AssignedTechId, r.StartedAt, r.CompletedAt }).ToListAsync();
+    var perTech = rows
+        .GroupBy(r => r.AssignedTechId!.Value)
+        .Select(g => new
+        {
+            techId = g.Key,
+            jobs = g.Count(),
+            hours = Math.Round(g.Sum(r => (r.CompletedAt!.Value - r.StartedAt!.Value).TotalHours), 2),
+        })
+        .OrderByDescending(x => x.hours)
+        .ToList();
+    return Results.Ok(new { perTech, totalHours = Math.Round(perTech.Sum(t => t.hours), 2) });
 });
 
 // Owner "next best action" — a rule-based to-do rollup (no AI needed).
