@@ -236,6 +236,10 @@ public class AdminAuthMiddleware
         if (path.StartsWith("/api/ops", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        // Owner-facing AI tools (quote assistant, review responder) are owner-only.
+        if (path.StartsWith("/api/ai", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         // Push composer surfaces (audience, send, test, campaigns, cancel) are
         // admin-only. The mobile register/unregister POSTs stay public (gated by
         // X-App-Key), like /api/help-requests POST.

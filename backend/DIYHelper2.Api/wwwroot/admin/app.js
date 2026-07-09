@@ -186,8 +186,55 @@ async function loadOverview() {
       ${opsCards}`;
 
     renderCards(el('overview-recent-list'), leads.slice(0, 5), 'No leads yet.');
+    loadNextActions();
   } catch (err) {
     grid.innerHTML = '<div class="empty-state"><h2>Could not load overview</h2></div>';
+  }
+}
+
+// Rule-based "what needs attention" rollup.
+async function loadNextActions() {
+  const host = el('next-actions');
+  const bp = brandParam();
+  if (state.isSuperAdmin && !bp) { host.classList.add('hidden'); return; }
+  try {
+    const a = await getJson('/api/ops/next-actions' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+    const items = [
+      ['New leads to respond to', a.newLeads],
+      ['Quotes to chase (2+ days)', a.quotesToChase],
+      ['Completed & unpaid', a.unpaidCompleted],
+      ['Scheduled, no tech assigned', a.unassignedScheduled],
+      ['Maintenance due soon', a.maintenanceDue],
+    ].filter(([, n]) => n > 0);
+    if (!items.length) { host.classList.add('hidden'); return; }
+    host.classList.remove('hidden');
+    host.innerHTML = '<div class="section-head"><h3>Needs your attention</h3></div>' +
+      '<div class="todo-row">' +
+      items.map(([label, n]) => `<div class="todo-chip"><span class="todo-count">${n}</span>${escapeHtml(label)}</div>`).join('') +
+      '</div>';
+  } catch (err) {
+    host.classList.add('hidden');
+  }
+}
+
+async function draftReviewReply() {
+  const review = el('review-input').value.trim();
+  if (!review) { toast('Paste a review first.', 'error'); return; }
+  const rating = el('review-rating').value;
+  const btn = el('review-draft-btn');
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Drafting…';
+  try {
+    const body = { review };
+    if (rating) body.rating = Number(rating);
+    const res = await sendJson('/api/ai/review-response', 'POST', body);
+    el('review-output').textContent = res.response || '';
+  } catch (err) {
+    toast(err.message || 'Could not draft a reply.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
   }
 }
 
@@ -211,6 +258,7 @@ function wireLeads() {
     const card = e.target.closest('.request-card');
     if (card && card.dataset.id) { showSection('leads'); viewRequest(card.dataset.id); }
   });
+  el('review-draft-btn').addEventListener('click', draftReviewReply);
 
   el('back-btn').addEventListener('click', showLeadList);
   el('delete-btn').addEventListener('click', deleteCurrentRequest);
@@ -230,6 +278,8 @@ function wireLeads() {
       state.quoteLines = readQuoteLinesFromDom();
       state.quoteLines.splice(idx, 1);
       renderQuoteLines();
+    } else if (e.target.closest('#quote-suggest-ai')) {
+      suggestQuoteWithAi();
     } else if (e.target.closest('#send-quote-btn')) {
       sendQuote();
     } else if (e.target.closest('#sms-send-btn')) {
@@ -920,6 +970,7 @@ function quoteBuilderHtml(data) {
         <select id="quote-item"><option value="">Add from price book…</option>${options}</select>
         <button class="btn ghost" id="quote-add-item" type="button">Add</button>
         <button class="btn ghost" id="quote-add-custom" type="button">Custom line</button>
+        <button class="btn ghost" id="quote-suggest-ai" type="button">✨ Suggest with AI</button>
       </div>
       <div id="quote-lines" class="quote-lines"></div>
       <div class="quote-total-row">Total: <span id="quote-total">$0.00</span></div>
@@ -952,6 +1003,27 @@ function updateQuoteTotal() {
   const total = readQuoteLinesFromDom().reduce((sum, l) => sum + l.amount * l.quantity, 0);
   const node = el('quote-total');
   if (node) node.textContent = `$${total.toFixed(2)}`;
+}
+
+async function suggestQuoteWithAi() {
+  const btn = el('quote-suggest-ai');
+  btn.disabled = true;
+  const original = btn.textContent;
+  btn.textContent = 'Thinking…';
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/suggest-quote`, 'PUT', {});
+    const lines = (res.lines || []).filter((l) => l.description || l.amount);
+    if (!lines.length) { toast('AI had no suggestions.', 'error'); return; }
+    // Merge current edits, append AI suggestions.
+    state.quoteLines = readQuoteLinesFromDom().concat(lines.map((l) => ({ description: l.description, amount: l.amount, quantity: l.quantity || 1 })));
+    renderQuoteLines();
+    toast(`Added ${lines.length} AI-suggested line${lines.length === 1 ? '' : 's'}. Review before sending.`, 'success');
+  } catch (err) {
+    toast(err.message || 'AI suggestion failed.', 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+  }
 }
 
 async function sendQuote() {

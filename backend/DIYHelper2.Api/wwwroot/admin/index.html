@@ -49,6 +49,19 @@
       <div class="kpi-grid" id="kpi-grid">
         <div class="spinner"></div>
       </div>
+      <div id="next-actions" class="next-actions hidden"></div>
+      <div class="review-tool">
+        <div class="section-head"><h3>AI review reply</h3><p>Paste a customer review and draft a warm response.</p></div>
+        <textarea id="review-input" placeholder="Paste the customer's review here…" maxlength="1000"></textarea>
+        <div class="review-tool-row">
+          <select id="review-rating">
+            <option value="">Rating…</option>
+            <option value="5">★★★★★</option><option value="4">★★★★</option><option value="3">★★★</option><option value="2">★★</option><option value="1">★</option>
+          </select>
+          <button class="btn accent" id="review-draft-btn" type="button">Draft reply</button>
+        </div>
+        <div id="review-output" class="review-output"></div>
+      </div>
       <div class="overview-recent">
         <div class="section-head"><h3>Recent leads</h3></div>
         <div id="overview-recent-list" class="request-list"></div>

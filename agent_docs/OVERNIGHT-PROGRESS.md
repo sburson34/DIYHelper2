@@ -16,9 +16,9 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 4. [ ] Tiered "Good/Better/Best" quotes
 5. [ ] Service history per property/asset
 6. [ ] Deeper analytics (conversion funnel, tech utilization)
-7. [ ] AI quote assistant (photos+desc → suggested price-book lines)
-8. [ ] AI review responder (draft replies)
-9. [ ] Owner "next best action" daily digest
+7. [DONE ✅] AI quote assistant (photos+desc → suggested price-book lines)
+8. [DONE ✅] AI review responder (draft replies)
+9. [DONE ✅] Owner "next best action" daily digest
 10. [ ] Inventory / truck stock
 11. [ ] Online self-scheduling into real slots
 12. [ ] Multi-property / property-manager accounts
@@ -55,3 +55,10 @@ _(newest last)_
 - **Maintenance:** `MaintenanceReminder` table — deliberately SEPARATE from HelpRequest because RetentionService purges help-requests at 90 days; a months-out reminder must survive. `HelpRequest.MaintenanceIntervalMonths` (owner picks None/3/6/12 in the console); on completion a reminder is scheduled. `MaintenanceReminderService` (daily BackgroundService) sweeps due+unsent reminders, emails (+texts if SMS configured), marks sent. Scan logic is a static `ProcessDueAsync` for testability.
 - Migration `AddReportsAndMaintenance`. Tests: `ReportAndMaintenanceTests` (report+maintenance on completion, reminder sweep sends+marks). 2 tests.
 - **DECISION:** recurring auto-scheduling implemented as reminder-nudges (email/SMS "time for your next service"), not auto-created leads. Auto-creating a full booking is a bigger commitment and needs a confirmed availability model — deferred. The nudge drives the customer back into the booking flow, which is the same outcome with less risk.
+
+### Threads 7–9 — AI owner tools + next-actions (DONE, 256 backend tests green)
+- Reuse `IAIVisionClient` + `AiWorkflow` (swapped for `FakeAi` in tests), guarded by AiKillSwitch + AiSpendGuard + key presence (no device-quota/integrity — these are owner-authed admin tools). `/api/ai` added to admin gate.
+- **AI quote assistant:** `PUT /api/help-requests/{id}/suggest-quote` — job photo + description + brand price book → JSON `{lines:[...]}`. Console "✨ Suggest with AI" button in the quote builder appends suggestions for review.
+- **AI review responder:** `POST /api/ai/review-response` — review text (+rating/company) → drafted reply. Console tool on Overview.
+- **Next-best-action:** `GET /api/ops/next-actions` — rule-based counts (new leads, quotes to chase >2d, completed+unpaid, scheduled-no-tech, maintenance due ≤7d). "Needs your attention" chips on Overview.
+- Tests: `AiOwnerToolsTests` (suggest lines, review draft, next-actions counts). 3 tests. No migration (no schema change).

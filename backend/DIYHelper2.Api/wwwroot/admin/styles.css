@@ -591,3 +591,23 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-
 .pay-link-result { margin-top: 10px; }
 .pay-ok { color: var(--success); font-weight: 700; margin-bottom: 4px; }
 .pay-url { word-break: break-all; }
+
+/* ── Next actions + AI review tool ───────────────────────────────────── */
+.next-actions { margin-bottom: 20px; }
+.todo-row { display: flex; flex-wrap: wrap; gap: 10px; }
+.todo-chip {
+  display: flex; align-items: center; gap: 8px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 100px; padding: 8px 14px; font-size: 13px;
+}
+.todo-count { background: var(--primary); color: #10151F; font-weight: 800; border-radius: 100px; padding: 1px 9px; }
+.review-tool { margin-bottom: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 18px; }
+.review-tool textarea {
+  width: 100%; background: var(--inset); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; color: var(--text); min-height: 70px; resize: vertical; margin-bottom: 10px;
+}
+.review-tool-row { display: flex; gap: 8px; align-items: center; }
+.review-tool-row select {
+  background: var(--inset); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; color: var(--text);
+}
+.review-output { margin-top: 12px; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
+.review-output:empty { display: none; }
