@@ -232,6 +232,10 @@ public class AdminAuthMiddleware
         if (path.StartsWith("/api/pricebook", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        // Inventory management is owner-only.
+        if (path.StartsWith("/api/inventory", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         // Ops summary (job costing / KPIs) is owner-only.
         if (path.StartsWith("/api/ops", StringComparison.OrdinalIgnoreCase))
             return true;

@@ -15,11 +15,11 @@ Branch: `feat/home-services-growth` (off `main` @ 729f9a7). All new work committ
 3. [DONE ✅] Job report (HTML email) + warranty/maintenance reminders + recurring maintenance auto-scheduling
 4. [ ] Tiered "Good/Better/Best" quotes
 5. [ ] Service history per property/asset
-6. [ ] Deeper analytics (conversion funnel, tech utilization)
+6. [DONE ✅] Deeper analytics (conversion funnel, tech utilization)
 7. [DONE ✅] AI quote assistant (photos+desc → suggested price-book lines)
 8. [DONE ✅] AI review responder (draft replies)
 9. [DONE ✅] Owner "next best action" daily digest
-10. [ ] Inventory / truck stock
+10. [DONE ✅] Inventory / truck stock
 11. [ ] Online self-scheduling into real slots
 12. [ ] Multi-property / property-manager accounts
 13. [ ] Timesheets / payroll export (partial — derive from status timestamps)
@@ -62,3 +62,8 @@ _(newest last)_
 - **AI review responder:** `POST /api/ai/review-response` — review text (+rating/company) → drafted reply. Console tool on Overview.
 - **Next-best-action:** `GET /api/ops/next-actions` — rule-based counts (new leads, quotes to chase >2d, completed+unpaid, scheduled-no-tech, maintenance due ≤7d). "Needs your attention" chips on Overview.
 - Tests: `AiOwnerToolsTests` (suggest lines, review draft, next-actions counts). 3 tests. No migration (no schema change).
+
+### Threads 6 + 10 — Analytics + Inventory (DONE, 258 backend tests green)
+- **Analytics:** extended `/api/ops/summary` with booking rate (booked/leads), completion rate, quote win rate (approved/decided), collected vs outstanding revenue, avg jobs/tech. New KPI cards on Overview. No new table.
+- **Inventory:** `InventoryItem` table (name, sku, quantity, reorderAt) + full CRUD `/api/inventory` + a "low" flag when quantity ≤ reorderAt. New "Inventory" console tab with inline qty/reorder editing + LOW badge. Migration `AddInventory`.
+- Tests: `InventoryTests` (low-stock flag, admin-gated). 2 tests.

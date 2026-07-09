@@ -22,6 +22,7 @@ public class AppDbContext : DbContext
     public DbSet<BrandAccountingConnection> BrandAccountingConnections => Set<BrandAccountingConnection>();
     public DbSet<SmsMessage> SmsMessages => Set<SmsMessage>();
     public DbSet<MaintenanceReminder> MaintenanceReminders => Set<MaintenanceReminder>();
+    public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -172,5 +173,10 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<MaintenanceReminder>()
             .HasIndex(m => new { m.SentAt, m.DueAt })
             .HasDatabaseName("IX_MaintenanceReminders_SentAt_DueAt");
+
+        // Inventory is listed per brand.
+        modelBuilder.Entity<InventoryItem>()
+            .HasIndex(i => i.Brand)
+            .HasDatabaseName("IX_InventoryItems_Brand");
     }
 }

@@ -611,3 +611,10 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-
 }
 .review-output { margin-top: 12px; color: var(--text); font-size: 14px; line-height: 1.5; white-space: pre-wrap; }
 .review-output:empty { display: none; }
+
+/* ── Inventory ───────────────────────────────────────────────────────── */
+.inv-low { border-color: var(--primary); }
+.inv-low-tag { background: var(--primary); color: #10151F; font-size: 10px; font-weight: 800; border-radius: 6px; padding: 1px 6px; }
+.inv-nums { display: flex; gap: 12px; }
+.inv-nums label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.inv-nums input { width: 80px; background: var(--inset); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text); }

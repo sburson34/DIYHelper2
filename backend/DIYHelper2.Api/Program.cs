@@ -2320,6 +2320,7 @@ app.MapGet("/api/ops/summary", async ([FromQuery] string? brand, HttpContext htt
         r.LaborCost,
         r.PartsCost,
         r.AssignedTechId,
+        r.PaidAt,
     }).ToListAsync();
 
     var completed = rows.Where(r => r.Status == "completed").ToList();
@@ -2327,6 +2328,14 @@ app.MapGet("/api/ops/summary", async ([FromQuery] string? brand, HttpContext htt
     var revenue = rows.Where(r => r.QuoteStatus == "approved").Sum(r => r.QuoteTotal ?? 0m);
     var cost = rows.Sum(r => (r.LaborCost ?? 0m) + (r.PartsCost ?? 0m));
     var approvedCount = rows.Count(r => r.QuoteStatus == "approved");
+
+    // Conversion funnel: leads → booked (anything past "new"/cancelled) → completed.
+    var booked = rows.Count(r => r.Status != "new" && r.Status != "cancelled");
+    // Quote win rate: approved / (approved + declined) — quotes that got a decision.
+    var quotesSent = rows.Count(r => r.QuoteStatus is "sent" or "approved" or "declined");
+    var quotesDecided = rows.Count(r => r.QuoteStatus is "approved" or "declined");
+    // Collections: revenue actually paid vs approved.
+    var collected = rows.Where(r => r.PaidAt != null).Sum(r => r.QuoteTotal ?? 0m);
 
     // Jobs per assigned tech (names resolved client-side from the techs list).
     var perTech = rows.Where(r => r.AssignedTechId != null)
@@ -2342,8 +2351,75 @@ app.MapGet("/api/ops/summary", async ([FromQuery] string? brand, HttpContext htt
         cost,
         margin = revenue - cost,
         avgTicket = approvedCount > 0 ? Math.Round(revenue / approvedCount, 2) : 0m,
+        // Analytics
+        bookedJobs = booked,
+        bookingRate = rows.Count > 0 ? Math.Round((decimal)booked / rows.Count * 100, 1) : 0m,
+        completionRate = booked > 0 ? Math.Round((decimal)completed.Count / booked * 100, 1) : 0m,
+        quotesSent,
+        quoteWinRate = quotesDecided > 0 ? Math.Round((decimal)approvedCount / quotesDecided * 100, 1) : 0m,
+        collectedRevenue = collected,
+        outstandingRevenue = revenue - collected,
         perTech,
+        avgJobsPerTech = perTech.Count > 0 ? Math.Round((double)perTech.Sum(t => t.jobs) / perTech.Count, 1) : 0d,
     });
+});
+
+// ── Inventory / truck stock (owner-managed; admin-gated) ──────────────────
+app.MapGet("/api/inventory", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var q = db.InventoryItems.AsQueryable();
+    if (scope is not null) q = q.Where(i => i.Brand == scope);
+    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(i => i.Brand == brand);
+    var items = await q.OrderBy(i => i.Name)
+        .Select(i => new { i.Id, i.Brand, i.Name, i.Sku, i.Quantity, i.ReorderAt, low = i.ReorderAt > 0 && i.Quantity <= i.ReorderAt })
+        .ToListAsync();
+    return Results.Ok(items);
+});
+
+app.MapPost("/api/inventory", async ([FromBody] InventoryItemDto dto, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var brand = scope ?? dto.Brand?.Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(brand)) return ApiError.BadRequest(http, "A brand is required.");
+    if (string.IsNullOrWhiteSpace(dto.Name)) return ApiError.BadRequest(http, "An item name is required.");
+    var item = new InventoryItem
+    {
+        Brand = brand,
+        Name = dto.Name.Trim(),
+        Sku = dto.Sku,
+        Quantity = dto.Quantity ?? 0,
+        ReorderAt = dto.ReorderAt ?? 0,
+    };
+    db.InventoryItems.Add(item);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/inventory/{item.Id}", new { item.Id, item.Name, item.Sku, item.Quantity, item.ReorderAt });
+});
+
+app.MapPut("/api/inventory/{id:int}", async (int id, [FromBody] InventoryItemDto dto, HttpContext http, AppDbContext db) =>
+{
+    var item = await db.InventoryItems.FindAsync(id);
+    if (item is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && item.Brand != scope) return Results.NotFound();
+    if (dto.Name is not null) item.Name = dto.Name.Trim();
+    if (dto.Sku is not null) item.Sku = dto.Sku;
+    if (dto.Quantity.HasValue) item.Quantity = dto.Quantity.Value;
+    if (dto.ReorderAt.HasValue) item.ReorderAt = dto.ReorderAt.Value;
+    item.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { item.Id, item.Name, item.Sku, item.Quantity, item.ReorderAt });
+});
+
+app.MapDelete("/api/inventory/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var item = await db.InventoryItems.FindAsync(id);
+    if (item is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && item.Brand != scope) return Results.NotFound();
+    db.InventoryItems.Remove(item);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
 });
 
 // ── AI owner tools (admin-gated; rate-limited "ai"; spend-guarded) ────────
@@ -3917,6 +3993,14 @@ public record ReviewResponseDto(
     [property: JsonPropertyName("review")] string? Review,
     [property: JsonPropertyName("rating")] int? Rating,
     [property: JsonPropertyName("company")] string? Company
+);
+
+public record InventoryItemDto(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("sku")] string? Sku,
+    [property: JsonPropertyName("quantity")] int? Quantity,
+    [property: JsonPropertyName("reorderAt")] int? ReorderAt,
+    [property: JsonPropertyName("brand")] string? Brand
 );
 
 public record MembershipCheckoutDto(

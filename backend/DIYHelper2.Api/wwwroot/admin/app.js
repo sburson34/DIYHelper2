@@ -40,6 +40,7 @@ const sections = {
   schedule: el('schedule-section'),
   technicians: el('technicians-section'),
   pricing: el('pricing-section'),
+  inventory: el('inventory-section'),
   push: el('push-section'),
   studio: el('studio-section'),
 };
@@ -60,6 +61,7 @@ async function init() {
   wireSchedule();
   wireTechnicians();
   wirePricing();
+  wireInventory();
   wirePush();
   wireStudio();
   el('signout').addEventListener('click', signOut);
@@ -109,6 +111,7 @@ function wireBrandScope() {
     else if (state.section === 'schedule') loadSchedule();
     else if (state.section === 'technicians') loadTechnicians();
     else if (state.section === 'pricing') loadPricing();
+    else if (state.section === 'inventory') loadInventory();
     else if (state.section === 'push') { loadAudience(); loadCampaigns(); updatePreviewAppName(); }
   });
 }
@@ -137,6 +140,7 @@ function showSection(name) {
   else if (name === 'schedule') loadSchedule();
   else if (name === 'technicians') loadTechnicians();
   else if (name === 'pricing') loadPricing();
+  else if (name === 'inventory') loadInventory();
   else if (name === 'push') { loadAudience(); loadCampaigns(); updatePreview(); updatePreviewAppName(); }
   else if (name === 'studio') updateStudio();
 }
@@ -174,7 +178,10 @@ async function loadOverview() {
         opsCards = `
       <div class="kpi green"><div class="kpi-label">Revenue</div><div class="kpi-value">${money(ops.revenue)}</div><div class="kpi-hint">approved quotes</div></div>
       <div class="kpi"><div class="kpi-label">Margin</div><div class="kpi-value">${money(ops.margin)}</div><div class="kpi-hint">after labor + parts</div></div>
-      <div class="kpi"><div class="kpi-label">Completed jobs</div><div class="kpi-value">${ops.completedJobs}</div><div class="kpi-hint">avg ticket ${money(ops.avgTicket)}</div></div>`;
+      <div class="kpi"><div class="kpi-label">Completed jobs</div><div class="kpi-value">${ops.completedJobs}</div><div class="kpi-hint">avg ticket ${money(ops.avgTicket)}</div></div>
+      <div class="kpi"><div class="kpi-label">Booking rate</div><div class="kpi-value">${Number(ops.bookingRate || 0)}%</div><div class="kpi-hint">${ops.bookedJobs} of ${ops.totalLeads} leads</div></div>
+      <div class="kpi"><div class="kpi-label">Quote win rate</div><div class="kpi-value">${Number(ops.quoteWinRate || 0)}%</div><div class="kpi-hint">${ops.quotesSent} quotes sent</div></div>
+      <div class="kpi"><div class="kpi-label">Outstanding</div><div class="kpi-value">${money(ops.outstandingRevenue)}</div><div class="kpi-hint">unpaid vs ${money(ops.collectedRevenue)} collected</div></div>`;
       } catch (e) { /* ops summary optional */ }
     }
 
@@ -952,6 +959,78 @@ async function deletePriceItem(id) {
   } catch (err) {
     toast('Could not delete item.', 'error');
   }
+}
+
+/* ── Inventory / truck stock ────────────────────────────────────────────── */
+function wireInventory() {
+  el('inv-add-btn').addEventListener('click', addInventoryItem);
+  el('inv-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-inv-action]');
+    if (!btn) return;
+    if (btn.dataset.invAction === 'delete') deleteInventoryItem(btn.dataset.invId);
+    else if (btn.dataset.invAction === 'save') saveInventoryItem(btn.dataset.invId);
+  });
+}
+
+async function loadInventory() {
+  const host = el('inv-list');
+  host.innerHTML = '<div class="spinner"></div>';
+  if (state.isSuperAdmin && !brandParam()) {
+    host.innerHTML = '<div class="empty-state"><h2>Select a brand to manage its inventory.</h2></div>';
+    return;
+  }
+  const bp = brandParam();
+  let items = [];
+  try { items = await getJson('/api/inventory' + (bp ? `?brand=${encodeURIComponent(bp)}` : '')); } catch (e) { items = []; }
+  if (!items.length) {
+    host.innerHTML = '<div class="empty-state"><h2>No inventory yet.</h2><p>Add the parts you keep on the truck.</p></div>';
+    return;
+  }
+  host.innerHTML = items.map((it) => `
+    <div class="tech-card${it.low ? ' inv-low' : ''}">
+      <div class="tech-main" style="flex:1">
+        <div class="tech-name">${escapeHtml(it.name)}${it.low ? ' <span class="inv-low-tag">LOW</span>' : ''}</div>
+        <div class="tech-meta">${escapeHtml(it.sku || '')}</div>
+      </div>
+      <div class="inv-nums">
+        <label>Qty <input class="inv-edit-qty" data-inv-id="${escapeHtml(String(it.id))}" type="number" min="0" value="${escapeHtml(String(it.quantity))}"></label>
+        <label>Reorder <input class="inv-edit-reorder" data-inv-id="${escapeHtml(String(it.id))}" type="number" min="0" value="${escapeHtml(String(it.reorderAt))}"></label>
+      </div>
+      <div class="tech-actions">
+        <button class="btn ghost" type="button" data-inv-action="save" data-inv-id="${escapeHtml(String(it.id))}">Save</button>
+        <button class="btn danger" type="button" data-inv-action="delete" data-inv-id="${escapeHtml(String(it.id))}">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+async function addInventoryItem() {
+  const name = el('inv-name').value.trim();
+  if (!name) { toast('Enter a part name.', 'error'); return; }
+  if (state.isSuperAdmin && !brandParam()) { toast('Select a brand first.', 'error'); return; }
+  const body = { name, sku: el('inv-sku').value.trim() || null, quantity: parseInt(el('inv-qty').value, 10) || 0, reorderAt: parseInt(el('inv-reorder').value, 10) || 0 };
+  if (state.isSuperAdmin && state.brand) body.brand = state.brand;
+  try {
+    await sendJson('/api/inventory', 'POST', body);
+    ['inv-name', 'inv-sku', 'inv-qty', 'inv-reorder'].forEach((id) => { el(id).value = ''; });
+    loadInventory();
+  } catch (err) { toast(err.message || 'Could not add item.', 'error'); }
+}
+
+async function saveInventoryItem(id) {
+  const qty = parseInt(document.querySelector(`.inv-edit-qty[data-inv-id="${id}"]`).value, 10) || 0;
+  const reorder = parseInt(document.querySelector(`.inv-edit-reorder[data-inv-id="${id}"]`).value, 10) || 0;
+  try {
+    await sendJson(`/api/inventory/${encodeURIComponent(id)}`, 'PUT', { quantity: qty, reorderAt: reorder });
+    loadInventory();
+  } catch (err) { toast(err.message || 'Could not save.', 'error'); }
+}
+
+async function deleteInventoryItem(id) {
+  if (!confirm('Delete this inventory item?')) return;
+  try {
+    await fetch(`${API}/api/inventory/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    loadInventory();
+  } catch (err) { toast('Could not delete item.', 'error'); }
 }
 
 /* ── Quote builder (rendered inside the lead detail) ────────────────────── */
