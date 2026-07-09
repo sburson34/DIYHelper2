@@ -20,6 +20,9 @@
     <nav class="tabs" id="tabs">
       <button class="tab active" data-section="overview" type="button">Overview</button>
       <button class="tab" data-section="leads" type="button">Leads</button>
+      <button class="tab" data-section="schedule" type="button">Schedule</button>
+      <button class="tab" data-section="technicians" type="button">Technicians</button>
+      <button class="tab" data-section="pricing" type="button">Pricing</button>
       <button class="tab" data-section="push" type="button">Push Notifications</button>
       <button class="tab" data-section="studio" type="button">Brand Studio</button>
     </nav>
@@ -74,6 +77,61 @@
         </div>
         <div id="detail-content"></div>
       </div>
+    </section>
+
+    <!-- ── SCHEDULE (dispatch board) ────────────────────────────────── -->
+    <section id="schedule-section" class="section hidden">
+      <div class="section-head">
+        <h2>Schedule</h2>
+        <p>Assign jobs to a day and time. What you set here is what the customer sees in the app.</p>
+      </div>
+
+      <!-- Board: unscheduled queue + a rolling week. Populated by loadSchedule(). -->
+      <div id="schedule-board" class="schedule-board"></div>
+
+      <!-- Inline scheduler for one job (mirrors the leads list ↔ detail flow). -->
+      <div id="schedule-editor" class="detail-panel hidden">
+        <div class="detail-header">
+          <button id="sched-back-btn" class="back-btn" type="button">&larr; Back to board</button>
+        </div>
+        <div id="schedule-editor-content"></div>
+      </div>
+    </section>
+
+    <!-- ── TECHNICIANS ──────────────────────────────────────────────── -->
+    <section id="technicians-section" class="section hidden">
+      <div class="section-head">
+        <h2>Technicians</h2>
+        <p>Your crew. Add a tech to get a login code for the mobile app, then assign them jobs on the schedule.</p>
+      </div>
+      <div class="tech-add">
+        <input id="tech-name" type="text" placeholder="Name" maxlength="80">
+        <input id="tech-phone" type="tel" placeholder="Phone (optional)" maxlength="40">
+        <input id="tech-email" type="email" placeholder="Email (optional)" maxlength="120">
+        <button class="btn accent" id="tech-add-btn" type="button">Add technician</button>
+      </div>
+      <div id="tech-list" class="tech-list"></div>
+    </section>
+
+    <!-- ── PRICING (flat-rate price book) ───────────────────────────── -->
+    <section id="pricing-section" class="section hidden">
+      <div class="section-head">
+        <h2>Pricing</h2>
+        <p>Your flat-rate price list. These items populate the quote builder on each lead so you don’t retype prices.</p>
+      </div>
+      <div id="qbo-bar" class="qbo-bar hidden">
+        <div class="qbo-info">
+          <span class="qbo-title">QuickBooks</span>
+          <span id="qbo-status" class="qbo-status">Not connected</span>
+        </div>
+        <button class="btn ghost" id="qbo-connect-btn" type="button">Connect QuickBooks</button>
+      </div>
+      <div class="tech-add">
+        <input id="price-name" type="text" placeholder="Item name (e.g. Drain snaking)" maxlength="80">
+        <input id="price-amount" type="number" min="0" step="0.01" placeholder="Price" >
+        <button class="btn accent" id="price-add-btn" type="button">Add item</button>
+      </div>
+      <div id="price-list" class="tech-list"></div>
     </section>
 
     <!-- ── PUSH NOTIFICATIONS ───────────────────────────────────────── -->
@@ -229,8 +287,14 @@
           </div>
 
           <div class="form-group" id="font-group">
-            <label>Detected site font</label>
-            <div id="studio-fonts"><span class="muted">—</span></div>
+            <label for="studio-font">App font</label>
+            <select id="studio-font">
+              <option value="System">System (platform default)</option>
+              <option value="Inter">Inter</option>
+              <option value="Poppins">Poppins</option>
+              <option value="Montserrat">Montserrat</option>
+            </select>
+            <div id="studio-fonts" class="muted studio-hint"></div>
           </div>
 
           <div class="studio-two">
@@ -276,7 +340,39 @@
           <button class="btn ghost" id="studio-download-btn" type="button">Download brand.json</button>
         </div>
         <textarea id="studio-json" class="json-out" readonly rows="16"></textarea>
-        <p class="muted studio-hint">Save as <code>app/brands/&lt;id&gt;/brand.json</code>, drop the chosen logo in as <code>icon.png</code> + <code>splash.png</code>, then run <code>BRAND=&lt;id&gt; npm run prebuild</code>. Also add a matching row to the backend <code>Brands</code> table so leads route correctly.</p>
+        <p class="muted studio-hint">Save as <code>app/brands/&lt;id&gt;/brand.json</code>, add the generated <code>icon.png</code> + <code>splash.png</code> below, then run <code>BRAND=&lt;id&gt; npm run prebuild</code>. Also add a matching row to the backend <code>Brands</code> table so leads route correctly.</p>
+      </div>
+
+      <div class="section-head"><h3>App icon &amp; splash</h3></div>
+      <div class="card icon-gen">
+        <div class="icon-gen-controls">
+          <p class="muted" id="icon-hint">Pick a logo candidate above and we'll build a store-ready square icon and splash on your brand background.</p>
+          <div class="form-group">
+            <label>Icon background</label>
+            <div class="color-row">
+              <input type="color" id="icon-bg-picker" class="color-picker">
+              <input type="text" id="icon-bg" class="hex-input" placeholder="#0F2253">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="icon-scale">Logo size <span class="muted">(padding)</span></label>
+            <input type="range" id="icon-scale" min="40" max="82" value="62">
+          </div>
+          <div class="modal-actions">
+            <button class="btn primary" id="download-icon-btn" type="button" disabled>Download icon.png</button>
+            <button class="btn ghost" id="download-splash-btn" type="button" disabled>Download splash.png</button>
+          </div>
+        </div>
+        <div class="icon-previews">
+          <div class="icon-prev-wrap">
+            <canvas id="icon-canvas" width="1024" height="1024" class="icon-canvas"></canvas>
+            <span class="muted">icon.png · 1024²</span>
+          </div>
+          <div class="icon-prev-wrap">
+            <canvas id="splash-canvas" width="1024" height="1024" class="icon-canvas"></canvas>
+            <span class="muted">splash.png · 1024²</span>
+          </div>
+        </div>
       </div>
     </section>
   </main>

@@ -17,7 +17,88 @@ public class HelpRequest
     public string UserDescription { get; set; } = string.Empty;
     public string ProjectData { get; set; } = string.Empty;
     public string? ImageBase64 { get; set; }
+
+    /// <summary>Lifecycle of the lead as the customer sees it in "My Jobs":
+    /// <c>new</c> → <c>scheduled</c> → <c>on_the_way</c> → <c>in_progress</c> →
+    /// <c>completed</c> (or <c>cancelled</c>). Set by the brand operator from the
+    /// dashboard; the mobile app renders a progress bar from it.</summary>
     public string Status { get; set; } = "new";
+
+    // ── Booking details (customer-supplied at request time) ────────────────
+    /// <summary>Per-install device id (<c>X-Device-Id</c>) of the app that
+    /// created this request. Lets the customer see only their own jobs without a
+    /// login (see <c>GET /api/my/requests</c>). Denormalized, no FK.</summary>
+    public string? DeviceId { get; set; }
+
+    /// <summary>Service category the customer picked when booking (e.g.
+    /// "Plumbing"), drawn from the brand's configured service types.</summary>
+    public string? ServiceType { get; set; }
+
+    /// <summary>The date the customer would like the visit (their preference).</summary>
+    public DateTime? PreferredDate { get; set; }
+
+    /// <summary>Coarse preferred time window, e.g. "morning" / "afternoon" /
+    /// "evening" / "anytime". Free text kept short.</summary>
+    public string? PreferredWindow { get; set; }
+
+    // ── Scheduling (operator-confirmed, drives "tech on the way") ──────────
+    /// <summary>The appointment time the operator confirmed. Distinct from
+    /// <see cref="PreferredDate"/>: this is the committed slot shown to the
+    /// customer once <see cref="Status"/> becomes <c>scheduled</c>.</summary>
+    public DateTime? ScheduledFor { get; set; }
+
+    /// <summary>Live ETA in minutes the operator sets when the tech is en route
+    /// (<see cref="Status"/> = <c>on_the_way</c>); the app shows "arriving in ~N
+    /// min". Cleared once the job starts.</summary>
+    public int? TechEtaMinutes { get; set; }
+
+    /// <summary>The <see cref="Technician"/> assigned to this job (null = still
+    /// unassigned). Denormalized id, no FK, so a tech row can be deactivated
+    /// without orphaning history. Drives the tech app's "my jobs" list.</summary>
+    public int? AssignedTechId { get; set; }
+
+    // ── Field completion (captured by the tech app) ───────────────────────
+    /// <summary>Base64 "before" photo the tech captures on arrival.</summary>
+    public string? BeforePhotoBase64 { get; set; }
+
+    /// <summary>Base64 "after" photo the tech captures on completion.</summary>
+    public string? AfterPhotoBase64 { get; set; }
+
+    /// <summary>Base64 PNG of the customer's on-site signature.</summary>
+    public string? SignatureBase64 { get; set; }
+
+    /// <summary>Free-text notes the tech adds from the field (what was done).</summary>
+    public string? CompletionNotes { get; set; }
+
+    /// <summary>When the tech marked the job completed.</summary>
+    public DateTime? CompletedAt { get; set; }
+
+    // ── Quote / estimate ───────────────────────────────────────────────────
+    /// <summary>JSON array of quote lines <c>[{description, amount, quantity}]</c>
+    /// the owner built for this job. Null = no quote yet.</summary>
+    public string? QuoteLinesJson { get; set; }
+
+    /// <summary>Sum of the quote lines at send time (exact money as decimal).</summary>
+    public decimal? QuoteTotal { get; set; }
+
+    /// <summary>Quote lifecycle: null (none) → <c>sent</c> → <c>approved</c> /
+    /// <c>declined</c> (the customer's choice, from the app).</summary>
+    public string? QuoteStatus { get; set; }
+
+    public DateTime? QuoteSentAt { get; set; }
+    public DateTime? QuoteRespondedAt { get; set; }
+
+    /// <summary>Id of the invoice created in the brand's accounting system
+    /// (QuickBooks) when this job completed. Null until synced; set once to make
+    /// the sync idempotent (we never double-invoice a job).</summary>
+    public string? InvoiceRemoteId { get; set; }
+
+    // ── Job costing (owner-entered, powers "did we make money?") ───────────
+    /// <summary>Labor cost the shop incurred on this job.</summary>
+    public decimal? LaborCost { get; set; }
+
+    /// <summary>Parts/materials cost the shop incurred on this job.</summary>
+    public decimal? PartsCost { get; set; }
 
     /// <summary>Id of the record created in the brand's external CRM when this
     /// lead was pushed there (see <see cref="Integrations.Crm.CrmLeadDispatcher"/>).

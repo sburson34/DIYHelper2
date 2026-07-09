@@ -11,13 +11,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { createTelemetry } from '@sburson34/mobile-shared/telemetry';
 import { API_BASE_URL } from '../config/api';
-import { APP_VERSION } from '../config/appInfo';
+import { APP_VERSION, BRAND_ID } from '../config/appInfo';
 
 const telemetry = createTelemetry({
   post: (path: string, body: unknown) =>
+    // X-Brand tags every batch with the active white-label tenant so the backend
+    // can bill per-brand monthly-active installs. Telemetry uses a raw fetch (not
+    // the instrumented apiFetch), so the header is added here explicitly.
     fetch(`${API_BASE_URL}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Brand': BRAND_ID },
       body: JSON.stringify(body),
     }).then((r) => {
       // Reject on non-2xx so the buffer is retained for the next flush.

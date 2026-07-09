@@ -16,6 +16,12 @@ const BASE_URL = API_BASE_URL;
 // in which case the backend middleware is also a no-op (matched pair).
 const APP_KEY: string | undefined = process.env.EXPO_PUBLIC_APP_KEY;
 
+// Bearer token for "tech mode" (/api/tech/*). Held in-module and injected by
+// apiFetch on tech paths only. Set by the TechAuthContext on login / restore /
+// logout so the HTTP layer stays free of storage + auth-state concerns.
+let techToken: string | null = null;
+export const setTechToken = (token: string | null): void => { techToken = token; };
+
 // Thrown when an AI-using code path is invoked but the user declined the
 // AI consent disclosure. Callers should catch and surface a message rather
 // than treating it as a network error.
@@ -115,6 +121,120 @@ export interface HelpRequestRecord {
   [extra: string]: unknown;
 }
 
+// ── Customer-facing app config + booking + "My Jobs" ───────────────────
+// Per-brand configuration served by GET /api/config. Drives which features the
+// branded app shows and its company-specific copy/links. Defaults live in
+// config/brandConfig.tsx so the UI renders before this resolves.
+export interface BrandConfigFeatures {
+  booking: boolean;
+  triage: boolean;
+  appointmentTracking: boolean;
+  reviews: boolean;
+  referrals: boolean;
+  maintenanceReminders: boolean;
+  memberships: boolean;
+  [extra: string]: boolean;
+}
+
+export interface BrandConfig {
+  brand: string;
+  companyName: string;
+  phone?: string | null;
+  reviewUrl?: string | null;
+  serviceTypes: string[];
+  membershipEnabled: boolean;
+  features: BrandConfigFeatures;
+}
+
+export interface BookingInput {
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  projectTitle: string;
+  userDescription: string;
+  serviceType?: string;
+  preferredDate?: string | null;   // ISO date
+  preferredWindow?: string | null; // "morning" | "afternoon" | "evening" | "anytime"
+  projectData?: unknown;           // optional AI guide/triage payload
+  imageBase64?: string;
+}
+
+export interface MyRequest {
+  id: number;
+  projectTitle?: string;
+  serviceType?: string | null;
+  status: string;
+  preferredDate?: string | null;
+  preferredWindow?: string | null;
+  scheduledFor?: string | null;
+  techEtaMinutes?: number | null;
+  quoteStatus?: string | null;
+  quoteTotal?: number | null;
+  quoteLinesJson?: string | null;
+  quoteSentAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  userDescription?: string;
+  projectData?: string;
+  [extra: string]: unknown;
+}
+
+export interface MembershipCheckoutInput {
+  planId?: string;
+  customerEmail: string;
+  customerName?: string;
+  successUrl?: string;
+  cancelUrl?: string;
+}
+
+export interface MembershipCheckoutResult {
+  available: boolean;
+  checkoutUrl?: string;
+  reason?: string;
+}
+
+// ── Tech mode ──────────────────────────────────────────────────────────
+export interface TechLoginResult {
+  token: string;
+  technicianId: number;
+  name: string;
+}
+
+export interface TechJob {
+  id: number;
+  projectTitle?: string;
+  serviceType?: string | null;
+  status: string;
+  customerName?: string;
+  customerPhone?: string;
+  scheduledFor?: string | null;
+  preferredWindow?: string | null;
+  techEtaMinutes?: number | null;
+  createdAt?: string;
+  [extra: string]: unknown;
+}
+
+export interface TechJobDetail extends TechJob {
+  customerEmail?: string;
+  userDescription?: string;
+  projectData?: string;
+  imageBase64?: string;
+  beforePhotoBase64?: string | null;
+  afterPhotoBase64?: string | null;
+  signatureBase64?: string | null;
+  completionNotes?: string | null;
+  completedAt?: string | null;
+}
+
+export interface TechJobPatch {
+  status?: string;
+  techEtaMinutes?: number;
+  completionNotes?: string;
+  beforePhotoBase64?: string;
+  afterPhotoBase64?: string;
+  signatureBase64?: string;
+}
+
 export type Language = 'en' | 'es' | string;
 
 // ── Correlation ID ────────────────────────────────────────────────────
@@ -151,6 +271,8 @@ const apiFetch = async (url: string, options: RequestInit = {}): Promise<Respons
     'X-Device-Id': deviceId,
     ...(APP_KEY ? { 'X-App-Key': APP_KEY } : {}),
     ...(integrityToken ? { 'X-Play-Integrity-Token': integrityToken } : {}),
+    // Tech-mode bearer token, only on /api/tech/* calls.
+    ...(techToken && path.startsWith('/api/tech') ? { Authorization: `Bearer ${techToken}` } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
 
@@ -584,7 +706,97 @@ const unregisterPushToken = async (token: string): Promise<unknown> => {
   return jsonPost(`${BASE_URL}/api/push/unregister`, { token });
 };
 
+// ── Customer-facing app: config, booking, "My Jobs", memberships ───────
+// Brand + device id ride along automatically as X-Brand / X-Device-Id headers
+// (set in apiFetch), so none of these pass either explicitly. The backend keys
+// config to the brand and scopes "My Jobs" to this device.
+
+// Per-brand config the app reads once at launch (features, service types, links).
+const getBrandConfig = async (): Promise<BrandConfig> => {
+  return jsonGet<BrandConfig>(`${BASE_URL}/api/config`);
+};
+
+// Submit a booking / request-a-quote. Same endpoint as a plain lead, plus the
+// booking fields; the backend routes it to the brand's inbox + CRM and upserts
+// the lightweight customer so it shows up in "My Jobs".
+const submitBooking = async (input: BookingInput): Promise<{ id: number }> => {
+  addBreadcrumb('booking: submit', 'user.action', { serviceType: input.serviceType });
+  return jsonPost<{ id: number }>(`${BASE_URL}/api/help-requests`, {
+    customerName: input.customerName,
+    customerEmail: input.customerEmail,
+    customerPhone: input.customerPhone,
+    projectTitle: input.projectTitle,
+    userDescription: input.userDescription,
+    projectData:
+      typeof input.projectData === 'string'
+        ? input.projectData
+        : JSON.stringify(input.projectData ?? {}),
+    imageBase64: input.imageBase64,
+    serviceType: input.serviceType,
+    preferredDate: input.preferredDate,
+    preferredWindow: input.preferredWindow,
+  });
+};
+
+// This device's own jobs, newest first (appointment status + ETA tracking).
+const listMyRequests = async (): Promise<MyRequest[]> => {
+  return jsonGet<MyRequest[]>(`${BASE_URL}/api/my/requests`);
+};
+
+const getMyRequest = async (id: number | string): Promise<MyRequest> => {
+  return jsonGet<MyRequest>(`${BASE_URL}/api/my/requests/${id}`);
+};
+
+// Approve or decline a quote the company sent (device-scoped on the backend).
+const respondToQuote = async (
+  id: number | string,
+  decision: 'approved' | 'declined',
+): Promise<{ id: number; quoteStatus: string }> => {
+  addBreadcrumb('quote: respond', 'user.action', { id, decision });
+  return jsonPut(`${BASE_URL}/api/my/requests/${id}/quote`, { decision });
+};
+
+// Start a membership / maintenance-plan checkout. Fail-soft: returns
+// available:false with a reason when the brand hasn't opted in or Stripe isn't
+// wired, so the caller hides/greys the CTA rather than erroring.
+const startMembershipCheckout = async (
+  input: MembershipCheckoutInput,
+): Promise<MembershipCheckoutResult> => {
+  addBreadcrumb('membership: checkout', 'user.action', { planId: input.planId });
+  return jsonPost<MembershipCheckoutResult>(`${BASE_URL}/api/memberships/checkout`, input);
+};
+
+// ── Tech mode endpoints ────────────────────────────────────────────────
+// Exchange a login code (brand rides along as X-Brand) for a bearer token.
+const techLogin = async (code: string): Promise<TechLoginResult> => {
+  addBreadcrumb('tech: login', 'user.action', {});
+  return jsonPost<TechLoginResult>(`${BASE_URL}/api/tech/login`, { code });
+};
+
+const techListJobs = async (): Promise<TechJob[]> => {
+  return jsonGet<TechJob[]>(`${BASE_URL}/api/tech/jobs`);
+};
+
+const techGetJob = async (id: number | string): Promise<TechJobDetail> => {
+  return jsonGet<TechJobDetail>(`${BASE_URL}/api/tech/jobs/${id}`);
+};
+
+const techUpdateJob = async (id: number | string, patch: TechJobPatch): Promise<unknown> => {
+  addBreadcrumb('tech: update job', 'user.action', { id, status: patch.status });
+  return jsonPut(`${BASE_URL}/api/tech/jobs/${id}`, patch);
+};
+
 export {
+  getBrandConfig,
+  submitBooking,
+  listMyRequests,
+  getMyRequest,
+  respondToQuote,
+  startMembershipCheckout,
+  techLogin,
+  techListJobs,
+  techGetJob,
+  techUpdateJob,
   analyzeProject,
   analyzeLive,
   askHelper,

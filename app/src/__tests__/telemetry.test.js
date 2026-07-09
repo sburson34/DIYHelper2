@@ -23,4 +23,16 @@ describe('telemetry shim', () => {
     expect(names).toContain('screen_viewed');
     expect(body.events.find((e) => e.name === 'screen_viewed').props).toEqual({ screen: 'NewProject' });
   });
+
+  it('tags each batch with the active brand via the X-Brand header', async () => {
+    // Per-brand MAU billing keys off X-Brand; without it the backend can't
+    // attribute active installs to a white-label tenant. Defaults to the
+    // flagship 'diyhelper' brand when no brand build config is present (Jest).
+    await initTelemetry();
+    track('app_opened');
+    await flushTelemetry();
+
+    const [, opts] = global.fetch.mock.calls[0];
+    expect(opts.headers['X-Brand']).toBe('diyhelper');
+  });
 });

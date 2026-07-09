@@ -222,6 +222,20 @@ public class AdminAuthMiddleware
         if (path.StartsWith("/api/brands", StringComparison.OrdinalIgnoreCase))
             return true;
 
+        // Technician management is owner-only (the console CRUD + code issuing).
+        // The tech-facing /api/tech/* endpoints are NOT here — they authenticate
+        // with a signed tech bearer token, not Basic auth.
+        if (path.StartsWith("/api/technicians", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Price-book management is owner-only.
+        if (path.StartsWith("/api/pricebook", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Ops summary (job costing / KPIs) is owner-only.
+        if (path.StartsWith("/api/ops", StringComparison.OrdinalIgnoreCase))
+            return true;
+
         // Push composer surfaces (audience, send, test, campaigns, cancel) are
         // admin-only. The mobile register/unregister POSTs stay public (gated by
         // X-App-Key), like /api/help-requests POST.
@@ -233,6 +247,21 @@ public class AdminAuthMiddleware
         // Admin-only /api/feedback list (GET). POST is customer submit.
         if (path.Equals("/api/feedback", StringComparison.OrdinalIgnoreCase)
             && HttpMethods.IsGet(req.Method))
+            return true;
+
+        // CRM OAuth: initiating a connection (/api/crm/*) is admin-gated. The
+        // provider's redirect back to /callback carries no Basic auth — it's a
+        // browser navigation — so it stays public, protected instead by the
+        // signed, time-boxed `state` parameter it must echo back.
+        if (path.StartsWith("/api/crm", StringComparison.OrdinalIgnoreCase)
+            && !path.EndsWith("/callback", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Accounting OAuth (QuickBooks): same posture as CRM — initiating is
+        // admin-gated, the provider's /callback redirect stays public (protected
+        // by the signed state it must echo back).
+        if (path.StartsWith("/api/accounting", StringComparison.OrdinalIgnoreCase)
+            && !path.EndsWith("/callback", StringComparison.OrdinalIgnoreCase))
             return true;
 
         return false;

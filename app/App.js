@@ -40,14 +40,27 @@ import Diagnose from './src/screens/Diagnose';
 import Quotes from './src/screens/Quotes';
 import Community from './src/screens/Community';
 import ReportProblem from './src/screens/ReportProblem';
+import TriageScreen from './src/screens/TriageScreen';
+import BookingScreen from './src/screens/BookingScreen';
+import MyJobsScreen from './src/screens/MyJobsScreen';
+import TechLoginScreen from './src/screens/tech/TechLoginScreen';
+import TechJobsScreen from './src/screens/tech/TechJobsScreen';
+import TechJobDetailScreen from './src/screens/tech/TechJobDetailScreen';
+import { TechAuthProvider, useTechAuth } from './src/tech/TechAuthContext';
 import theme from './src/theme';
 import { I18nProvider, useTranslation } from './src/i18n/I18nContext';
 import { ThemeProvider } from './src/ThemeContext';
 import { FeaturesProvider } from './src/config/features';
+import { BrandConfigProvider, useBrandConfig } from './src/config/brandConfig';
 import { TranslationProvider } from './src/mlkit/TranslationProvider';
 import { requestCaptureReset } from './src/utils/captureBus';
 import { getOnboardingSeen, setOnboardingSeen, getAiConsent, AI_CONSENT_VERSION, getPromoConsent } from './src/utils/storage';
 import PromoConsentScreen from './src/screens/PromoConsentScreen';
+import { useFonts } from 'expo-font';
+import { brandFontAssets } from './src/fonts';
+import { fontKeysFor } from './src/fontNames';
+import { BRAND_FONT } from './src/config/appInfo';
+import { applyGlobalFont } from './src/applyGlobalFont';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
 
 // Helper used by both the logo header and the "New Project" drawer item.
@@ -90,6 +103,30 @@ const LogoHeader = ({ onPress, title, subtitle }) => (
   </TouchableOpacity>
 );
 
+// Shared drawer-screen options for the pro-services screens (Triage, Book, My
+// Jobs). Produces the same header + menu-button chrome the other drawer items
+// build inline; centralized here so the additions stay readable.
+const proScreenOptions = ({ navigation, t, title, icon, iconColor }) => ({
+  title,
+  headerShown: true,
+  headerTitle: () => (
+    <LogoHeader onPress={() => navigation.navigate('NewProject')} title={title} subtitle={t('app_title')} />
+  ),
+  headerTitleAlign: 'left',
+  headerRight: () => (
+    <TouchableOpacity
+      onPress={() => navigation.openDrawer()}
+      style={{ marginRight: 15 }}
+      accessibilityLabel="Open navigation menu"
+      accessibilityRole="button"
+    >
+      <Icon name="menu" size={30} color="#FFFFFF" />
+    </TouchableOpacity>
+  ),
+  headerLeft: () => null,
+  drawerIcon: ({ color, size }) => <Icon name={icon} size={size} color={iconColor || color} />,
+});
+
 const Stack = createNativeStackNavigator();
 const Drawer = createDrawerNavigator();
 
@@ -126,6 +163,9 @@ const linking = {
       },
       HoneyDoList: 'honey-do',
       ContractorList: 'contractors',
+      Triage: 'triage',
+      Book: 'book',
+      MyJobs: 'my-jobs',
       Emergency: 'emergency',
       Settings: 'settings',
     },
@@ -230,8 +270,40 @@ function CaptureStack() {
   );
 }
 
+// Native "tech mode": a self-contained stack that shows the login screen until
+// a technician is signed in, then their job list + job detail. Auth state comes
+// from TechAuthProvider; switching login↔jobs happens by swapping the registered
+// screens (React Navigation resets cleanly on the set change).
+const TechStackNav = createNativeStackNavigator();
+function TechStack() {
+  const { ready, tech } = useTechAuth();
+  const { t } = useTranslation();
+  if (!ready) return null;
+  return (
+    <TechStackNav.Navigator>
+      {tech ? (
+        <>
+          <TechStackNav.Screen name="TechJobs" component={TechJobsScreen} options={{ headerShown: false }} />
+          <TechStackNav.Screen
+            name="TechJobDetail"
+            component={TechJobDetailScreen}
+            options={{
+              title: t('tech_job_title'),
+              headerStyle: { backgroundColor: theme.colors.text },
+              headerTintColor: '#FFFFFF',
+            }}
+          />
+        </>
+      ) : (
+        <TechStackNav.Screen name="TechLogin" component={TechLoginScreen} options={{ headerShown: false }} />
+      )}
+    </TechStackNav.Navigator>
+  );
+}
+
 function AppContent() {
   const { t } = useTranslation();
+  const config = useBrandConfig();
   // Hand the NavigationContainer ref to Sentry's react-navigation integration
   // so route changes are emitted as breadcrumbs (and tx spans when tracing).
   const navigationRef = useRef(null);
@@ -327,6 +399,27 @@ function AppContent() {
             ),
           }}
         />
+        {config.features.triage && (
+          <Drawer.Screen
+            name="Triage"
+            component={TriageScreen}
+            options={({ navigation }) => proScreenOptions({ navigation, t, title: t('nav_triage'), icon: 'medkit-outline' })}
+          />
+        )}
+        {config.features.booking && (
+          <Drawer.Screen
+            name="Book"
+            component={BookingScreen}
+            options={({ navigation }) => proScreenOptions({ navigation, t, title: t('nav_book'), icon: 'calendar-outline' })}
+          />
+        )}
+        {config.features.appointmentTracking && (
+          <Drawer.Screen
+            name="MyJobs"
+            component={MyJobsScreen}
+            options={({ navigation }) => proScreenOptions({ navigation, t, title: t('nav_my_jobs'), icon: 'clipboard-outline' })}
+          />
+        )}
         <Drawer.Screen
           name="HoneyDoList"
           component={HoneyDo}
@@ -580,6 +673,15 @@ function AppContent() {
           })}
         />
         <Drawer.Screen
+          name="TechMode"
+          component={TechStack}
+          options={{
+            title: t('nav_tech_mode'),
+            headerShown: false,
+            drawerIcon: ({ color, size }) => <Icon name="briefcase-outline" size={size} color={color} />,
+          }}
+        />
+        <Drawer.Screen
           name="Settings"
           component={Settings}
           options={({ navigation }) => ({
@@ -650,14 +752,28 @@ function OnboardingGate() {
 }
 
 export default function App() {
+  // Load the active brand's typeface (no-op/instant for System brands), then
+  // apply it app-wide. The splash stays up until fonts resolve.
+  const [fontsLoaded] = useFonts(brandFontAssets(BRAND_FONT));
+  useEffect(() => {
+    if (!fontsLoaded) return;
+    const keys = fontKeysFor(BRAND_FONT);
+    if (keys) applyGlobalFont(keys.regular);
+  }, [fontsLoaded]);
+  if (!fontsLoaded) return null;
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <ThemeProvider>
         <I18nProvider>
           <FeaturesProvider>
-            <TranslationProvider targetLang="es">
-              <OnboardingGate />
-            </TranslationProvider>
+            <BrandConfigProvider>
+              <TechAuthProvider>
+                <TranslationProvider targetLang="es">
+                  <OnboardingGate />
+                </TranslationProvider>
+              </TechAuthProvider>
+            </BrandConfigProvider>
           </FeaturesProvider>
         </I18nProvider>
       </ThemeProvider>

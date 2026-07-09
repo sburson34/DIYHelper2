@@ -5,6 +5,7 @@
   "scheme": "diyhelper",
   "bundleId": "com.diyhelper2",
   "companyShortName": "DIY Helper",
+  "fontFamily": "System",
   "releasePrefix": "diyhelper2",
   "privacyPolicyUrl": "https://api.diyhelper.org/privacy-policy.html",
   "termsUrl": "https://api.diyhelper.org/terms-of-service.html",

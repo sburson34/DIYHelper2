@@ -17,10 +17,15 @@ public enum CrmProvider
     /// shops we don't integrate with natively.</summary>
     Webhook = 1,
 
-    // Native OAuth integrations land here in a later wave, each as an additional
-    // ICrmLeadSink registration:
-    //   Jobber = 2,
-    //   HousecallPro = 3,
+    /// <summary>Jobber (getjobber.com) via OAuth 2.0 + GraphQL. Per-brand tokens
+    /// live in a <see cref="BrandCrmConnection"/> row.</summary>
+    Jobber = 2,
+
+    /// <summary>Housecall Pro (housecallpro.com) via partner OAuth 2.0 + REST.
+    /// Creates a customer then a Job-Inbox lead. Requires the customer's account
+    /// to be on the MAX plan. Per-brand tokens live in a
+    /// <see cref="BrandCrmConnection"/> row.</summary>
+    HousecallPro = 3,
 }
 
 /// <summary>

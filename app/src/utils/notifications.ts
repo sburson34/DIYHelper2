@@ -130,6 +130,26 @@ export const scheduleWeatherAlert = async (
   return id;
 };
 
+// Schedule a standalone maintenance reminder not tied to a saved Project (e.g.
+// "remind me to schedule my next furnace service"). Returns the notification id
+// so the caller can cancel it, or null if scheduling failed. monthsFromNow is
+// clamped to at least ~1 hour so a "0" can't fire instantly.
+export const scheduleMaintenanceReminder = async (
+  title: string,
+  body: string,
+  monthsFromNow = 6,
+): Promise<string | null> => {
+  const seconds = Math.max(3600, Math.round(monthsFromNow * 30 * 86400));
+  return scheduleLocal(
+    {
+      title,
+      body,
+      data: { kind: 'maintenance' },
+    } as NotificationContent,
+    { seconds } as NotificationTrigger,
+  );
+};
+
 export const cancelForProject = async (project: Project | null | undefined): Promise<void> => {
   const ids: string[] = (project && (project.scheduledReminderIds as string[])) || [];
   for (const id of ids) {

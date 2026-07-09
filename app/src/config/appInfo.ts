@@ -19,6 +19,7 @@ type ExpoConfigShape = {
       id?: string;
       name?: string;
       companyShortName?: string;
+      fontFamily?: string;
       releasePrefix?: string;
       privacyPolicyUrl?: string;
       termsUrl?: string;
@@ -41,6 +42,9 @@ const brand = expoConfig.extra?.brand ?? {};
 export const BRAND_ID: string = brand.id ?? 'diyhelper';
 // User-facing company name for the active brand (e.g. promo-consent copy).
 export const BRAND_NAME: string = brand.companyShortName ?? brand.name ?? 'DIY Helper';
+// Brand typeface family name ("System" | "Inter" | "Poppins" | "Montserrat").
+// Resolved to loadable font keys by src/fontNames.ts.
+export const BRAND_FONT: string = brand.fontFamily ?? 'System';
 const RELEASE_PREFIX: string = brand.releasePrefix ?? 'diyhelper2';
 
 // ── Version ───────────────────────────────────────────────────────────

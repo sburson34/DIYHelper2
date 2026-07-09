@@ -15,6 +15,11 @@ public class AppDbContext : DbContext
     public DbSet<DataDeletionRequest> DataDeletionRequests => Set<DataDeletionRequest>();
     public DbSet<PushToken> PushTokens => Set<PushToken>();
     public DbSet<PushCampaign> PushCampaigns => Set<PushCampaign>();
+    public DbSet<BrandCrmConnection> BrandCrmConnections => Set<BrandCrmConnection>();
+    public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<Technician> Technicians => Set<Technician>();
+    public DbSet<PriceBookItem> PriceBookItems => Set<PriceBookItem>();
+    public DbSet<BrandAccountingConnection> BrandAccountingConnections => Set<BrandAccountingConnection>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -91,5 +96,66 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<PushCampaign>()
             .HasIndex(c => new { c.Status, c.ScheduledFor })
             .HasDatabaseName("IX_PushCampaigns_Status_ScheduledFor");
+
+        // ── Customers (lightweight, password-less end users) ──────────────
+        // A returning customer is matched by (Brand, DeviceId) on every request
+        // and by (Brand, Email) when they re-enter the same address on a new
+        // device. Neither is unique — the same person may reinstall (new device)
+        // or share a device — so these are plain lookup indexes, and the upsert
+        // handler picks the most-recent match rather than relying on uniqueness.
+        modelBuilder.Entity<Customer>()
+            .HasIndex(c => new { c.Brand, c.DeviceId })
+            .HasDatabaseName("IX_Customers_Brand_DeviceId");
+        modelBuilder.Entity<Customer>()
+            .HasIndex(c => new { c.Brand, c.Email })
+            .HasDatabaseName("IX_Customers_Brand_Email");
+
+        // "My Jobs" lists a device's requests: filter by (Brand, DeviceId),
+        // newest first. Reuses the DeviceId column added to HelpRequest.
+        modelBuilder.Entity<HelpRequest>()
+            .HasIndex(r => new { r.Brand, r.DeviceId })
+            .HasDatabaseName("IX_HelpRequests_Brand_DeviceId");
+
+        // The tech app lists a technician's assigned jobs by (Brand, AssignedTechId).
+        modelBuilder.Entity<HelpRequest>()
+            .HasIndex(r => new { r.Brand, r.AssignedTechId })
+            .HasDatabaseName("IX_HelpRequests_Brand_AssignedTechId");
+
+        // Technicians are listed + login-verified per brand.
+        modelBuilder.Entity<Technician>()
+            .HasIndex(t => new { t.Brand, t.IsActive })
+            .HasDatabaseName("IX_Technicians_Brand_Active");
+
+        // Price-book items are listed per brand.
+        modelBuilder.Entity<PriceBookItem>()
+            .HasIndex(p => new { p.Brand, p.IsActive })
+            .HasDatabaseName("IX_PriceBookItems_Brand_Active");
+        // Exact money: fixed precision instead of the provider default.
+        modelBuilder.Entity<PriceBookItem>()
+            .Property(p => p.DefaultPrice)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<HelpRequest>()
+            .Property(r => r.QuoteTotal)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<HelpRequest>()
+            .Property(r => r.LaborCost)
+            .HasPrecision(12, 2);
+        modelBuilder.Entity<HelpRequest>()
+            .Property(r => r.PartsCost)
+            .HasPrecision(12, 2);
+
+        // ── CRM connections ───────────────────────────────────────────────
+        // One CRM connection per brand: the dispatcher looks a brand's connection
+        // up by slug on every lead, and the OAuth callback upserts by slug.
+        modelBuilder.Entity<BrandCrmConnection>()
+            .HasIndex(c => c.BrandSlug)
+            .IsUnique()
+            .HasDatabaseName("IX_BrandCrmConnections_BrandSlug");
+
+        // One accounting (QuickBooks) connection per brand.
+        modelBuilder.Entity<BrandAccountingConnection>()
+            .HasIndex(c => c.BrandSlug)
+            .IsUnique()
+            .HasDatabaseName("IX_BrandAccountingConnections_BrandSlug");
     }
 }

@@ -39,6 +39,19 @@ public class ApiFactory : BaseApiFactory<Program>
     {
         Environment.SetEnvironmentVariable("ADMIN_USERNAME", AdminUsername);
         Environment.SetEnvironmentVariable("ADMIN_PASSWORD", AdminPassword);
+
+        // CRM/Jobber test config. A fixed 32-byte base64 key makes CrmTokenProtector
+        // deterministic across the fixture, so tokens seeded into a connection
+        // decrypt correctly in the sink. Jobber app creds make JobberOptions
+        // "configured" so the connect/callback endpoints are exercisable.
+        Environment.SetEnvironmentVariable("CRM_TOKEN_ENC_KEY",
+            Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes("0123456789abcdef0123456789abcdef")));
+        Environment.SetEnvironmentVariable("JOBBER_CLIENT_ID", "test-jobber-client");
+        Environment.SetEnvironmentVariable("JOBBER_CLIENT_SECRET", "test-jobber-secret");
+        Environment.SetEnvironmentVariable("JOBBER_REDIRECT_URI", "https://example.com/api/crm/jobber/callback");
+        Environment.SetEnvironmentVariable("HOUSECALL_CLIENT_ID", "test-hcp-client");
+        Environment.SetEnvironmentVariable("HOUSECALL_CLIENT_SECRET", "test-hcp-secret");
+        Environment.SetEnvironmentVariable("HOUSECALL_REDIRECT_URI", "https://example.com/api/crm/housecall/callback");
     }
 
     /// <summary>
@@ -83,6 +96,14 @@ public class ApiFactory : BaseApiFactory<Program>
     /// <summary>Intercepts the outbound CRM lead webhook (WebhookCrmSink) so a
     /// brand's LeadWebhookUrl push is asserted on instead of hitting the network.</summary>
     public FakeHttpMessageHandler FakeCrmWebhookHandler { get; } = new();
+    /// <summary>Stubs Jobber's OAuth token endpoint (code exchange + refresh).</summary>
+    public FakeHttpMessageHandler FakeJobberTokenHandler { get; } = new();
+    /// <summary>Stubs Jobber's GraphQL endpoint (clientCreate).</summary>
+    public FakeHttpMessageHandler FakeJobberGraphQlHandler { get; } = new();
+    /// <summary>Stubs Housecall Pro's OAuth token endpoint (code exchange + refresh).</summary>
+    public FakeHttpMessageHandler FakeHousecallTokenHandler { get; } = new();
+    /// <summary>Stubs Housecall Pro's REST API (POST /customers, /leads).</summary>
+    public FakeHttpMessageHandler FakeHousecallApiHandler { get; } = new();
 
     /// <summary>Captures lead-routing emails instead of hitting SES. Tests read
     /// <c>FakeEmail.SentMessages</c> and can set <c>FakeEmail.OnSend</c> to throw.</summary>
@@ -151,6 +172,10 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.BrandExtractionClient>().ConfigurePrimaryHttpMessageHandler(() => FakeBrandExtractHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeCrmWebhookHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberTokenService>().ConfigurePrimaryHttpMessageHandler(() => FakeJobberTokenHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeJobberGraphQlHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallTokenService>().ConfigurePrimaryHttpMessageHandler(() => FakeHousecallTokenHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeHousecallApiHandler);
         });
     }
 
@@ -178,7 +203,9 @@ public class ApiFactory : BaseApiFactory<Program>
     public async Task SeedBrandAsync(
         string slug, string companyName, string leadEmail,
         string? username = null, string? password = null, bool isActive = true,
-        string? leadWebhookUrl = null)
+        string? leadWebhookUrl = null,
+        string? serviceTypesJson = null, string? featuresJson = null,
+        bool membershipEnabled = false, string? phone = null, string? reviewUrl = null)
     {
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -195,6 +222,11 @@ public class ApiFactory : BaseApiFactory<Program>
                 DashboardPasswordHash = hash,
                 IsActive = isActive,
                 LeadWebhookUrl = leadWebhookUrl,
+                ServiceTypesJson = serviceTypesJson,
+                FeaturesJson = featuresJson,
+                MembershipEnabled = membershipEnabled,
+                Phone = phone,
+                ReviewUrl = reviewUrl,
             });
         }
         else
@@ -205,7 +237,59 @@ public class ApiFactory : BaseApiFactory<Program>
             existing.DashboardPasswordHash = hash;
             existing.IsActive = isActive;
             existing.LeadWebhookUrl = leadWebhookUrl;
+            existing.ServiceTypesJson = serviceTypesJson;
+            existing.FeaturesJson = featuresJson;
+            existing.MembershipEnabled = membershipEnabled;
+            existing.Phone = phone;
+            existing.ReviewUrl = reviewUrl;
         }
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Seed an active Jobber CRM connection for a brand, with tokens encrypted by
+    /// the same <c>CrmTokenProtector</c> the app uses (resolved from DI) so the
+    /// sink can decrypt them. Defaults to a valid (unexpired) access token; pass
+    /// a past <paramref name="expiresAt"/> to exercise the refresh path.
+    /// </summary>
+    public async Task SeedJobberConnectionAsync(
+        string brandSlug, string accessToken = "access-tok",
+        string? refreshToken = "refresh-tok", DateTime? expiresAt = null)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var protector = scope.ServiceProvider.GetRequiredService<DIYHelper2.Api.Integrations.Crm.CrmTokenProtector>();
+
+        var existing = await db.BrandCrmConnections.FirstOrDefaultAsync(c => c.BrandSlug == brandSlug);
+        var conn = existing ?? new DIYHelper2.Api.Models.BrandCrmConnection { BrandSlug = brandSlug };
+        conn.Provider = (int)DIYHelper2.Api.Integrations.Crm.CrmProvider.Jobber;
+        conn.IsActive = true;
+        conn.AccessTokenEnc = protector.Protect(accessToken);
+        conn.RefreshTokenEnc = refreshToken is null ? null : protector.Protect(refreshToken);
+        conn.AccessTokenExpiresAt = expiresAt ?? DateTime.UtcNow.AddHours(1);
+        if (existing is null) db.BrandCrmConnections.Add(conn);
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Seed an active Housecall Pro CRM connection for a brand (see
+    /// <see cref="SeedJobberConnectionAsync"/>). Pass a past <paramref name="expiresAt"/>
+    /// to exercise the refresh path.</summary>
+    public async Task SeedHousecallConnectionAsync(
+        string brandSlug, string accessToken = "access-tok",
+        string? refreshToken = "refresh-tok", DateTime? expiresAt = null)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var protector = scope.ServiceProvider.GetRequiredService<DIYHelper2.Api.Integrations.Crm.CrmTokenProtector>();
+
+        var existing = await db.BrandCrmConnections.FirstOrDefaultAsync(c => c.BrandSlug == brandSlug);
+        var conn = existing ?? new DIYHelper2.Api.Models.BrandCrmConnection { BrandSlug = brandSlug };
+        conn.Provider = (int)DIYHelper2.Api.Integrations.Crm.CrmProvider.HousecallPro;
+        conn.IsActive = true;
+        conn.AccessTokenEnc = protector.Protect(accessToken);
+        conn.RefreshTokenEnc = refreshToken is null ? null : protector.Protect(refreshToken);
+        conn.AccessTokenExpiresAt = expiresAt ?? DateTime.UtcNow.AddHours(1);
+        if (existing is null) db.BrandCrmConnections.Add(conn);
         await db.SaveChangesAsync();
     }
 

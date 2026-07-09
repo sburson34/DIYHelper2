@@ -16,6 +16,10 @@ const state = {
   brandNames: {},            // slug -> companyName
   leadFilter: '',
   currentRequestId: null,
+  currentScheduleId: null,
+  techs: [],                 // technicians for the active brand (assignee picker)
+  priceBook: [],             // price-book items for the active brand (quote builder)
+  quoteLines: [],            // working quote lines for the open lead
   pushPlatform: '',
   pushWhen: 'now',
 };
@@ -33,9 +37,18 @@ const el = (id) => document.getElementById(id);
 const sections = {
   overview: el('overview-section'),
   leads: el('leads-section'),
+  schedule: el('schedule-section'),
+  technicians: el('technicians-section'),
+  pricing: el('pricing-section'),
   push: el('push-section'),
   studio: el('studio-section'),
 };
+
+// Statuses the operator can move a job through — shared by the leads detail and
+// the dispatch scheduler. Order matches the customer-app tracker.
+const JOB_STATUSES = ['new', 'scheduled', 'on_the_way', 'in_progress', 'completed', 'cancelled'];
+// Jobs in these statuses have left the active work queue and drop off the board.
+const BOARD_DONE = ['completed', 'cancelled'];
 
 document.addEventListener('DOMContentLoaded', init);
 
@@ -44,6 +57,9 @@ async function init() {
   wireTabs();
   wireBrandScope();
   wireLeads();
+  wireSchedule();
+  wireTechnicians();
+  wirePricing();
   wirePush();
   wireStudio();
   el('signout').addEventListener('click', signOut);
@@ -90,6 +106,9 @@ function wireBrandScope() {
     // Refresh whichever section is active.
     if (state.section === 'overview') loadOverview();
     else if (state.section === 'leads') loadRequests();
+    else if (state.section === 'schedule') loadSchedule();
+    else if (state.section === 'technicians') loadTechnicians();
+    else if (state.section === 'pricing') loadPricing();
     else if (state.section === 'push') { loadAudience(); loadCampaigns(); updatePreviewAppName(); }
   });
 }
@@ -115,6 +134,9 @@ function showSection(name) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.dataset.section === name));
   if (name === 'overview') loadOverview();
   else if (name === 'leads') loadRequests();
+  else if (name === 'schedule') loadSchedule();
+  else if (name === 'technicians') loadTechnicians();
+  else if (name === 'pricing') loadPricing();
   else if (name === 'push') { loadAudience(); loadCampaigns(); updatePreview(); updatePreviewAppName(); }
   else if (name === 'studio') updateStudio();
 }
@@ -143,11 +165,25 @@ async function loadOverview() {
       campaignsSent = camps.filter((c) => c.status === 'sent').length;
     } catch (e) { /* non-fatal */ }
 
+    // Job-costing KPIs (revenue / margin) when a specific brand is in scope.
+    let opsCards = '';
+    if (!state.isSuperAdmin || bp) {
+      try {
+        const ops = await getJson('/api/ops/summary' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+        const money = (n) => `$${Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+        opsCards = `
+      <div class="kpi green"><div class="kpi-label">Revenue</div><div class="kpi-value">${money(ops.revenue)}</div><div class="kpi-hint">approved quotes</div></div>
+      <div class="kpi"><div class="kpi-label">Margin</div><div class="kpi-value">${money(ops.margin)}</div><div class="kpi-hint">after labor + parts</div></div>
+      <div class="kpi"><div class="kpi-label">Completed jobs</div><div class="kpi-value">${ops.completedJobs}</div><div class="kpi-hint">avg ticket ${money(ops.avgTicket)}</div></div>`;
+      } catch (e) { /* ops summary optional */ }
+    }
+
     grid.innerHTML = `
       <div class="kpi"><div class="kpi-label">Total leads</div><div class="kpi-value">${total}</div><div class="kpi-hint">all time</div></div>
       <div class="kpi blue"><div class="kpi-label">New leads</div><div class="kpi-value">${news}</div><div class="kpi-hint">awaiting response</div></div>
       <div class="kpi green"><div class="kpi-label">Opted-in devices</div><div class="kpi-value">${deviceLabel}</div><div class="kpi-hint">${deviceHint}</div></div>
-      <div class="kpi"><div class="kpi-label">Campaigns sent</div><div class="kpi-value">${campaignsSent}</div><div class="kpi-hint">push notifications</div></div>`;
+      <div class="kpi"><div class="kpi-label">Campaigns sent</div><div class="kpi-value">${campaignsSent}</div><div class="kpi-hint">push notifications</div></div>
+      ${opsCards}`;
 
     renderCards(el('overview-recent-list'), leads.slice(0, 5), 'No leads yet.');
   } catch (err) {
@@ -180,6 +216,26 @@ function wireLeads() {
   el('delete-btn').addEventListener('click', deleteCurrentRequest);
   el('detail-content').addEventListener('click', (e) => {
     if (e.target.closest('#save-lead-btn')) saveChanges();
+    else if (e.target.closest('#quote-add-item')) {
+      const sel = el('quote-item');
+      const item = state.priceBook.find((p) => String(p.id) === sel.value);
+      if (item) { state.quoteLines.push({ description: item.name, amount: item.defaultPrice, quantity: 1 }); renderQuoteLines(); }
+    } else if (e.target.closest('#quote-add-custom')) {
+      state.quoteLines.push({ description: '', amount: 0, quantity: 1 });
+      renderQuoteLines();
+    } else if (e.target.closest('.q-remove')) {
+      const idx = Number(e.target.closest('.q-remove').dataset.idx);
+      // Preserve any in-progress edits, drop the removed row, re-render.
+      state.quoteLines = readQuoteLinesFromDom();
+      state.quoteLines.splice(idx, 1);
+      renderQuoteLines();
+    } else if (e.target.closest('#send-quote-btn')) {
+      sendQuote();
+    }
+  });
+  // Live total as the operator edits line amounts/quantities.
+  el('detail-content').addEventListener('input', (e) => {
+    if (e.target.closest('#quote-lines')) updateQuoteTotal();
   });
 }
 
@@ -230,7 +286,10 @@ async function viewRequest(id) {
   try {
     const data = await getJson(`/api/help-requests/${encodeURIComponent(id)}`);
     state.currentRequestId = id;
+    state.quoteLines = [];               // fresh quote builder per lead
+    await loadPriceBookForBrand();       // populate the quote item picker
     renderDetail(data);
+    renderQuoteLines();
     el('request-list').classList.add('hidden');
     document.getElementById('lead-filters').classList.add('hidden');
     el('detail-panel').classList.remove('hidden');
@@ -281,13 +340,14 @@ function renderDetail(data) {
     ${arrTags('Tools & materials', projectData.tools_and_materials)}
     ${arrTags('Safety tips', projectData.safety_tips)}
     ${arrTags('When to call a pro', projectData.when_to_call_pro)}
+    ${quoteBuilderHtml(data)}
     <div class="detail-section">
       <h3>Manage lead</h3>
       <div class="edit-form">
         <div class="form-group">
           <label for="edit-status">Status</label>
           <select id="edit-status">
-            ${['new', 'in_progress', 'completed', 'cancelled'].map((s) => `<option value="${s}" ${data.status === s ? 'selected' : ''}>${s.replace('_', ' ')}</option>`).join('')}
+            ${JOB_STATUSES.map((s) => `<option value="${s}" ${data.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}
           </select>
         </div>
         <div class="form-group">
@@ -298,6 +358,17 @@ function renderDetail(data) {
           <label for="edit-followup">Follow-up date</label>
           <input type="date" id="edit-followup" value="${data.followUpDate ? escapeHtml(data.followUpDate.split('T')[0]) : ''}">
         </div>
+        <div class="sched-row">
+          <div class="form-group">
+            <label for="edit-labor">Labor cost</label>
+            <div class="price-edit-amt"><span class="price-dollar">$</span><input type="number" min="0" step="0.01" id="edit-labor" value="${data.laborCost != null ? escapeHtml(String(data.laborCost)) : ''}"></div>
+          </div>
+          <div class="form-group">
+            <label for="edit-parts">Parts cost</label>
+            <div class="price-edit-amt"><span class="price-dollar">$</span><input type="number" min="0" step="0.01" id="edit-parts" value="${data.partsCost != null ? escapeHtml(String(data.partsCost)) : ''}"></div>
+          </div>
+        </div>
+        ${costingLine(data)}
         <button class="save-btn" id="save-lead-btn" type="button">Save changes</button>
       </div>
     </div>`;
@@ -308,16 +379,32 @@ function arrTags(title, arr) {
   return `<div class="detail-section"><h3>${escapeHtml(title)}</h3><div class="tools-list">${arr.map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join('')}</div></div>`;
 }
 
+// Revenue (approved quote) minus labor + parts = margin. Shown live-ish on save.
+function costingLine(data) {
+  const revenue = data.quoteStatus === 'approved' ? Number(data.quoteTotal || 0) : 0;
+  const cost = Number(data.laborCost || 0) + Number(data.partsCost || 0);
+  const margin = revenue - cost;
+  const cls = margin >= 0 ? 'ok' : 'warn';
+  return `<div class="costing-line">Revenue $${revenue.toFixed(2)} · Cost $${cost.toFixed(2)} · <span class="${cls}">Margin $${margin.toFixed(2)}</span></div>`;
+}
+
 async function saveChanges() {
   if (!state.currentRequestId) return;
   const status = el('edit-status').value;
   const notes = el('edit-notes').value;
   const followUpDate = el('edit-followup').value || null;
+  const laborRaw = el('edit-labor').value.trim();
+  const partsRaw = el('edit-parts').value.trim();
+  const laborCost = laborRaw === '' ? -1 : parseFloat(laborRaw);
+  const partsCost = partsRaw === '' ? -1 : parseFloat(partsRaw);
   const btn = el('save-lead-btn');
   btn.disabled = true;
   try {
-    const updated = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}`, 'PUT', { status, notes, followUpDate });
+    const updated = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}`, 'PUT', { status, notes, followUpDate, laborCost, partsCost });
+    state.quoteLines = [];
+    await loadPriceBookForBrand();
     renderDetail(updated);
+    renderQuoteLines();
     toast('Lead updated.', 'success');
   } catch (err) {
     toast('Failed to save changes.', 'error');
@@ -333,6 +420,518 @@ async function deleteCurrentRequest() {
     showLeadList();
   } catch (err) {
     toast('Failed to delete lead.', 'error');
+  }
+}
+
+/* ── Schedule / dispatch board ──────────────────────────────────────────── */
+function wireSchedule() {
+  // Delegated click on a job card anywhere on the board opens its scheduler.
+  el('schedule-board').addEventListener('click', (e) => {
+    const card = e.target.closest('.job-card');
+    if (card && card.dataset.id) openScheduler(card.dataset.id);
+  });
+  el('sched-back-btn').addEventListener('click', showBoard);
+  el('schedule-editor-content').addEventListener('click', (e) => {
+    if (e.target.closest('#sched-save-btn')) saveSchedule();
+  });
+}
+
+// Local YYYY-MM-DD key for grouping (avoids UTC day-boundary drift).
+function dayKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+async function loadSchedule() {
+  showBoard();
+  const board = el('schedule-board');
+  board.innerHTML = '<div class="spinner"></div>';
+  const bp = brandParam();
+  // Techs power the assignee picker + the assigned-name chip on each job card.
+  if (!(state.isSuperAdmin && !bp)) await loadTechsForBrand(); else state.techs = [];
+  try {
+    const jobs = await getJson('/api/help-requests' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+    renderBoard(jobs.filter((j) => !BOARD_DONE.includes(j.status)));
+  } catch (err) {
+    board.innerHTML = '<div class="empty-state"><h2>Could not load the schedule.</h2></div>';
+  }
+}
+
+function renderBoard(jobs) {
+  const board = el('schedule-board');
+
+  // Build the rolling week of day-columns, keyed by local date.
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + i);
+    days.push({ key: dayKey(d), date: d, jobs: [] });
+  }
+  const byKey = {};
+  days.forEach((c) => { byKey[c.key] = c; });
+
+  const unscheduled = [];
+  const overdue = [];
+  const later = [];
+  jobs.forEach((j) => {
+    if (!j.scheduledFor) { unscheduled.push(j); return; }
+    const d = new Date(j.scheduledFor);
+    if (isNaN(d.getTime())) { unscheduled.push(j); return; }
+    const k = dayKey(d);
+    if (byKey[k]) byKey[k].jobs.push(j);
+    else if (d < today) overdue.push(j);
+    else later.push(j);
+  });
+
+  const byTime = (a, b) => new Date(a.scheduledFor) - new Date(b.scheduledFor);
+  const dayLabel = (d) => d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+  const columns = [];
+  columns.push(boardColumn('Unscheduled', unscheduled, true));
+  if (overdue.length) columns.unshift(boardColumn('Overdue', overdue.sort(byTime)));
+  days.forEach((c) => columns.push(boardColumn(dayLabel(c.date), c.jobs.sort(byTime))));
+  if (later.length) columns.push(boardColumn('Later', later.sort(byTime)));
+
+  board.innerHTML = columns.join('');
+}
+
+function boardColumn(title, jobs, isUnscheduled) {
+  const cards = jobs.length
+    ? jobs.map(jobCard).join('')
+    : `<div class="board-empty">${isUnscheduled ? 'Nothing waiting.' : 'No jobs.'}</div>`;
+  return `<div class="board-col${isUnscheduled ? ' board-col-unscheduled' : ''}">
+    <div class="board-col-head">${escapeHtml(title)}<span class="board-count">${jobs.length}</span></div>
+    <div class="board-col-body">${cards}</div>
+  </div>`;
+}
+
+function jobCard(j) {
+  const time = j.scheduledFor
+    ? new Date(j.scheduledFor).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : (j.preferredWindow ? escapeHtml(j.preferredWindow) : '');
+  const eta = j.status === 'on_the_way' && j.techEtaMinutes != null ? `<span class="job-eta">ETA ${escapeHtml(String(j.techEtaMinutes))}m</span>` : '';
+  const tech = j.assignedTechId != null ? (state.techs.find((tt) => tt.id === j.assignedTechId) || null) : null;
+  const techChip = tech ? `<div class="job-tech"><span class="job-tech-dot"></span>${escapeHtml(tech.name)}</div>` : '';
+  return `<div class="job-card" data-id="${escapeHtml(String(j.id))}">
+    <div class="job-card-top">
+      ${time ? `<span class="job-time">${escapeHtml(time)}</span>` : ''}
+      <span class="status-badge status-${escapeHtml(j.status)}">${escapeHtml((j.status || '').replace(/_/g, ' '))}</span>
+    </div>
+    <div class="job-title">${escapeHtml(j.projectTitle || 'Service request')}</div>
+    ${j.serviceType ? `<div class="job-service">${escapeHtml(j.serviceType)}</div>` : ''}
+    <div class="job-customer">${escapeHtml(j.customerName || '')}</div>
+    ${techChip}
+    ${eta}
+  </div>`;
+}
+
+function showBoard() {
+  el('schedule-editor').classList.add('hidden');
+  el('schedule-board').classList.remove('hidden');
+  state.currentScheduleId = null;
+}
+
+async function openScheduler(id) {
+  try {
+    const j = await getJson(`/api/help-requests/${encodeURIComponent(id)}`);
+    state.currentScheduleId = id;
+    renderScheduleEditor(j);
+    el('schedule-board').classList.add('hidden');
+    el('schedule-editor').classList.remove('hidden');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (err) {
+    toast('Failed to load that job.', 'error');
+  }
+}
+
+function renderScheduleEditor(j) {
+  const sched = j.scheduledFor ? new Date(j.scheduledFor) : null;
+  const dateVal = sched && !isNaN(sched.getTime()) ? dayKey(sched) : '';
+  const timeVal = sched && !isNaN(sched.getTime())
+    ? `${String(sched.getHours()).padStart(2, '0')}:${String(sched.getMinutes()).padStart(2, '0')}` : '';
+
+  el('schedule-editor-content').innerHTML = `
+    <div class="detail-section">
+      <h2>${escapeHtml(j.projectTitle || 'Service request')}</h2>
+      <span class="status-badge spaced status-${escapeHtml(j.status)}">${escapeHtml((j.status || '').replace(/_/g, ' '))}</span>
+    </div>
+    <div class="detail-section">
+      <h3>Customer</h3>
+      <div class="customer-info">
+        <div class="info-card"><label>Name</label><p>${escapeHtml(j.customerName || '')}</p></div>
+        <div class="info-card"><label>Phone</label><p><a class="link" href="tel:${escapeHtml(j.customerPhone || '')}">${escapeHtml(j.customerPhone || '')}</a></p></div>
+        ${j.serviceType ? `<div class="info-card"><label>Service</label><p>${escapeHtml(j.serviceType)}</p></div>` : ''}
+      </div>
+      ${j.preferredWindow || j.preferredDate ? `<p class="submitted-at">Customer preferred: ${escapeHtml(fmtDate(j.preferredDate) || '')} ${escapeHtml(j.preferredWindow || '')}</p>` : ''}
+    </div>
+    ${j.userDescription ? `<div class="detail-section"><h3>Description</h3><div class="description-text">${escapeHtml(j.userDescription)}</div></div>` : ''}
+    <div class="detail-section">
+      <h3>Schedule this job</h3>
+      <div class="edit-form">
+        <div class="sched-row">
+          <div class="form-group"><label for="sched-date">Date</label><input type="date" id="sched-date" value="${escapeHtml(dateVal)}"></div>
+          <div class="form-group"><label for="sched-time">Time</label><input type="time" id="sched-time" value="${escapeHtml(timeVal)}"></div>
+        </div>
+        <div class="sched-row">
+          <div class="form-group">
+            <label for="sched-status">Status</label>
+            <select id="sched-status">${JOB_STATUSES.map((s) => `<option value="${s}" ${j.status === s ? 'selected' : ''}>${s.replace(/_/g, ' ')}</option>`).join('')}</select>
+          </div>
+          <div class="form-group">
+            <label for="sched-tech">Assign to</label>
+            <select id="sched-tech">
+              <option value="">Unassigned</option>
+              ${state.techs.filter((tt) => tt.isActive || tt.id === j.assignedTechId).map((tt) => `<option value="${escapeHtml(String(tt.id))}" ${j.assignedTechId === tt.id ? 'selected' : ''}>${escapeHtml(tt.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="sched-eta">Tech ETA (minutes) — set when on the way, blank to clear</label>
+          <input type="number" id="sched-eta" min="0" max="600" value="${j.techEtaMinutes != null ? escapeHtml(String(j.techEtaMinutes)) : ''}">
+        </div>
+        <button class="save-btn" id="sched-save-btn" type="button">Save schedule</button>
+      </div>
+    </div>`;
+}
+
+async function saveSchedule() {
+  if (!state.currentScheduleId) return;
+  const date = el('sched-date').value;
+  const time = el('sched-time').value;
+  const status = el('sched-status').value;
+  const etaRaw = el('sched-eta').value.trim();
+  const techVal = el('sched-tech').value;
+
+  const body = { status };
+  if (date) body.scheduledFor = new Date(`${date}T${time || '09:00'}`).toISOString();
+  // -1 is the backend's explicit "clear" sentinel for both ETA and assignment.
+  body.techEtaMinutes = etaRaw === '' ? -1 : Number(etaRaw);
+  body.assignedTechId = techVal === '' ? -1 : Number(techVal);
+
+  const btn = el('sched-save-btn');
+  btn.disabled = true;
+  try {
+    await sendJson(`/api/help-requests/${encodeURIComponent(state.currentScheduleId)}`, 'PUT', body);
+    toast('Schedule saved. The customer will see it in the app.', 'success');
+    loadSchedule();
+  } catch (err) {
+    toast('Failed to save the schedule.', 'error');
+    btn.disabled = false;
+  }
+}
+
+/* ── Technicians ────────────────────────────────────────────────────────── */
+function wireTechnicians() {
+  el('tech-add-btn').addEventListener('click', addTechnician);
+  el('tech-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-tech-action]');
+    if (!btn) return;
+    const id = btn.dataset.techId;
+    const action = btn.dataset.techAction;
+    if (action === 'code') regenTechCode(id);
+    else if (action === 'toggle') toggleTechActive(id, btn.dataset.techActive === 'true');
+    else if (action === 'delete') deleteTechnician(id);
+  });
+}
+
+// Fetch technicians for the active brand into state.techs (shared by the list
+// and the scheduler's assignee picker). Returns the array.
+async function loadTechsForBrand() {
+  const bp = brandParam();
+  try {
+    state.techs = await getJson('/api/technicians' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+  } catch (err) {
+    state.techs = [];
+  }
+  return state.techs;
+}
+
+async function loadTechnicians() {
+  const host = el('tech-list');
+  host.innerHTML = '<div class="spinner"></div>';
+  if (state.isSuperAdmin && !brandParam()) {
+    host.innerHTML = '<div class="empty-state"><h2>Select a brand to manage its technicians.</h2></div>';
+    return;
+  }
+  await loadTechsForBrand();
+  renderTechList();
+}
+
+function renderTechList() {
+  const host = el('tech-list');
+  if (!state.techs.length) {
+    host.innerHTML = '<div class="empty-state"><h2>No technicians yet.</h2><p>Add your first tech above to give them app access.</p></div>';
+    return;
+  }
+  host.innerHTML = state.techs.map((tt) => `
+    <div class="tech-card${tt.isActive ? '' : ' inactive'}">
+      <div class="tech-main">
+        <div class="tech-name">${escapeHtml(tt.name)}${tt.isActive ? '' : ' <span class="muted">(inactive)</span>'}</div>
+        <div class="tech-meta">${escapeHtml(tt.phone || '')}${tt.phone && tt.email ? ' · ' : ''}${escapeHtml(tt.email || '')}</div>
+      </div>
+      <div class="tech-actions">
+        <button class="btn ghost" type="button" data-tech-action="code" data-tech-id="${escapeHtml(String(tt.id))}">${tt.hasCode ? 'New code' : 'Get code'}</button>
+        <button class="btn ghost" type="button" data-tech-action="toggle" data-tech-id="${escapeHtml(String(tt.id))}" data-tech-active="${tt.isActive}">${tt.isActive ? 'Deactivate' : 'Activate'}</button>
+        <button class="btn danger" type="button" data-tech-action="delete" data-tech-id="${escapeHtml(String(tt.id))}">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+async function addTechnician() {
+  const name = el('tech-name').value.trim();
+  if (!name) { toast('Enter the technician’s name.', 'error'); return; }
+  if (state.isSuperAdmin && !brandParam()) { toast('Select a brand first.', 'error'); return; }
+  const body = { name, phone: el('tech-phone').value.trim() || null, email: el('tech-email').value.trim() || null };
+  if (state.isSuperAdmin && state.brand) body.brand = state.brand;
+  const btn = el('tech-add-btn');
+  btn.disabled = true;
+  try {
+    const created = await sendJson('/api/technicians', 'POST', body);
+    ['tech-name', 'tech-phone', 'tech-email'].forEach((id) => { el(id).value = ''; });
+    showTechCode(created.name, created.loginCode);
+    loadTechnicians();
+  } catch (err) {
+    toast(err.message || 'Could not add technician.', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function regenTechCode(id) {
+  if (!confirm('Generate a new login code? The old one stops working.')) return;
+  try {
+    const res = await sendJson(`/api/technicians/${encodeURIComponent(id)}/code`, 'POST', {});
+    const tech = state.techs.find((x) => String(x.id) === String(id));
+    showTechCode(tech ? tech.name : 'Technician', res.loginCode);
+    loadTechnicians();
+  } catch (err) {
+    toast(err.message || 'Could not generate a code.', 'error');
+  }
+}
+
+// The login code is shown exactly once (server only stores its hash). Persist it
+// on screen until dismissed so the owner can write it down / text it to the tech.
+function showTechCode(name, code) {
+  const host = el('tech-list');
+  const banner = document.createElement('div');
+  banner.className = 'code-banner';
+  banner.innerHTML = `<div><div class="code-label">Login code for ${escapeHtml(name)}</div><div class="code-value">${escapeHtml(code)}</div><div class="code-hint">Share this with the tech — it won’t be shown again.</div></div>`;
+  const dismiss = document.createElement('button');
+  dismiss.className = 'btn ghost';
+  dismiss.type = 'button';
+  dismiss.textContent = 'Done';
+  dismiss.addEventListener('click', () => banner.remove());
+  banner.appendChild(dismiss);
+  host.parentNode.insertBefore(banner, host);
+}
+
+async function toggleTechActive(id, isActive) {
+  try {
+    await sendJson(`/api/technicians/${encodeURIComponent(id)}`, 'PUT', { isActive: !isActive });
+    loadTechnicians();
+  } catch (err) {
+    toast(err.message || 'Could not update technician.', 'error');
+  }
+}
+
+async function deleteTechnician(id) {
+  if (!confirm('Remove this technician? Their past job assignments are kept.')) return;
+  try {
+    await fetch(`${API}/api/technicians/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    loadTechnicians();
+  } catch (err) {
+    toast('Could not delete technician.', 'error');
+  }
+}
+
+/* ── Pricing / price book ───────────────────────────────────────────────── */
+function wirePricing() {
+  el('price-add-btn').addEventListener('click', addPriceItem);
+  el('qbo-connect-btn').addEventListener('click', connectQuickBooks);
+  el('price-list').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-price-action]');
+    if (!btn) return;
+    if (btn.dataset.priceAction === 'delete') deletePriceItem(btn.dataset.priceId);
+    else if (btn.dataset.priceAction === 'save') savePriceItem(btn.dataset.priceId);
+  });
+}
+
+async function loadPriceBookForBrand() {
+  const bp = brandParam();
+  try {
+    state.priceBook = await getJson('/api/pricebook' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+  } catch (err) {
+    state.priceBook = [];
+  }
+  return state.priceBook;
+}
+
+async function loadPricing() {
+  const host = el('price-list');
+  host.innerHTML = '<div class="spinner"></div>';
+  if (state.isSuperAdmin && !brandParam()) {
+    host.innerHTML = '<div class="empty-state"><h2>Select a brand to manage its pricing.</h2></div>';
+    return;
+  }
+  await loadPriceBookForBrand();
+  renderPriceList();
+  loadQboStatus();
+}
+
+// Show the QuickBooks connect bar + current connection state for the active brand.
+async function loadQboStatus() {
+  const bar = el('qbo-bar');
+  const bp = brandParam();
+  // Only meaningful for a specific brand (scoped login, or super-admin selection).
+  if (state.isSuperAdmin && !bp) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  try {
+    const s = await getJson('/api/accounting/status' + (bp ? `?brand=${encodeURIComponent(bp)}` : ''));
+    const status = el('qbo-status');
+    const btn = el('qbo-connect-btn');
+    if (s.connected) {
+      status.textContent = 'Connected — completed jobs sync as invoices';
+      status.classList.add('ok');
+      btn.textContent = 'Reconnect';
+    } else {
+      status.textContent = 'Not connected';
+      status.classList.remove('ok');
+      btn.textContent = 'Connect QuickBooks';
+    }
+  } catch (err) {
+    el('qbo-status').textContent = 'Status unavailable';
+  }
+}
+
+function connectQuickBooks() {
+  const bp = brandParam();
+  if (state.isSuperAdmin && !bp) { toast('Select a brand first.', 'error'); return; }
+  // OAuth is a browser redirect; open in a new tab so the console stays put.
+  window.open(`${API}/api/accounting/qbo/connect${bp ? `?brand=${encodeURIComponent(bp)}` : ''}`, '_blank');
+}
+
+function renderPriceList() {
+  const host = el('price-list');
+  if (!state.priceBook.length) {
+    host.innerHTML = '<div class="empty-state"><h2>No price items yet.</h2><p>Add your common services above to speed up quoting.</p></div>';
+    return;
+  }
+  host.innerHTML = state.priceBook.map((p) => `
+    <div class="tech-card">
+      <div class="tech-main" style="flex:1">
+        <input class="price-edit-name" data-price-id="${escapeHtml(String(p.id))}" type="text" value="${escapeHtml(p.name)}" maxlength="80">
+      </div>
+      <div class="price-edit-amt">
+        <span class="price-dollar">$</span>
+        <input class="price-edit-price" data-price-id="${escapeHtml(String(p.id))}" type="number" min="0" step="0.01" value="${escapeHtml(String(p.defaultPrice))}">
+      </div>
+      <div class="tech-actions">
+        <button class="btn ghost" type="button" data-price-action="save" data-price-id="${escapeHtml(String(p.id))}">Save</button>
+        <button class="btn danger" type="button" data-price-action="delete" data-price-id="${escapeHtml(String(p.id))}">Delete</button>
+      </div>
+    </div>`).join('');
+}
+
+async function addPriceItem() {
+  const name = el('price-name').value.trim();
+  const amount = parseFloat(el('price-amount').value);
+  if (!name) { toast('Enter an item name.', 'error'); return; }
+  if (state.isSuperAdmin && !brandParam()) { toast('Select a brand first.', 'error'); return; }
+  const body = { name, defaultPrice: isNaN(amount) ? 0 : amount };
+  if (state.isSuperAdmin && state.brand) body.brand = state.brand;
+  try {
+    await sendJson('/api/pricebook', 'POST', body);
+    el('price-name').value = ''; el('price-amount').value = '';
+    loadPricing();
+  } catch (err) {
+    toast(err.message || 'Could not add item.', 'error');
+  }
+}
+
+async function savePriceItem(id) {
+  const nameInput = document.querySelector(`.price-edit-name[data-price-id="${id}"]`);
+  const priceInput = document.querySelector(`.price-edit-price[data-price-id="${id}"]`);
+  const amount = parseFloat(priceInput.value);
+  try {
+    await sendJson(`/api/pricebook/${encodeURIComponent(id)}`, 'PUT', { name: nameInput.value.trim(), defaultPrice: isNaN(amount) ? 0 : amount });
+    toast('Saved.', 'success');
+    loadPriceBookForBrand();
+  } catch (err) {
+    toast(err.message || 'Could not save.', 'error');
+  }
+}
+
+async function deletePriceItem(id) {
+  if (!confirm('Delete this price item?')) return;
+  try {
+    await fetch(`${API}/api/pricebook/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    loadPricing();
+  } catch (err) {
+    toast('Could not delete item.', 'error');
+  }
+}
+
+/* ── Quote builder (rendered inside the lead detail) ────────────────────── */
+function quoteBuilderHtml(data) {
+  const status = data.quoteStatus;
+  const statusLine = status
+    ? `<div class="quote-status">Current quote: <span class="status-badge status-${escapeHtml(status)}">${escapeHtml(status)}</span>${data.quoteTotal != null ? ` · $${escapeHtml(Number(data.quoteTotal).toFixed(2))}` : ''}</div>`
+    : '';
+  const options = state.priceBook.filter((p) => p.isActive)
+    .map((p) => `<option value="${escapeHtml(String(p.id))}">${escapeHtml(p.name)} — $${escapeHtml(Number(p.defaultPrice).toFixed(2))}</option>`).join('');
+  return `
+    <div class="detail-section">
+      <h3>Quote</h3>
+      ${statusLine}
+      <div class="quote-add-row">
+        <select id="quote-item"><option value="">Add from price book…</option>${options}</select>
+        <button class="btn ghost" id="quote-add-item" type="button">Add</button>
+        <button class="btn ghost" id="quote-add-custom" type="button">Custom line</button>
+      </div>
+      <div id="quote-lines" class="quote-lines"></div>
+      <div class="quote-total-row">Total: <span id="quote-total">$0.00</span></div>
+      <button class="save-btn" id="send-quote-btn" type="button">Send quote to customer</button>
+    </div>`;
+}
+
+function renderQuoteLines() {
+  const host = el('quote-lines');
+  if (!host) return;
+  host.innerHTML = state.quoteLines.map((l, i) => `
+    <div class="quote-line" data-idx="${i}">
+      <input class="q-desc" type="text" placeholder="Description" value="${escapeHtml(l.description || '')}">
+      <div class="price-edit-amt"><span class="price-dollar">$</span><input class="q-amount" type="number" min="0" step="0.01" value="${escapeHtml(String(l.amount ?? 0))}"></div>
+      <input class="q-qty" type="number" min="1" step="1" value="${escapeHtml(String(l.quantity ?? 1))}" title="Quantity">
+      <button class="btn ghost q-remove" type="button" data-idx="${i}">✕</button>
+    </div>`).join('');
+  updateQuoteTotal();
+}
+
+function readQuoteLinesFromDom() {
+  return Array.from(document.querySelectorAll('#quote-lines .quote-line')).map((row) => ({
+    description: row.querySelector('.q-desc').value,
+    amount: parseFloat(row.querySelector('.q-amount').value) || 0,
+    quantity: parseInt(row.querySelector('.q-qty').value, 10) || 1,
+  }));
+}
+
+function updateQuoteTotal() {
+  const total = readQuoteLinesFromDom().reduce((sum, l) => sum + l.amount * l.quantity, 0);
+  const node = el('quote-total');
+  if (node) node.textContent = `$${total.toFixed(2)}`;
+}
+
+async function sendQuote() {
+  const lines = readQuoteLinesFromDom().filter((l) => l.description || l.amount);
+  if (!lines.length) { toast('Add at least one line to the quote.', 'error'); return; }
+  const btn = el('send-quote-btn');
+  btn.disabled = true;
+  try {
+    await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/quote`, 'PUT', { lines });
+    toast('Quote sent — the customer can approve it in the app.', 'success');
+    viewRequest(state.currentRequestId);
+  } catch (err) {
+    toast(err.message || 'Could not send quote.', 'error');
+    btn.disabled = false;
   }
 }
 
@@ -612,6 +1211,7 @@ function wireStudio() {
   ['studio-name', 'studio-id', 'studio-short', 'studio-privacy', 'studio-terms'].forEach((id) => {
     el(id).addEventListener('input', updateStudio);
   });
+  el('studio-font').addEventListener('change', updateStudio);
 
   el('cand-primary').addEventListener('click', (e) => pickCandidate(e, 'primary'));
   el('cand-secondary').addEventListener('click', (e) => pickCandidate(e, 'secondary'));
@@ -619,11 +1219,18 @@ function wireStudio() {
   el('logo-candidates').addEventListener('click', (e) => {
     const img = e.target.closest('.logo-thumb');
     if (!img) return;
-    studio.selectedLogo = img.dataset.url;
-    document.querySelectorAll('#logo-candidates .logo-thumb').forEach((t) => t.classList.remove('selected'));
-    img.classList.add('selected');
+    selectLogo(img.dataset.url);
     updateStudio();
   });
+
+  // Icon generator controls.
+  const bgText = el('icon-bg'); const bgPicker = el('icon-bg-picker');
+  bgText.addEventListener('input', () => { const n = normHex(bgText.value); if (n) bgPicker.value = n; regenIcons(); });
+  bgPicker.addEventListener('input', () => { bgText.value = bgPicker.value.toUpperCase(); regenIcons(); });
+  el('icon-scale').addEventListener('input', regenIcons);
+  el('download-icon-btn').addEventListener('click', () => downloadCanvas('icon-canvas', 'icon.png'));
+  el('download-splash-btn').addEventListener('click', () => downloadCanvas('splash-canvas', 'splash.png'));
+  el('contrast-note').addEventListener('click', (e) => { if (e.target.closest('#fix-contrast-btn')) fixPrimaryContrast(); });
 
   el('studio-copy-btn').addEventListener('click', () => {
     navigator.clipboard.writeText(el('studio-json').value).then(
@@ -669,6 +1276,7 @@ async function importFromWebsite() {
     renderCandidates('cand-accent', data.colorCandidates);
     renderLogos(data.logoCandidates || []);
     renderFonts(data.fonts || []);
+    if ((data.logoCandidates || []).length) selectLogo(data.logoCandidates[0]);
 
     (data.warnings || []).forEach((w) => {
       const div = document.createElement('div');
@@ -700,11 +1308,23 @@ function renderLogos(logos) {
     `<img class="logo-thumb" data-url="${escapeHtml(u)}" src="${escapeHtml(u)}" alt="logo option">`).join('');
 }
 
+const BUNDLED_FONTS = ['Inter', 'Poppins', 'Montserrat'];
+
+function mapDetectedFont(fonts) {
+  for (const f of fonts) {
+    const hit = BUNDLED_FONTS.find((b) => f.toLowerCase().includes(b.toLowerCase()));
+    if (hit) return hit;
+  }
+  return null;
+}
+
 function renderFonts(fonts) {
-  el('studio-fonts').innerHTML = fonts.length
-    ? fonts.map((f) => `<span class="font-chip">${escapeHtml(f)}</span>`).join('') +
-      '<div class="muted studio-hint">Font theming is a planned enhancement — noted for reference.</div>'
-    : '<span class="muted">—</span>';
+  const mapped = mapDetectedFont(fonts || []);
+  if (mapped) el('studio-font').value = mapped;
+  el('studio-fonts').innerHTML = (fonts && fonts.length)
+    ? `Detected on site: ${fonts.map(escapeHtml).join(', ')}` +
+      (mapped ? ` → using <b>${escapeHtml(mapped)}</b>` : ' (no bundled match — using System)')
+    : '';
 }
 
 function currentStudioColors() {
@@ -721,6 +1341,8 @@ function updateStudio() {
   const name = el('studio-name').value.trim() || 'Your app';
 
   // Live preview.
+  const font = el('studio-font').value;
+  el('app-preview').style.fontFamily = font === 'System' ? '' : `'${font}', sans-serif`;
   el('ap-appname').textContent = name;
   el('ap-header').style.background = primary;
   el('ap-appname').style.color = onPrimary;
@@ -745,10 +1367,33 @@ function updateStudio() {
   if (ratio >= 4.5) {
     note.innerHTML = `<span class="ok">✓ Primary carries accessible text (${ratio.toFixed(1)}:1).</span>`;
   } else {
-    note.innerHTML = `<span class="warn">⚠ Text on the primary color is only ${ratio.toFixed(1)}:1 (AA needs 4.5). Consider darkening the primary for buttons.</span>`;
+    note.innerHTML =
+      `<span class="warn">⚠ Text on the primary is only ${ratio.toFixed(1)}:1 (AA needs 4.5).</span> ` +
+      `<button class="link-btn" id="fix-contrast-btn" type="button">Darken to AA</button>`;
   }
 
+  // Default the icon background to a deep brand tone until the operator sets one.
+  if (!el('icon-bg').value) {
+    const bg = mixHex(secondary, '#000000', 0.35);
+    el('icon-bg').value = bg;
+    el('icon-bg-picker').value = bg;
+  }
+  regenIcons();
+
   el('studio-json').value = buildBrandJson();
+}
+
+// Nudges the primary darker (or lighter) until white/dark text clears AA, then
+// writes it back — a one-click fix for the contrast warning.
+function fixPrimaryContrast() {
+  let primary = currentStudioColors().primary;
+  const goDark = luminance(primary) > 0.35; // bright color → darken for white text
+  for (let i = 0; i < 24 && contrast(onColorFor(primary), primary) < 4.5; i++) {
+    primary = goDark ? mixHex(primary, '#000000', 0.06) : mixHex(primary, '#FFFFFF', 0.06);
+  }
+  el('studio-primary').value = primary;
+  el('studio-primary-picker').value = primary;
+  updateStudio();
 }
 
 function buildBrandJson() {
@@ -761,6 +1406,7 @@ function buildBrandJson() {
     scheme: id.replace(/-/g, ''),
     bundleId: `com.${id.replace(/-/g, '')}.app`,
     companyShortName: el('studio-short').value.trim() || el('studio-name').value.trim() || 'New Brand',
+    fontFamily: el('studio-font').value,
     releasePrefix: id,
     privacyPolicyUrl: el('studio-privacy').value.trim() || '',
     termsUrl: el('studio-terms').value.trim() || '',
@@ -780,6 +1426,76 @@ function downloadBrandJson() {
   a.href = url; a.download = `${id}.brand.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// ── App-icon generator ──────────────────────────────────────────────────
+// Loads the chosen logo through our same-origin image proxy (so the canvas
+// isn't cross-origin tainted and can export), composites it onto a square
+// brand-colored canvas, and exports store-ready icon.png / splash.png.
+const iconState = { logoImg: null };
+
+function selectLogo(url) {
+  studio.selectedLogo = url;
+  document.querySelectorAll('#logo-candidates .logo-thumb')
+    .forEach((t) => t.classList.toggle('selected', t.dataset.url === url));
+  loadLogoForIcon(url);
+}
+
+function loadLogoForIcon(url) {
+  const img = new Image();
+  img.onload = () => {
+    iconState.logoImg = img;
+    el('download-icon-btn').disabled = false;
+    el('download-splash-btn').disabled = false;
+    el('icon-hint').textContent = 'Adjust the background and logo size, then download.';
+    regenIcons();
+  };
+  img.onerror = () => {
+    iconState.logoImg = null;
+    el('download-icon-btn').disabled = true;
+    el('download-splash-btn').disabled = true;
+    el('icon-hint').textContent = 'Could not load that logo — try another candidate or add one by hand.';
+  };
+  img.src = `${API}/api/brands/proxy-image?url=${encodeURIComponent(url)}`;
+}
+
+function currentIconBg() {
+  const { secondary } = currentStudioColors();
+  return normHex(el('icon-bg').value) || mixHex(secondary, '#000000', 0.35);
+}
+
+function regenIcons() {
+  if (!iconState.logoImg) return;
+  const bg = currentIconBg();
+  const frac = Number(el('icon-scale').value) / 100;
+  drawBrandIcon(el('icon-canvas'), iconState.logoImg, bg, frac);
+  drawBrandIcon(el('splash-canvas'), iconState.logoImg, bg, frac * 0.68); // splash logo sits smaller
+}
+
+function drawBrandIcon(canvas, img, bg, fraction) {
+  const ctx = canvas.getContext('2d');
+  const S = canvas.width;
+  ctx.clearRect(0, 0, S, S);
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, S, S);
+  const box = S * fraction;
+  const iw = img.naturalWidth || img.width || 1;
+  const ih = img.naturalHeight || img.height || 1;
+  const scale = Math.min(box / iw, box / ih);
+  const w = iw * scale; const h = ih * scale;
+  try { ctx.drawImage(img, (S - w) / 2, (S - h) / 2, w, h); } catch (e) { /* invalid/tainted image */ }
+}
+
+function downloadCanvas(canvasId, filename) {
+  const id = slugify(el('studio-id').value || el('studio-name').value) || 'brand';
+  el(canvasId).toBlob((blob) => {
+    if (!blob) { toast('Could not export image.', 'error'); return; }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `${id}-${filename}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, 'image/png');
 }
 
 /* ── Sign out ───────────────────────────────────────────────────────────── */

@@ -37,7 +37,8 @@ public class CrmLeadDispatcher
         try
         {
             var brand = await _db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug, ct);
-            var provider = ResolveProvider(brand);
+            if (brand is null) return;
+            var provider = await ResolveProviderAsync(brand, ct);
             if (provider == CrmProvider.None) return;   // brand not connected to any CRM
 
             var sink = _sinks.FirstOrDefault(s => s.Provider == provider);
@@ -47,7 +48,7 @@ public class CrmLeadDispatcher
                 return;
             }
 
-            var result = await sink.PushAsync(brand!, ToCrmLead(lead), ct);
+            var result = await sink.PushAsync(brand, ToCrmLead(lead), ct);
             if (result.Ok)
             {
                 if (!string.IsNullOrEmpty(result.RemoteId))
@@ -73,11 +74,21 @@ public class CrmLeadDispatcher
         }
     }
 
-    // Step 1 supports one provider: a brand is "connected" iff it has a webhook
-    // URL. Native OAuth providers (Jobber, Housecall Pro) will resolve from a
-    // stored BrandCrmConnection row here in a later wave.
-    private static CrmProvider ResolveProvider(Brand? brand) =>
-        !string.IsNullOrWhiteSpace(brand?.LeadWebhookUrl) ? CrmProvider.Webhook : CrmProvider.None;
+    // Resolution order: a native OAuth connection (BrandCrmConnection, e.g.
+    // Jobber) wins over the generic webhook, which wins over nothing. This lets a
+    // brand keep a Zapier webhook as a fallback while it's mid-migration to a
+    // native integration without double-delivering.
+    private async Task<CrmProvider> ResolveProviderAsync(Brand brand, CancellationToken ct)
+    {
+        var conn = await _db.BrandCrmConnections
+            .FirstOrDefaultAsync(c => c.BrandSlug == brand.Slug && c.IsActive, ct);
+        if (conn is not null && conn.Provider != (int)CrmProvider.None)
+            return (CrmProvider)conn.Provider;
+
+        return !string.IsNullOrWhiteSpace(brand.LeadWebhookUrl)
+            ? CrmProvider.Webhook
+            : CrmProvider.None;
+    }
 
     private static CrmLead ToCrmLead(HelpRequest r) => new(
         CustomerName: r.CustomerName,

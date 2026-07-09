@@ -63,4 +63,78 @@ public class TelemetryEndpointsTests : IClassFixture<ApiFactory>
             .Select(s => s.GetProperty("screen").GetString()).ToList();
         Assert.Contains("DigestHome", screens);
     }
+
+    [Fact]
+    public async Task Ingest_StampsBrand_FromXBrandHeader()
+    {
+        var client = _factory.CreateClient();
+        var anon = Guid.NewGuid();
+        var batch = new BatchDto(new()
+        {
+            new("app_opened", anon, Guid.NewGuid(), DateTime.UtcNow, "1.0.0", "ios", null),
+        });
+
+        using var req = new HttpRequestMessage(HttpMethod.Post, "/api/telemetry/events")
+        {
+            Content = JsonContent.Create(batch),
+        };
+        req.Headers.Add("X-Brand", "Acme-Plumbing"); // mixed case → normalised lower
+        var resp = await client.SendAsync(req);
+        Assert.Equal(HttpStatusCode.Accepted, resp.StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var row = db.AnalyticsEvents.Single(e => e.AnonId == anon);
+        Assert.Equal("acme-plumbing", row.Brand);
+    }
+
+    [Fact]
+    public async Task Ingest_LeavesBrandNull_WhenHeaderAbsent()
+    {
+        var client = _factory.CreateClient();
+        var anon = Guid.NewGuid();
+        var batch = new BatchDto(new()
+        {
+            new("app_opened", anon, Guid.NewGuid(), DateTime.UtcNow, "1.0.0", "ios", null),
+        });
+
+        await client.PostAsJsonAsync("/api/telemetry/events", batch);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var row = db.AnalyticsEvents.Single(e => e.AnonId == anon);
+        Assert.Null(row.Brand);
+    }
+
+    [Fact]
+    public async Task BrandMau_ReturnsPerBrandActiveInstallCounts()
+    {
+        var client = _factory.CreateClient();
+        var brand = "mau-brand-" + Guid.NewGuid().ToString("N")[..8];
+        var anonA = Guid.NewGuid();
+        var anonB = Guid.NewGuid();
+
+        // Two distinct installs for this brand, three events (anonA appears twice).
+        async Task Post(Guid anon, string name)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "/api/telemetry/events")
+            {
+                Content = JsonContent.Create(new BatchDto(new()
+                {
+                    new(name, anon, Guid.NewGuid(), DateTime.UtcNow, "1.0.0", "ios", null),
+                })),
+            };
+            req.Headers.Add("X-Brand", brand);
+            (await client.SendAsync(req)).EnsureSuccessStatusCode();
+        }
+        await Post(anonA, "app_opened");
+        await Post(anonA, "screen_viewed");
+        await Post(anonB, "app_opened");
+
+        var rows = await client.GetFromJsonAsync<JsonElement>("/api/admin/brand-mau?days=30");
+        var mine = rows.EnumerateArray().Single(r => r.GetProperty("brand").GetString() == brand);
+
+        Assert.Equal(2, mine.GetProperty("activeInstalls").GetInt32()); // distinct installs
+        Assert.Equal(3, mine.GetProperty("events").GetInt64());
+    }
 }

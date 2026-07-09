@@ -97,6 +97,9 @@ namespace DIYHelper2.Api.Migrations
                     b.Property<string>("DashboardUsername")
                         .HasColumnType("text");
 
+                    b.Property<string>("FeaturesJson")
+                        .HasColumnType("text");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
@@ -105,6 +108,18 @@ namespace DIYHelper2.Api.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("LeadWebhookUrl")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("MembershipEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Phone")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ReviewUrl")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ServiceTypesJson")
                         .HasColumnType("text");
 
                     b.Property<string>("Slug")
@@ -128,7 +143,97 @@ namespace DIYHelper2.Api.Migrations
                     b.ToTable("Brands");
                 });
 
-            modelBuilder.Entity("DIYHelper2.Api.Models.HelpRequest", b =>
+            modelBuilder.Entity("DIYHelper2.Api.Models.BrandAccountingConnection", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AccessTokenEnc")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("AccessTokenExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("BrandSlug")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RealmId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RefreshTokenEnc")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BrandSlug")
+                        .IsUnique()
+                        .HasDatabaseName("IX_BrandAccountingConnections_BrandSlug");
+
+                    b.ToTable("BrandAccountingConnections");
+                });
+
+            modelBuilder.Entity("DIYHelper2.Api.Models.BrandCrmConnection", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AccessTokenEnc")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("AccessTokenExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("BrandSlug")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("Provider")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("RefreshTokenEnc")
+                        .HasColumnType("text");
+
+                    b.Property<string>("RemoteAccountLabel")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BrandSlug")
+                        .IsUnique()
+                        .HasDatabaseName("IX_BrandCrmConnections_BrandSlug");
+
+                    b.ToTable("BrandCrmConnections");
+                });
+
+            modelBuilder.Entity("DIYHelper2.Api.Models.Customer", b =>
                 {
                     b.Property<int>("Id")
                         .ValueGeneratedOnAdd()
@@ -138,9 +243,72 @@ namespace DIYHelper2.Api.Migrations
 
                     b.Property<string>("Brand")
                         .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DeviceId")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("EmailVerified")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime>("LastSeenAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Phone")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Brand", "DeviceId")
+                        .HasDatabaseName("IX_Customers_Brand_DeviceId");
+
+                    b.HasIndex("Brand", "Email")
+                        .HasDatabaseName("IX_Customers_Brand_Email");
+
+                    b.ToTable("Customers");
+                });
+
+            modelBuilder.Entity("DIYHelper2.Api.Models.HelpRequest", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AfterPhotoBase64")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("AssignedTechId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("BeforePhotoBase64")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Brand")
+                        .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("text")
                         .HasDefaultValue("diyhelper");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CompletionNotes")
+                        .HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -160,13 +328,33 @@ namespace DIYHelper2.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("DeviceId")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("FollowUpDate")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("ImageBase64")
                         .HasColumnType("text");
 
+                    b.Property<string>("InvoiceRemoteId")
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("LaborCost")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
                     b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("PartsCost")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<DateTime?>("PreferredDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("PreferredWindow")
                         .HasColumnType("text");
 
                     b.Property<string>("ProjectData")
@@ -177,9 +365,37 @@ namespace DIYHelper2.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("QuoteLinesJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("QuoteRespondedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("QuoteSentAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("QuoteStatus")
+                        .HasColumnType("text");
+
+                    b.Property<decimal?>("QuoteTotal")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<DateTime?>("ScheduledFor")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ServiceType")
+                        .HasColumnType("text");
+
+                    b.Property<string>("SignatureBase64")
+                        .HasColumnType("text");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text");
+
+                    b.Property<int?>("TechEtaMinutes")
+                        .HasColumnType("integer");
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -193,7 +409,50 @@ namespace DIYHelper2.Api.Migrations
                     b.HasIndex("Brand")
                         .HasDatabaseName("IX_HelpRequests_Brand");
 
+                    b.HasIndex("Brand", "AssignedTechId")
+                        .HasDatabaseName("IX_HelpRequests_Brand_AssignedTechId");
+
+                    b.HasIndex("Brand", "DeviceId")
+                        .HasDatabaseName("IX_HelpRequests_Brand_DeviceId");
+
                     b.ToTable("HelpRequests");
+                });
+
+            modelBuilder.Entity("DIYHelper2.Api.Models.PriceBookItem", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Brand")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<decimal>("DefaultPrice")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Brand", "IsActive")
+                        .HasDatabaseName("IX_PriceBookItems_Brand_Active");
+
+                    b.ToTable("PriceBookItems");
                 });
 
             modelBuilder.Entity("DIYHelper2.Api.Models.PushCampaign", b =>
@@ -320,6 +579,48 @@ namespace DIYHelper2.Api.Migrations
                     b.ToTable("PushTokens");
                 });
 
+            modelBuilder.Entity("DIYHelper2.Api.Models.Technician", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Brand")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Email")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LoginCodeHash")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Phone")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Brand", "IsActive")
+                        .HasDatabaseName("IX_Technicians_Brand_Active");
+
+                    b.ToTable("Technicians");
+                });
+
             modelBuilder.Entity("Sburson.Shared.DataDeletion.DataDeletionRequest", b =>
                 {
                     b.Property<int>("Id")
@@ -404,6 +705,10 @@ namespace DIYHelper2.Api.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("character varying(64)");
 
+                    b.Property<string>("Brand")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
                     b.Property<DateTime>("ClientTs")
                         .HasColumnType("timestamp with time zone");
 
@@ -430,6 +735,8 @@ namespace DIYHelper2.Api.Migrations
                     b.HasIndex("AnonId", "OccurredAt");
 
                     b.HasIndex("EventName", "OccurredAt");
+
+                    b.HasIndex("Brand", "OccurredAt", "AnonId");
 
                     b.ToTable("AnalyticsEvents", (string)null);
                 });

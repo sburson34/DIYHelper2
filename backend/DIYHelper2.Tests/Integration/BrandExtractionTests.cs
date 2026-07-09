@@ -117,4 +117,49 @@ public class BrandExtractionTests : IClassFixture<ApiFactory>
         var anon = _factory.CreateClient();
         Assert.Equal(HttpStatusCode.Unauthorized, (await anon.GetAsync("/api/brands/extract?url=https://example.com")).StatusCode);
     }
+
+    [Fact]
+    public async Task ProxyImage_ReturnsImageBytes_ForImageContentType()
+    {
+        var png = new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4 }; // PNG magic + filler
+        _factory.FakeBrandExtractHandler.Responder = _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent(png).WithType("image/png"),
+        });
+
+        var admin = _factory.CreateAdminClient();
+        var resp = await admin.GetAsync("/api/brands/proxy-image?url=https://example.com/logo.png");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal("image/png", resp.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(png, await resp.Content.ReadAsByteArrayAsync());
+    }
+
+    [Fact]
+    public async Task ProxyImage_Rejects_NonImageContent()
+    {
+        _factory.FakeBrandExtractHandler.Responder = _ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<html>not an image</html>", System.Text.Encoding.UTF8, "text/html"),
+        });
+        var admin = _factory.CreateAdminClient();
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.GetAsync("/api/brands/proxy-image?url=https://example.com/x")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ProxyImage_RequiresAuth_AndValidUrl()
+    {
+        Assert.Equal(HttpStatusCode.Unauthorized,
+            (await _factory.CreateClient().GetAsync("/api/brands/proxy-image?url=https://example.com/x.png")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await _factory.CreateAdminClient().GetAsync("/api/brands/proxy-image?url=notaurl")).StatusCode);
+    }
+}
+
+internal static class ByteContentExtensions
+{
+    public static ByteArrayContent WithType(this ByteArrayContent c, string mediaType)
+    {
+        c.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(mediaType);
+        return c;
+    }
 }

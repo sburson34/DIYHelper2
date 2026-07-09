@@ -79,6 +79,7 @@ module.exports = ({ config }) => ({
       id: brand.id,
       name: brand.name,
       companyShortName: brand.companyShortName,
+      fontFamily: brand.fontFamily,
       colors: brand.colors,
       releasePrefix: brand.releasePrefix || brand.slug,
       privacyPolicyUrl: brand.privacyPolicyUrl,

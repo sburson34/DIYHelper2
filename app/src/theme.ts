@@ -1,5 +1,7 @@
 import Constants from 'expo-constants';
 import { generateBrandColors, BrandSeed } from './brandPalette';
+import { BRAND_FONT } from './config/appInfo';
+import { fontKeysFor } from './fontNames';
 
 // ── White-label brand hues ────────────────────────────────────────────
 // The active brand (brands/<id>/brand.json → app.config.js → expo-constants)
@@ -54,10 +56,16 @@ const baseDark: typeof baseLight = {
 const light = { ...baseLight, ...generateBrandColors(brandHues, 'light', baseLight) };
 const dark = { ...baseDark, ...generateBrandColors(brandHues, 'dark', baseDark) };
 
+// Brand typeface → loaded font keys, falling back to the platform default.
+const fk = fontKeysFor(BRAND_FONT);
 const shared = {
   roundness: { small: 8, medium: 16, large: 24, full: 999 },
   spacing: { xs: 4, s: 8, m: 16, l: 24, xl: 32 },
-  fonts: { regular: 'System', bold: 'System' },
+  fonts: {
+    regular: fk?.regular ?? 'System',
+    medium: fk?.medium ?? 'System',
+    bold: fk?.bold ?? 'System',
+  },
 };
 
 export type ThemeColors = typeof light;

@@ -168,6 +168,68 @@ builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>()
 builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.ICrmLeadSink>(
     sp => sp.GetRequiredService<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>());
 builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher>();
+// Jobber (getjobber.com) — native OAuth 2.0 + GraphQL CRM integration. Our app
+// credentials come from env; per-brand tokens are stored (AES-GCM encrypted) in
+// BrandCrmConnection. Both typed clients are SsrfGuard-wrapped like every other
+// external client (api.getjobber.com is public, so the guard passes it through).
+builder.Services.AddSingleton(_ => new DIYHelper2.Api.Integrations.Crm.JobberOptions
+{
+    ClientId = Environment.GetEnvironmentVariable("JOBBER_CLIENT_ID"),
+    ClientSecret = Environment.GetEnvironmentVariable("JOBBER_CLIENT_SECRET"),
+    RedirectUri = Environment.GetEnvironmentVariable("JOBBER_REDIRECT_URI"),
+});
+builder.Services.AddSingleton<DIYHelper2.Api.Integrations.Crm.CrmTokenProtector>();
+// Signs/validates the mobile "tech mode" bearer tokens (HMAC). Key from env.
+builder.Services.AddSingleton<DIYHelper2.Api.Services.TechTokenService>();
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberTokenService>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberCrmSink>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.ICrmLeadSink>(
+    sp => sp.GetRequiredService<DIYHelper2.Api.Integrations.Crm.JobberCrmSink>());
+// Housecall Pro — native partner OAuth 2.0 + REST. Same shape as Jobber; shares
+// CrmTokenProtector + BrandCrmConnection. Creates a customer then a Job-Inbox lead.
+builder.Services.AddSingleton(_ => new DIYHelper2.Api.Integrations.Crm.HousecallOptions
+{
+    ClientId = Environment.GetEnvironmentVariable("HOUSECALL_CLIENT_ID"),
+    ClientSecret = Environment.GetEnvironmentVariable("HOUSECALL_CLIENT_SECRET"),
+    RedirectUri = Environment.GetEnvironmentVariable("HOUSECALL_REDIRECT_URI"),
+});
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallTokenService>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallCrmSink>().AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.ICrmLeadSink>(
+    sp => sp.GetRequiredService<DIYHelper2.Api.Integrations.Crm.HousecallCrmSink>());
+
+// ── Billing seam (Stripe payments, QuickBooks invoicing) ──────────────────
+// Provider-agnostic contracts (Integrations/Billing) with fail-soft impls, the
+// same shape as the CRM seam above. Credentials come from env; both providers
+// stay dormant (IsConfigured=false) until keys are set, so booking and the
+// customer app never depend on billing being live. Stripe's typed client is
+// SsrfGuard-wrapped like every external client (api.stripe.com passes through).
+builder.Services.AddSingleton(_ => new DIYHelper2.Api.Integrations.Billing.StripeOptions
+{
+    SecretKey = Environment.GetEnvironmentVariable("STRIPE_SECRET_KEY"),
+    MembershipPriceId = Environment.GetEnvironmentVariable("STRIPE_MEMBERSHIP_PRICE_ID"),
+});
+builder.Services.AddSingleton(_ => new DIYHelper2.Api.Integrations.Billing.QuickBooksOptions
+{
+    ClientId = Environment.GetEnvironmentVariable("QBO_CLIENT_ID"),
+    ClientSecret = Environment.GetEnvironmentVariable("QBO_CLIENT_SECRET"),
+    RedirectUri = Environment.GetEnvironmentVariable("QBO_REDIRECT_URI"),
+    Environment = Environment.GetEnvironmentVariable("QBO_ENVIRONMENT") ?? "sandbox",
+    ItemId = Environment.GetEnvironmentVariable("QBO_ITEM_ID") ?? "1",
+});
+builder.Services
+    .AddHttpClient<DIYHelper2.Api.Integrations.Billing.IPaymentProvider,
+        DIYHelper2.Api.Integrations.Billing.StripePaymentProvider>()
+    .AddHttpMessageHandler<SsrfGuardHandler>();
+// QBO token service + invoice provider are typed HttpClients (SSRF-guarded) that
+// inject AppDbContext, mirroring the Jobber wiring above.
+builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Billing.QuickBooksTokenService>()
+    .AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services
+    .AddHttpClient<DIYHelper2.Api.Integrations.Billing.IInvoiceProvider,
+        DIYHelper2.Api.Integrations.Billing.QuickBooksInvoiceProvider>()
+    .AddHttpMessageHandler<SsrfGuardHandler>();
+
 // Mobile abuse-prevention from Sburson.Shared.Mobile. Env vars are read
 // lazily inside the Transient factory delegate so test fixtures that
 // set PLAY_INTEGRITY_* / DAILY_DEVICE_AI_LIMIT after the host builds
@@ -515,6 +577,7 @@ using (var scope = app.Services.CreateScope())
             CompanyName = "DIY Helper",
             LeadEmail = SecretOrEnv("SEED_DIYHELPER_LEAD_EMAIL") ?? "",
             IsActive = true,
+            ServiceTypesJson = "[\"General repair\",\"Plumbing\",\"Electrical\",\"Painting\",\"Other\"]",
             CreatedAt = now,
             UpdatedAt = now,
         });
@@ -533,6 +596,7 @@ using (var scope = app.Services.CreateScope())
                 ? null
                 : Sburson.Shared.Auth.PasswordHasher.Hash(acmePassword),
             IsActive = !string.IsNullOrEmpty(acmePassword),
+            ServiceTypesJson = "[\"Plumbing\",\"Drain cleaning\",\"Water heaters\",\"HVAC\",\"Other\"]",
             CreatedAt = now,
             UpdatedAt = now,
         });
@@ -1132,6 +1196,10 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
     var brandSlug = (context.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
     if (string.IsNullOrEmpty(brandSlug)) brandSlug = "diyhelper";
 
+    // Device id (per-install) lets the customer see this job later in "My Jobs"
+    // without a login. Sourced from the header, never the body.
+    var deviceId = context.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+
     var helpRequest = new HelpRequest
     {
         Brand = brandSlug,
@@ -1142,11 +1210,24 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
         UserDescription = dto.UserDescription,
         ProjectData = dto.ProjectData,
         ImageBase64 = dto.ImageBase64,
+        DeviceId = string.IsNullOrEmpty(deviceId) ? null : deviceId,
+        ServiceType = dto.ServiceType,
+        PreferredDate = dto.PreferredDate,
+        PreferredWindow = dto.PreferredWindow,
         Status = "new",
         CreatedAt = DateTime.UtcNow,
         UpdatedAt = DateTime.UtcNow
     };
     db.HelpRequests.Add(helpRequest);
+
+    // Upsert the lightweight, password-less customer record so return visits are
+    // recognized (by device, or by email on a new install) and later features
+    // (memberships, reminders) have a stable anchor. Best-effort: a failure here
+    // must not fail the booking, so it shares the same SaveChanges and any
+    // exception bubbles only to the catch-all handler (the lead is still saved
+    // first-class above). Match newest-first on device, then email.
+    await UpsertCustomerAsync(db, brandSlug, deviceId, dto.CustomerName, dto.CustomerEmail, dto.CustomerPhone);
+
     await db.SaveChangesAsync();
 
     // Route the lead to the branding company by email. Falls back to the
@@ -1167,6 +1248,181 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
 // (not 403) so a scoped user can't probe another brand's id space.
 static string? BrandScopeOf(HttpContext http)
     => http.Items.TryGetValue("BrandScope", out var s) ? s as string : null;
+
+// White-label attribution for public customer endpoints: always from the
+// X-Brand header (never the body), lowercased, defaulting to the flagship brand
+// for un-branded builds. Mirrors the inline logic in the booking handler.
+static string BrandFromHeader(HttpContext http)
+{
+    var slug = (http.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
+    return string.IsNullOrEmpty(slug) ? "diyhelper" : slug;
+}
+
+// Upsert the lightweight, password-less customer for a booking. Matches an
+// existing record newest-first by device, then by email (a returning customer on
+// a new install). Only ever fills/refreshes fields — never nulls a known value.
+static async Task UpsertCustomerAsync(
+    AppDbContext db, string brand, string? deviceId, string name, string email, string phone)
+{
+    Customer? existing = null;
+    if (!string.IsNullOrEmpty(deviceId))
+        existing = await db.Customers
+            .Where(c => c.Brand == brand && c.DeviceId == deviceId)
+            .OrderByDescending(c => c.UpdatedAt)
+            .FirstOrDefaultAsync();
+    if (existing is null && !string.IsNullOrWhiteSpace(email))
+        existing = await db.Customers
+            .Where(c => c.Brand == brand && c.Email == email)
+            .OrderByDescending(c => c.UpdatedAt)
+            .FirstOrDefaultAsync();
+
+    var now = DateTime.UtcNow;
+    if (existing is null)
+    {
+        db.Customers.Add(new Customer
+        {
+            Brand = brand,
+            DeviceId = string.IsNullOrEmpty(deviceId) ? null : deviceId,
+            Name = name ?? string.Empty,
+            Email = string.IsNullOrWhiteSpace(email) ? null : email,
+            Phone = string.IsNullOrWhiteSpace(phone) ? null : phone,
+            CreatedAt = now,
+            UpdatedAt = now,
+            LastSeenAt = now,
+        });
+    }
+    else
+    {
+        if (!string.IsNullOrWhiteSpace(name)) existing.Name = name;
+        if (!string.IsNullOrWhiteSpace(email)) existing.Email = email;
+        if (!string.IsNullOrWhiteSpace(phone)) existing.Phone = phone;
+        if (!string.IsNullOrEmpty(deviceId)) existing.DeviceId = deviceId;
+        existing.UpdatedAt = now;
+        existing.LastSeenAt = now;
+    }
+}
+
+// A short, human-readable technician login code. Uppercase, excludes ambiguous
+// characters (0/O, 1/I/L) so it's easy to read aloud and type on a phone.
+static string GenerateTechCode()
+{
+    const string alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+    var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(8);
+    var chars = new char[8];
+    for (var i = 0; i < 8; i++) chars[i] = alphabet[bytes[i] % alphabet.Length];
+    return new string(chars);
+}
+
+// Resolve the technician from a request's bearer token (Authorization: Bearer
+// <token>, or X-Tech-Token). Null when absent/invalid/expired → the endpoint 401s.
+static DIYHelper2.Api.Services.TechPrincipal? TechPrincipalOf(
+    HttpContext http, DIYHelper2.Api.Services.TechTokenService tokens)
+{
+    string? token = null;
+    var auth = http.Request.Headers["Authorization"].FirstOrDefault();
+    if (!string.IsNullOrEmpty(auth) && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        token = auth.Substring("Bearer ".Length).Trim();
+    if (string.IsNullOrEmpty(token))
+        token = http.Request.Headers["X-Tech-Token"].FirstOrDefault();
+    return tokens.Validate(token);
+}
+
+// Best-effort push of a completed job to the brand's accounting system as an
+// invoice. Only invoices approved quotes, exactly once (guarded by
+// InvoiceRemoteId). Never throws into the request — invoice sync is a side effect
+// of completing a job, not a precondition.
+static async Task TrySyncInvoiceAsync(
+    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices,
+    AppDbContext db, HelpRequest r, ILogger logger)
+{
+    try
+    {
+        if (r.InvoiceRemoteId is not null) return;   // idempotent — already invoiced
+        if (r.QuoteStatus != "approved") return;     // only bill work the customer approved
+        if (!invoices.IsConfigured) return;
+
+        var lines = new List<DIYHelper2.Api.Integrations.Billing.InvoiceLine>();
+        if (!string.IsNullOrWhiteSpace(r.QuoteLinesJson))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(r.QuoteLinesJson);
+                foreach (var el in doc.RootElement.EnumerateArray())
+                {
+                    var desc = el.TryGetProperty("description", out var d) ? d.GetString() ?? "" : "";
+                    var amount = el.TryGetProperty("amount", out var a) ? a.GetDecimal() : 0m;
+                    var qty = el.TryGetProperty("quantity", out var q) ? q.GetInt32() : 1;
+                    lines.Add(new DIYHelper2.Api.Integrations.Billing.InvoiceLine(desc, amount, qty));
+                }
+            }
+            catch { /* malformed lines → fall back to total below */ }
+        }
+        if (lines.Count == 0 && r.QuoteTotal is { } total)
+            lines.Add(new DIYHelper2.Api.Integrations.Billing.InvoiceLine(r.ProjectTitle ?? "Service", total, 1));
+        if (lines.Count == 0) return;
+
+        var result = await invoices.CreateInvoiceAsync(
+            new DIYHelper2.Api.Integrations.Billing.InvoiceRequest(
+                r.Brand, r.CustomerEmail, r.CustomerName, lines, $"Job #{r.Id}: {r.ProjectTitle}"));
+        if (result.Ok && result.RemoteInvoiceId is not null)
+        {
+            r.InvoiceRemoteId = result.RemoteInvoiceId;
+            r.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            logger.LogInformation("Job {Id} synced to invoice {Inv} for brand {Brand}.", r.Id, result.RemoteInvoiceId, r.Brand);
+        }
+        else
+        {
+            logger.LogInformation("Invoice sync for job {Id} unavailable: {Reason}", r.Id, result.Error);
+        }
+    }
+    catch (Exception ex)
+    {
+        logger.LogWarning(ex, "Invoice sync threw for job {Id}.", r.Id);
+    }
+}
+
+// Parse a brand's JSON service-type array; malformed/empty → no configured types
+// (the app falls back to a single generic option).
+static List<string> ParseServiceTypes(string? json)
+{
+    if (string.IsNullOrWhiteSpace(json)) return new List<string>();
+    try
+    {
+        return System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
+    }
+    catch { return new List<string>(); }
+}
+
+// Merge a brand's per-feature toggles over the customer-app defaults. Unknown/
+// malformed config falls back to defaults so a bad brand row can't dark-ship a
+// core feature. Memberships are forced to the computed "effective" value
+// (brand opt-in AND a live payment provider), overriding any stale JSON.
+static Dictionary<string, bool> BuildBrandFeatures(string? featuresJson, bool membershipEffective)
+{
+    var features = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+    {
+        ["booking"] = true,
+        ["triage"] = true,
+        ["appointmentTracking"] = true,
+        ["reviews"] = true,
+        ["referrals"] = true,
+        ["maintenanceReminders"] = true,
+        ["memberships"] = false,
+    };
+    if (!string.IsNullOrWhiteSpace(featuresJson))
+    {
+        try
+        {
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, bool>>(featuresJson);
+            if (parsed is not null)
+                foreach (var kv in parsed) features[kv.Key] = kv.Value;
+        }
+        catch { /* malformed brand config → keep defaults */ }
+    }
+    features["memberships"] = membershipEffective;
+    return features;
+}
 
 // Shared shape for a campaign returned to the dashboard (list + detail).
 static object PushCampaignView(DIYHelper2.Api.Models.PushCampaign c) => new
@@ -1216,6 +1472,12 @@ app.MapGet("/api/help-requests", async ([FromQuery] string? status, [FromQuery] 
             r.Status,
             r.Notes,
             r.FollowUpDate,
+            // Booking + scheduling fields powering the dispatch board.
+            r.ServiceType,
+            r.PreferredDate,
+            r.PreferredWindow,
+            r.ScheduledFor,
+            r.TechEtaMinutes,
             r.CreatedAt,
             r.UpdatedAt
         })
@@ -1232,7 +1494,8 @@ app.MapGet("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDb
     return Results.Ok(request);
 });
 
-app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db) =>
+app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices, ILogger<Program> logger) =>
 {
     var request = await db.HelpRequests.FindAsync(id);
     if (request is null) return Results.NotFound();
@@ -1242,9 +1505,20 @@ app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRe
     if (dto.Status is not null) request.Status = dto.Status;
     if (dto.Notes is not null) request.Notes = dto.Notes;
     if (dto.FollowUpDate.HasValue) request.FollowUpDate = dto.FollowUpDate;
+    if (dto.ScheduledFor.HasValue) request.ScheduledFor = dto.ScheduledFor;
+    // -1 is the explicit "clear the ETA" sentinel (tech arrived / job started);
+    // any other value sets it; null (field omitted) leaves it untouched.
+    if (dto.TechEtaMinutes.HasValue)
+        request.TechEtaMinutes = dto.TechEtaMinutes.Value < 0 ? null : dto.TechEtaMinutes.Value;
+    // Same sentinel convention for assignment: -1 unassigns, other sets.
+    if (dto.AssignedTechId.HasValue)
+        request.AssignedTechId = dto.AssignedTechId.Value < 0 ? null : dto.AssignedTechId.Value;
+    if (dto.LaborCost.HasValue) request.LaborCost = dto.LaborCost.Value < 0 ? null : dto.LaborCost.Value;
+    if (dto.PartsCost.HasValue) request.PartsCost = dto.PartsCost.Value < 0 ? null : dto.PartsCost.Value;
     request.UpdatedAt = DateTime.UtcNow;
 
     await db.SaveChangesAsync();
+    if (request.Status == "completed") await TrySyncInvoiceAsync(invoices, db, request, logger);
     return Results.Ok(request);
 });
 
@@ -1258,6 +1532,583 @@ app.MapDelete("/api/help-requests/{id:int}", async (int id, HttpContext http, Ap
     db.HelpRequests.Remove(request);
     await db.SaveChangesAsync();
     return Results.NoContent();
+});
+
+// ── Customer-facing app config + "My Jobs" ────────────────────────────────
+// These are PUBLIC (not admin-gated): they don't match any RequiresAuth pattern,
+// so they're protected only by the shared X-App-Key like the other mobile POSTs.
+// Brand comes from X-Brand; per-customer scoping is by the X-Device-Id header.
+
+// Per-brand configuration the branded app reads once at launch: company info,
+// which customer features are on, service categories, review link, and whether
+// the paid membership flow is actually available (brand opt-in AND a live
+// payment provider). Lets one binary behave differently per tenant, no rebuild.
+app.MapGet("/api/config", async (
+    HttpContext http,
+    AppDbContext db,
+    DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
+{
+    var brandSlug = BrandFromHeader(http);
+    var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+
+    var membershipEffective = (brand?.MembershipEnabled ?? false) && payments.IsConfigured;
+    return Results.Ok(new
+    {
+        brand = brandSlug,
+        companyName = brand?.CompanyName ?? "",
+        phone = brand?.Phone,
+        reviewUrl = brand?.ReviewUrl,
+        serviceTypes = ParseServiceTypes(brand?.ServiceTypesJson),
+        membershipEnabled = membershipEffective,
+        features = BuildBrandFeatures(brand?.FeaturesJson, membershipEffective),
+    });
+});
+
+// The customer's own jobs, scoped to their device. No auth/account — the app's
+// per-install X-Device-Id is the key. Projection is deliberately customer-safe
+// (no ImageBase64, no operator Notes, no other customers' rows).
+app.MapGet("/api/my/requests", async (HttpContext http, AppDbContext db) =>
+{
+    var brandSlug = BrandFromHeader(http);
+    var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+    if (string.IsNullOrEmpty(deviceId)) return Results.Ok(Array.Empty<object>());
+
+    var results = await db.HelpRequests
+        .Where(r => r.Brand == brandSlug && r.DeviceId == deviceId)
+        .OrderByDescending(r => r.CreatedAt)
+        .Select(r => new
+        {
+            r.Id,
+            r.ProjectTitle,
+            r.ServiceType,
+            r.Status,
+            r.PreferredDate,
+            r.PreferredWindow,
+            r.ScheduledFor,
+            r.TechEtaMinutes,
+            r.QuoteStatus,
+            r.QuoteTotal,
+            r.CreatedAt,
+            r.UpdatedAt,
+        })
+        .ToListAsync();
+    return Results.Ok(results);
+});
+
+app.MapGet("/api/my/requests/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var brandSlug = BrandFromHeader(http);
+    var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+    var r = await db.HelpRequests.FindAsync(id);
+    // 404 (not 403) when the row isn't this device's, so a customer can't probe
+    // another customer's id space — same posture as the admin cross-tenant guard.
+    if (r is null || r.Brand != brandSlug || string.IsNullOrEmpty(deviceId) || r.DeviceId != deviceId)
+        return Results.NotFound();
+
+    return Results.Ok(new
+    {
+        r.Id,
+        r.ProjectTitle,
+        r.ServiceType,
+        r.UserDescription,
+        r.ProjectData,
+        r.Status,
+        r.PreferredDate,
+        r.PreferredWindow,
+        r.ScheduledFor,
+        r.TechEtaMinutes,
+        r.QuoteLinesJson,
+        r.QuoteTotal,
+        r.QuoteStatus,
+        r.QuoteSentAt,
+        r.CreatedAt,
+        r.UpdatedAt,
+    });
+});
+
+// Customer responds to a quote from the app (approve/decline). Device-scoped
+// exactly like the other /api/my endpoints; only a "sent" quote can be answered.
+app.MapPut("/api/my/requests/{id:int}/quote", [EnableRateLimiting("submit")] async (
+    int id, [FromBody] QuoteDecisionDto dto, HttpContext http, AppDbContext db) =>
+{
+    var brandSlug = BrandFromHeader(http);
+    var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null || r.Brand != brandSlug || string.IsNullOrEmpty(deviceId) || r.DeviceId != deviceId)
+        return Results.NotFound();
+    if (r.QuoteStatus != "sent")
+        return ApiError.BadRequest(http, "There's no open quote to respond to.");
+
+    var decision = (dto.Decision ?? "").Trim().ToLowerInvariant();
+    if (decision != "approved" && decision != "declined")
+        return ApiError.BadRequest(http, "decision must be 'approved' or 'declined'.");
+
+    r.QuoteStatus = decision;
+    r.QuoteRespondedAt = DateTime.UtcNow;
+    r.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { r.Id, quoteStatus = r.QuoteStatus });
+});
+
+// Start a membership / maintenance-plan checkout. Fail-soft and honest: returns
+// available=false with a reason whenever the brand hasn't opted in or the
+// payment provider isn't wired, so the app hides or greys the CTA rather than
+// erroring. When live, returns a hosted Stripe Checkout URL for the app to open.
+app.MapPost("/api/memberships/checkout", [EnableRateLimiting("submit")] async (
+    [FromBody] MembershipCheckoutDto dto,
+    HttpContext http,
+    AppDbContext db,
+    DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
+{
+    var brandSlug = BrandFromHeader(http);
+    var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+    if (brand is null || !brand.MembershipEnabled)
+        return Results.Ok(new { available = false, reason = "Memberships aren't offered by this company." });
+    if (!payments.IsConfigured)
+        return Results.Ok(new { available = false, reason = "Membership signup isn't available yet." });
+    if (string.IsNullOrWhiteSpace(dto.CustomerEmail))
+        return ApiError.BadRequest(http, "customerEmail is required.");
+
+    var success = string.IsNullOrWhiteSpace(dto.SuccessUrl)
+        ? "https://api.diyhelper.org/membership-success.html" : dto.SuccessUrl!;
+    var cancel = string.IsNullOrWhiteSpace(dto.CancelUrl)
+        ? "https://api.diyhelper.org/membership-cancel.html" : dto.CancelUrl!;
+
+    var result = await payments.CreateMembershipCheckoutAsync(
+        new DIYHelper2.Api.Integrations.Billing.MembershipCheckoutRequest(
+            brandSlug, dto.PlanId ?? "default", dto.CustomerEmail!, dto.CustomerName, success, cancel));
+
+    return result.Ok
+        ? Results.Ok(new { available = true, checkoutUrl = result.CheckoutUrl })
+        : Results.Ok(new { available = false, reason = result.Error });
+});
+
+// ── Technicians (owner-managed; admin-gated by AdminAuthMiddleware) ────────
+// The owner creates techs and issues each a login code (shown once). Scoped
+// like leads: a per-brand login only sees/edits its own techs; super-admin can
+// pass ?brand= / brand in the body.
+app.MapGet("/api/technicians", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var q = db.Technicians.AsQueryable();
+    if (scope is not null) q = q.Where(t => t.Brand == scope);
+    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(t => t.Brand == brand);
+
+    var techs = await q
+        .OrderBy(t => t.Name)
+        .Select(t => new { t.Id, t.Brand, t.Name, t.Phone, t.Email, t.IsActive, hasCode = t.LoginCodeHash != null, t.CreatedAt })
+        .ToListAsync();
+    return Results.Ok(techs);
+});
+
+app.MapPost("/api/technicians", async ([FromBody] CreateTechnicianDto dto, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var brand = scope ?? dto.Brand?.Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(brand)) return ApiError.BadRequest(http, "A brand is required to create a technician.");
+    if (string.IsNullOrWhiteSpace(dto.Name)) return ApiError.BadRequest(http, "Technician name is required.");
+
+    var code = GenerateTechCode();
+    var tech = new Technician
+    {
+        Brand = brand,
+        Name = dto.Name.Trim(),
+        Phone = dto.Phone,
+        Email = dto.Email,
+        LoginCodeHash = Sburson.Shared.Auth.PasswordHasher.Hash(code),
+        IsActive = true,
+    };
+    db.Technicians.Add(tech);
+    await db.SaveChangesAsync();
+    // loginCode is returned exactly once — the owner shares it with the tech.
+    return Results.Created($"/api/technicians/{tech.Id}",
+        new { tech.Id, tech.Name, tech.Phone, tech.Email, tech.IsActive, loginCode = code });
+});
+
+app.MapPut("/api/technicians/{id:int}", async (int id, [FromBody] UpdateTechnicianDto dto, HttpContext http, AppDbContext db) =>
+{
+    var tech = await db.Technicians.FindAsync(id);
+    if (tech is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && tech.Brand != scope) return Results.NotFound();
+
+    if (dto.Name is not null) tech.Name = dto.Name.Trim();
+    if (dto.Phone is not null) tech.Phone = dto.Phone;
+    if (dto.Email is not null) tech.Email = dto.Email;
+    if (dto.IsActive.HasValue) tech.IsActive = dto.IsActive.Value;
+    tech.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { tech.Id, tech.Name, tech.Phone, tech.Email, tech.IsActive });
+});
+
+// Regenerate a tech's login code (lost code / rotate). Returns the new code once.
+app.MapPost("/api/technicians/{id:int}/code", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var tech = await db.Technicians.FindAsync(id);
+    if (tech is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && tech.Brand != scope) return Results.NotFound();
+
+    var code = GenerateTechCode();
+    tech.LoginCodeHash = Sburson.Shared.Auth.PasswordHasher.Hash(code);
+    tech.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { loginCode = code });
+});
+
+app.MapDelete("/api/technicians/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var tech = await db.Technicians.FindAsync(id);
+    if (tech is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && tech.Brand != scope) return Results.NotFound();
+    db.Technicians.Remove(tech);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
+
+// ── Tech mode (mobile; authenticated by a signed tech bearer token) ───────
+// Public paths (not admin-gated); each call carries the token minted at login.
+app.MapPost("/api/tech/login", [EnableRateLimiting("submit")] async (
+    [FromBody] TechLoginDto dto,
+    HttpContext http,
+    AppDbContext db,
+    DIYHelper2.Api.Services.TechTokenService tokens) =>
+{
+    var brand = BrandFromHeader(http);
+    var code = (dto.Code ?? "").Trim();
+    if (string.IsNullOrEmpty(code)) return ApiError.BadRequest(http, "A login code is required.");
+
+    // Verify the code against each active tech in the brand. N is a single
+    // crew, so the per-row BCrypt cost is fine; we don't short-circuit early so
+    // timing doesn't leak how many techs exist.
+    var techs = await db.Technicians
+        .Where(t => t.Brand == brand && t.IsActive && t.LoginCodeHash != null)
+        .Select(t => new { t.Id, t.Name, t.LoginCodeHash })
+        .ToListAsync();
+
+    int matchedId = 0;
+    string matchedName = "";
+    foreach (var t in techs)
+    {
+        if (Sburson.Shared.Auth.PasswordHasher.Verify(code, t.LoginCodeHash!) && matchedId == 0)
+        {
+            matchedId = t.Id;
+            matchedName = t.Name;
+        }
+    }
+    if (matchedId == 0)
+        return Results.Json(new { error = "That code isn't valid.", code = "tech_unauthorized" }, statusCode: 401);
+
+    var token = tokens.Issue(matchedId, brand);
+    return Results.Ok(new { token, technicianId = matchedId, name = matchedName });
+});
+
+app.MapGet("/api/tech/jobs", async (
+    HttpContext http, AppDbContext db, DIYHelper2.Api.Services.TechTokenService tokens) =>
+{
+    var who = TechPrincipalOf(http, tokens);
+    if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
+
+    var jobs = await db.HelpRequests
+        .Where(r => r.Brand == who.Brand && r.AssignedTechId == who.TechId)
+        .OrderBy(r => r.Status == "completed" || r.Status == "cancelled")   // active first
+        .ThenBy(r => r.ScheduledFor ?? r.CreatedAt)
+        .Select(r => new
+        {
+            r.Id,
+            r.ProjectTitle,
+            r.ServiceType,
+            r.Status,
+            r.CustomerName,
+            r.CustomerPhone,
+            r.ScheduledFor,
+            r.PreferredWindow,
+            r.TechEtaMinutes,
+            r.CreatedAt,
+        })
+        .ToListAsync();
+    return Results.Ok(jobs);
+});
+
+app.MapGet("/api/tech/jobs/{id:int}", async (
+    int id, HttpContext http, AppDbContext db, DIYHelper2.Api.Services.TechTokenService tokens) =>
+{
+    var who = TechPrincipalOf(http, tokens);
+    if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
+
+    return Results.Ok(new
+    {
+        r.Id,
+        r.ProjectTitle,
+        r.ServiceType,
+        r.Status,
+        r.CustomerName,
+        r.CustomerPhone,
+        r.CustomerEmail,
+        r.UserDescription,
+        r.ProjectData,
+        r.ImageBase64,
+        r.ScheduledFor,
+        r.PreferredWindow,
+        r.TechEtaMinutes,
+        r.BeforePhotoBase64,
+        r.AfterPhotoBase64,
+        r.SignatureBase64,
+        r.CompletionNotes,
+        r.CompletedAt,
+        r.CreatedAt,
+    });
+});
+
+app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
+    int id, [FromBody] TechJobUpdateDto dto, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.TechTokenService tokens,
+    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices, ILogger<Program> logger) =>
+{
+    var who = TechPrincipalOf(http, tokens);
+    if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
+
+    // Guard oversize images the same way the customer submit does.
+    foreach (var img in new[] { dto.BeforePhotoBase64, dto.AfterPhotoBase64, dto.SignatureBase64 })
+    {
+        if (!string.IsNullOrEmpty(img) && img.Length > MediaValidation.MaxBase64LengthPerItem)
+            return ApiError.BadRequest(http, "An attached image exceeds the maximum size.");
+    }
+
+    if (dto.Status is not null) r.Status = dto.Status;
+    if (dto.TechEtaMinutes.HasValue)
+        r.TechEtaMinutes = dto.TechEtaMinutes.Value < 0 ? null : dto.TechEtaMinutes.Value;
+    if (dto.CompletionNotes is not null) r.CompletionNotes = dto.CompletionNotes;
+    if (dto.BeforePhotoBase64 is not null) r.BeforePhotoBase64 = dto.BeforePhotoBase64;
+    if (dto.AfterPhotoBase64 is not null) r.AfterPhotoBase64 = dto.AfterPhotoBase64;
+    if (dto.SignatureBase64 is not null) r.SignatureBase64 = dto.SignatureBase64;
+    if (dto.Status == "completed" && r.CompletedAt is null) r.CompletedAt = DateTime.UtcNow;
+    r.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    if (r.Status == "completed") await TrySyncInvoiceAsync(invoices, db, r, logger);
+    return Results.Ok(new { r.Id, r.Status, r.TechEtaMinutes, r.CompletedAt });
+});
+
+// ── Price book (owner-managed flat-rate items; admin-gated) ───────────────
+app.MapGet("/api/pricebook", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var q = db.PriceBookItems.AsQueryable();
+    if (scope is not null) q = q.Where(p => p.Brand == scope);
+    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(p => p.Brand == brand);
+    var items = await q.OrderBy(p => p.Name)
+        .Select(p => new { p.Id, p.Brand, p.Name, p.DefaultPrice, p.IsActive })
+        .ToListAsync();
+    return Results.Ok(items);
+});
+
+app.MapPost("/api/pricebook", async ([FromBody] PriceBookItemDto dto, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var brand = scope ?? dto.Brand?.Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(brand)) return ApiError.BadRequest(http, "A brand is required.");
+    if (string.IsNullOrWhiteSpace(dto.Name)) return ApiError.BadRequest(http, "An item name is required.");
+
+    var item = new PriceBookItem
+    {
+        Brand = brand,
+        Name = dto.Name.Trim(),
+        DefaultPrice = dto.DefaultPrice ?? 0m,
+        IsActive = true,
+    };
+    db.PriceBookItems.Add(item);
+    await db.SaveChangesAsync();
+    return Results.Created($"/api/pricebook/{item.Id}",
+        new { item.Id, item.Name, item.DefaultPrice, item.IsActive });
+});
+
+app.MapPut("/api/pricebook/{id:int}", async (int id, [FromBody] PriceBookItemDto dto, HttpContext http, AppDbContext db) =>
+{
+    var item = await db.PriceBookItems.FindAsync(id);
+    if (item is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && item.Brand != scope) return Results.NotFound();
+    if (dto.Name is not null) item.Name = dto.Name.Trim();
+    if (dto.DefaultPrice.HasValue) item.DefaultPrice = dto.DefaultPrice.Value;
+    if (dto.IsActive.HasValue) item.IsActive = dto.IsActive.Value;
+    item.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { item.Id, item.Name, item.DefaultPrice, item.IsActive });
+});
+
+app.MapDelete("/api/pricebook/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var item = await db.PriceBookItems.FindAsync(id);
+    if (item is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && item.Brand != scope) return Results.NotFound();
+    db.PriceBookItems.Remove(item);
+    await db.SaveChangesAsync();
+    return Results.NoContent();
+});
+
+// Owner sends a quote for a job. PUT (not POST) so it falls under the admin gate
+// on /api/help-requests; POST there is the public customer-create flow. Computes
+// the total server-side from the submitted lines so the client can't disagree.
+app.MapPut("/api/help-requests/{id:int}/quote", async (
+    int id, [FromBody] SendQuoteDto dto, HttpContext http, AppDbContext db) =>
+{
+    var request = await db.HelpRequests.FindAsync(id);
+    if (request is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && request.Brand != scope) return Results.NotFound();
+
+    var lines = dto.Lines ?? new List<QuoteLineDto>();
+    if (lines.Count == 0) return ApiError.BadRequest(http, "A quote needs at least one line.");
+
+    decimal total = 0m;
+    var clean = new List<object>();
+    foreach (var l in lines)
+    {
+        var qty = l.Quantity is null or < 1 ? 1 : l.Quantity.Value;
+        var amount = l.Amount ?? 0m;
+        total += amount * qty;
+        clean.Add(new { description = l.Description ?? "", amount, quantity = qty });
+    }
+
+    request.QuoteLinesJson = System.Text.Json.JsonSerializer.Serialize(clean);
+    request.QuoteTotal = total;
+    request.QuoteStatus = "sent";
+    request.QuoteSentAt = DateTime.UtcNow;
+    request.QuoteRespondedAt = null;
+    request.UpdatedAt = DateTime.UtcNow;
+    await db.SaveChangesAsync();
+    return Results.Ok(new { request.Id, request.QuoteTotal, request.QuoteStatus });
+});
+
+// ── Accounting OAuth (QuickBooks Online) ──────────────────────────────────
+// Connect is admin-gated; callback is public but validated by the signed state
+// (and QBO adds a realmId query param identifying the connected company).
+app.MapGet("/api/accounting/qbo/connect", (
+    HttpContext http,
+    DIYHelper2.Api.Integrations.Billing.QuickBooksOptions qbo,
+    DIYHelper2.Api.Integrations.Crm.CrmTokenProtector protector) =>
+{
+    if (!qbo.IsConfigured)
+        return Results.Problem("QuickBooks integration is not configured on this server.", statusCode: 503);
+    var slug = BrandScopeOf(http) ?? http.Request.Query["brand"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(slug))
+        return Results.BadRequest(new { error = "brand is required" });
+
+    var expiry = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds();
+    var state = protector.Protect($"{slug}|{expiry}");
+    var url = "https://appcenter.intuit.com/connect/oauth2"
+        + "?response_type=code"
+        + "&client_id=" + Uri.EscapeDataString(qbo.ClientId!)
+        + "&redirect_uri=" + Uri.EscapeDataString(qbo.RedirectUri!)
+        + "&scope=" + Uri.EscapeDataString("com.intuit.quickbooks.accounting")
+        + "&state=" + Uri.EscapeDataString(state);
+    return Results.Redirect(url);
+});
+
+app.MapGet("/api/accounting/qbo/callback", async (
+    HttpContext http,
+    DIYHelper2.Api.Integrations.Crm.CrmTokenProtector protector,
+    DIYHelper2.Api.Integrations.Billing.QuickBooksTokenService tokens,
+    AppDbContext db,
+    ILogger<Program> logger) =>
+{
+    var code = http.Request.Query["code"].FirstOrDefault();
+    var state = http.Request.Query["state"].FirstOrDefault();
+    var realmId = http.Request.Query["realmId"].FirstOrDefault();
+    if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state) || string.IsNullOrEmpty(realmId))
+        return Results.BadRequest(new { error = "missing code, state, or realmId" });
+
+    string slug;
+    try
+    {
+        var parts = protector.Unprotect(state).Split('|');
+        slug = parts[0];
+        if (parts.Length < 2 || !long.TryParse(parts[1], out var exp)
+            || DateTimeOffset.FromUnixTimeSeconds(exp) < DateTimeOffset.UtcNow)
+            return Results.BadRequest(new { error = "state expired — please retry the connection" });
+    }
+    catch { return Results.BadRequest(new { error = "invalid state" }); }
+
+    var tok = await tokens.ExchangeCodeAsync(code, http.RequestAborted);
+    if (tok is null) return Results.Problem("Token exchange with QuickBooks failed.", statusCode: 502);
+
+    var conn = await db.BrandAccountingConnections.FirstOrDefaultAsync(c => c.BrandSlug == slug);
+    if (conn is null)
+    {
+        conn = new DIYHelper2.Api.Models.BrandAccountingConnection { BrandSlug = slug };
+        db.BrandAccountingConnections.Add(conn);
+    }
+    conn.Provider = 1; // QuickBooks Online
+    conn.RealmId = realmId;
+    conn.IsActive = true;
+    tokens.ApplyTokens(conn, tok);
+    await db.SaveChangesAsync();
+    logger.LogInformation("QuickBooks connected for brand {Brand}", slug);
+
+    return Results.Content(
+        "<!doctype html><html><body style=\"font-family:sans-serif;text-align:center;padding-top:3rem\">"
+        + "<h2>QuickBooks connected ✔</h2><p>Completed jobs with an approved quote will now sync as invoices. You can close this window.</p>"
+        + "</body></html>", "text/html");
+});
+
+// Whether the active brand has a live QuickBooks connection (drives the console
+// button state). Admin-gated via the /api/accounting prefix.
+app.MapGet("/api/accounting/status", async (HttpContext http, AppDbContext db) =>
+{
+    var slug = BrandScopeOf(http) ?? http.Request.Query["brand"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(slug)) return Results.Ok(new { connected = false });
+    var conn = await db.BrandAccountingConnections.FirstOrDefaultAsync(c => c.BrandSlug == slug && c.IsActive);
+    return Results.Ok(new { connected = conn is not null, realmId = conn?.RealmId });
+});
+
+// ── Ops summary (job costing + KPIs; admin-gated) ─────────────────────────
+// The "did we make money?" view the owner can't get from QuickBooks alone:
+// revenue (approved-quote totals), cost (labor + parts), margin, and jobs/tech.
+app.MapGet("/api/ops/summary", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
+{
+    var scope = BrandScopeOf(http);
+    var q = db.HelpRequests.AsQueryable();
+    if (scope is not null) q = q.Where(r => r.Brand == scope);
+    else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(r => r.Brand == brand);
+
+    var rows = await q.Select(r => new
+    {
+        r.Status,
+        r.QuoteStatus,
+        r.QuoteTotal,
+        r.LaborCost,
+        r.PartsCost,
+        r.AssignedTechId,
+    }).ToListAsync();
+
+    var completed = rows.Where(r => r.Status == "completed").ToList();
+    // Revenue counts approved quotes (the price the customer agreed to).
+    var revenue = rows.Where(r => r.QuoteStatus == "approved").Sum(r => r.QuoteTotal ?? 0m);
+    var cost = rows.Sum(r => (r.LaborCost ?? 0m) + (r.PartsCost ?? 0m));
+    var approvedCount = rows.Count(r => r.QuoteStatus == "approved");
+
+    // Jobs per assigned tech (names resolved client-side from the techs list).
+    var perTech = rows.Where(r => r.AssignedTechId != null)
+        .GroupBy(r => r.AssignedTechId!.Value)
+        .Select(g => new { techId = g.Key, jobs = g.Count() })
+        .ToList();
+
+    return Results.Ok(new
+    {
+        totalLeads = rows.Count,
+        completedJobs = completed.Count,
+        revenue,
+        cost,
+        margin = revenue - cost,
+        avgTicket = approvedCount > 0 ? Math.Round(revenue / approvedCount, 2) : 0m,
+        perTech,
+    });
 });
 
 // Brands available to the caller — powers the dashboard's brand filter.
@@ -1277,6 +2128,164 @@ app.MapGet("/api/brands", async (HttpContext http, AppDbContext db) =>
     return Results.Ok(new { isSuperAdmin = isSuper, brands });
 });
 
+// ── CRM OAuth (Jobber) ──────────────────────────────────────────────────
+// Two endpoints implement the OAuth 2.0 authorization-code flow that connects a
+// brand's Jobber account so leads push into it. /connect is admin-gated (the
+// operator starts it); /callback is public (Jobber redirects the browser to it)
+// but is protected by the signed, time-boxed `state` it must echo back.
+app.MapGet("/api/crm/jobber/connect", (
+    HttpContext http,
+    DIYHelper2.Api.Integrations.Crm.JobberOptions jobber,
+    DIYHelper2.Api.Integrations.Crm.CrmTokenProtector protector) =>
+{
+    if (!jobber.IsConfigured)
+        return Results.Problem("Jobber integration is not configured on this server.", statusCode: 503);
+
+    // A scoped dashboard login connects its own brand; the super-admin must name
+    // one via ?brand=. Prevents a super-admin from connecting the wrong tenant.
+    var slug = BrandScopeOf(http) ?? http.Request.Query["brand"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(slug))
+        return Results.BadRequest(new { error = "brand is required" });
+
+    // Signed + encrypted state carries the brand across the redirect and proves
+    // the callback belongs to a flow we started. Valid for 10 minutes.
+    var expiry = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds();
+    var state = protector.Protect($"{slug}|{expiry}");
+
+    var url = "https://api.getjobber.com/api/oauth/authorize"
+        + "?response_type=code"
+        + "&client_id=" + Uri.EscapeDataString(jobber.ClientId!)
+        + "&redirect_uri=" + Uri.EscapeDataString(jobber.RedirectUri!)
+        + "&state=" + Uri.EscapeDataString(state);
+    return Results.Redirect(url);
+});
+
+app.MapGet("/api/crm/jobber/callback", async (
+    HttpContext http,
+    DIYHelper2.Api.Integrations.Crm.CrmTokenProtector protector,
+    DIYHelper2.Api.Integrations.Crm.JobberTokenService tokens,
+    AppDbContext db,
+    ILogger<Program> logger) =>
+{
+    var code = http.Request.Query["code"].FirstOrDefault();
+    var state = http.Request.Query["state"].FirstOrDefault();
+    if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
+        return Results.BadRequest(new { error = "missing code or state" });
+
+    // Recover + validate the brand from the signed state.
+    string slug;
+    try
+    {
+        var parts = protector.Unprotect(state).Split('|');
+        slug = parts[0];
+        if (parts.Length < 2 || !long.TryParse(parts[1], out var exp)
+            || DateTimeOffset.FromUnixTimeSeconds(exp) < DateTimeOffset.UtcNow)
+            return Results.BadRequest(new { error = "state expired — please retry the connection" });
+    }
+    catch
+    {
+        return Results.BadRequest(new { error = "invalid state" });
+    }
+
+    var tok = await tokens.ExchangeCodeAsync(code, http.RequestAborted);
+    if (tok is null)
+        return Results.Problem("Token exchange with Jobber failed.", statusCode: 502);
+
+    var conn = await db.BrandCrmConnections.FirstOrDefaultAsync(c => c.BrandSlug == slug);
+    if (conn is null)
+    {
+        conn = new DIYHelper2.Api.Models.BrandCrmConnection { BrandSlug = slug };
+        db.BrandCrmConnections.Add(conn);
+    }
+    conn.Provider = (int)DIYHelper2.Api.Integrations.Crm.CrmProvider.Jobber;
+    conn.IsActive = true;
+    tokens.ApplyTokens(conn, tok);
+    await db.SaveChangesAsync();
+    logger.LogInformation("Jobber CRM connected for brand {Brand}", slug);
+
+    return Results.Content(
+        "<!doctype html><html><body style=\"font-family:sans-serif;text-align:center;padding-top:3rem\">"
+        + "<h2>Jobber connected ✔</h2><p>New leads for this brand will now flow into Jobber. You can close this window.</p>"
+        + "</body></html>", "text/html");
+});
+
+// ── CRM OAuth (Housecall Pro) ───────────────────────────────────────────
+// Mirrors the Jobber flow. Housecall's authorize page lives on pro.housecallpro.com
+// (consent) while token exchange is on api.housecallpro.com. OAuth is partner-only
+// and the connected account must be on the MAX plan for leads to land.
+app.MapGet("/api/crm/housecall/connect", (
+    HttpContext http,
+    DIYHelper2.Api.Integrations.Crm.HousecallOptions housecall,
+    DIYHelper2.Api.Integrations.Crm.CrmTokenProtector protector) =>
+{
+    if (!housecall.IsConfigured)
+        return Results.Problem("Housecall Pro integration is not configured on this server.", statusCode: 503);
+
+    var slug = BrandScopeOf(http) ?? http.Request.Query["brand"].FirstOrDefault();
+    if (string.IsNullOrWhiteSpace(slug))
+        return Results.BadRequest(new { error = "brand is required" });
+
+    var expiry = DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds();
+    var state = protector.Protect($"{slug}|{expiry}");
+
+    var url = "https://pro.housecallpro.com/oauth/authorize"
+        + "?response_type=code"
+        + "&approval_prompt=auto"
+        + "&client_id=" + Uri.EscapeDataString(housecall.ClientId!)
+        + "&redirect_uri=" + Uri.EscapeDataString(housecall.RedirectUri!)
+        + "&scope=" + Uri.EscapeDataString(housecall.Scope)
+        + "&state=" + Uri.EscapeDataString(state);
+    return Results.Redirect(url);
+});
+
+app.MapGet("/api/crm/housecall/callback", async (
+    HttpContext http,
+    DIYHelper2.Api.Integrations.Crm.CrmTokenProtector protector,
+    DIYHelper2.Api.Integrations.Crm.HousecallTokenService tokens,
+    AppDbContext db,
+    ILogger<Program> logger) =>
+{
+    var code = http.Request.Query["code"].FirstOrDefault();
+    var state = http.Request.Query["state"].FirstOrDefault();
+    if (string.IsNullOrEmpty(code) || string.IsNullOrEmpty(state))
+        return Results.BadRequest(new { error = "missing code or state" });
+
+    string slug;
+    try
+    {
+        var parts = protector.Unprotect(state).Split('|');
+        slug = parts[0];
+        if (parts.Length < 2 || !long.TryParse(parts[1], out var exp)
+            || DateTimeOffset.FromUnixTimeSeconds(exp) < DateTimeOffset.UtcNow)
+            return Results.BadRequest(new { error = "state expired — please retry the connection" });
+    }
+    catch
+    {
+        return Results.BadRequest(new { error = "invalid state" });
+    }
+
+    var tok = await tokens.ExchangeCodeAsync(code, http.RequestAborted);
+    if (tok is null)
+        return Results.Problem("Token exchange with Housecall Pro failed.", statusCode: 502);
+
+    var conn = await db.BrandCrmConnections.FirstOrDefaultAsync(c => c.BrandSlug == slug);
+    if (conn is null)
+    {
+        conn = new DIYHelper2.Api.Models.BrandCrmConnection { BrandSlug = slug };
+        db.BrandCrmConnections.Add(conn);
+    }
+    conn.Provider = (int)DIYHelper2.Api.Integrations.Crm.CrmProvider.HousecallPro;
+    conn.IsActive = true;
+    tokens.ApplyTokens(conn, tok);
+    await db.SaveChangesAsync();
+    logger.LogInformation("Housecall Pro CRM connected for brand {Brand}", slug);
+
+    return Results.Content(
+        "<!doctype html><html><body style=\"font-family:sans-serif;text-align:center;padding-top:3rem\">"
+        + "<h2>Housecall Pro connected ✔</h2><p>New leads for this brand will now appear in your Job Inbox. You can close this window.</p>"
+        + "</body></html>", "text/html");
+});
+
 // Brand Studio: scrape a customer's website to seed a white-label brand
 // (colors, logo, company name, fonts, legal links). Admin-gated (path starts
 // with /api/brands) and SSRF-guarded via the typed client. Returns a draft the
@@ -1292,6 +2301,23 @@ app.MapGet("/api/brands/extract", async (
 
     var result = await extractor.ExtractAsync(uri);
     return Results.Ok(result);
+});
+
+// Same-origin image proxy so the Brand Studio can draw a remote logo onto a
+// canvas (to build an app icon) without cross-origin taint blocking export.
+// Admin-gated (path starts with /api/brands) and SSRF-guarded via the client.
+app.MapGet("/api/brands/proxy-image", async (
+    [FromQuery] string? url, HttpContext http,
+    DIYHelper2.Api.Integrations.BrandExtractionClient client) =>
+{
+    if (string.IsNullOrWhiteSpace(url)
+        || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri)
+        || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        return ApiError.BadRequest(http, "A valid http(s) image URL is required.");
+
+    var image = await client.FetchImageAsync(uri);
+    if (image is null) return Results.NotFound();
+    return Results.File(image.Value.Bytes, image.Value.ContentType);
 });
 
 // ── Push notifications ──────────────────────────────────────────────
@@ -2334,11 +3360,20 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
 // (open in Dev/Testing; in prod needs Telemetry:AllowDigestInProd + a matching
 // X-Admin-Token header).
 app.MapPost("/api/telemetry/events", async (
+    HttpContext http,
     Sburson.Shared.Telemetry.TelemetryBatchDto? body,
     DIYHelper2.Api.Services.Telemetry.TelemetryIngestService ingest,
     CancellationToken ct) =>
 {
-    var result = await ingest.IngestAsync(body, ct);
+    // White-label attribution for per-brand MAU billing. Sourced from the
+    // X-Brand header (never the body) so a client can't spoof another tenant's
+    // usage. Left null when absent — unlike leads we do NOT default to the
+    // flagship, so events from pre-brand clients surface as "(unattributed)" in
+    // the billing rollup instead of silently padding DIYHelper's count.
+    var brand = (http.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
+    if (string.IsNullOrEmpty(brand)) brand = null;
+
+    var result = await ingest.IngestAsync(body, brand, ct);
     return Results.Accepted(value: new { ingested = result.Ingested, dropped = result.Dropped });
 });
 
@@ -2355,6 +3390,24 @@ app.MapGet("/api/admin/usage-digest", async (
     if (!Sburson.Shared.Telemetry.UsageDigestGate.IsAllowed(env, cfg, token))
         return Results.NotFound();
     return Results.Ok(await digest.BuildAsync(days, topN, ct));
+});
+
+// Per-brand monthly-active-install rollup — the billing number for white-label
+// per-brand MAU pricing. COUNT(DISTINCT AnonId) per brand over the window, plus
+// event totals; untagged traffic shows as "(unattributed)". Same access gate as
+// the usage digest (open in Dev/Testing; in prod needs the admin token).
+app.MapGet("/api/admin/brand-mau", async (
+    HttpContext http,
+    DIYHelper2.Api.Services.Telemetry.UsageDigestService digest,
+    IWebHostEnvironment env,
+    IConfiguration cfg,
+    CancellationToken ct,
+    int days = 30) =>
+{
+    var token = http.Request.Headers[Sburson.Shared.Telemetry.UsageDigestGate.AdminTokenHeader].ToString();
+    if (!Sburson.Shared.Telemetry.UsageDigestGate.IsAllowed(env, cfg, token))
+        return Results.NotFound();
+    return Results.Ok(await digest.BuildBrandMauAsync(days, ct));
 });
 
 // Emails a newly-created lead to its brand's configured recipient. Best-effort:
@@ -2442,13 +3495,82 @@ public record CreateHelpRequestDto(
     [property: JsonPropertyName("projectTitle")] string ProjectTitle,
     [property: JsonPropertyName("userDescription")] string UserDescription,
     [property: JsonPropertyName("projectData")] string ProjectData,
-    [property: JsonPropertyName("imageBase64")] string? ImageBase64
+    [property: JsonPropertyName("imageBase64")] string? ImageBase64,
+    // Booking details (optional — a plain "call a pro" lead omits them).
+    [property: JsonPropertyName("serviceType")] string? ServiceType = null,
+    [property: JsonPropertyName("preferredDate")] DateTime? PreferredDate = null,
+    [property: JsonPropertyName("preferredWindow")] string? PreferredWindow = null
 );
 
 public record UpdateHelpRequestDto(
     [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("notes")] string? Notes,
-    [property: JsonPropertyName("followUpDate")] DateTime? FollowUpDate
+    [property: JsonPropertyName("followUpDate")] DateTime? FollowUpDate,
+    // Scheduling fields set by the operator to drive the customer's "My Jobs"
+    // tracker. TechEtaMinutes uses a sentinel of -1 to explicitly clear.
+    [property: JsonPropertyName("scheduledFor")] DateTime? ScheduledFor = null,
+    [property: JsonPropertyName("techEtaMinutes")] int? TechEtaMinutes = null,
+    // Assignment. -1 explicitly unassigns; any other value assigns that tech.
+    [property: JsonPropertyName("assignedTechId")] int? AssignedTechId = null,
+    // Job costing (owner-entered). Any value >= 0 sets it.
+    [property: JsonPropertyName("laborCost")] decimal? LaborCost = null,
+    [property: JsonPropertyName("partsCost")] decimal? PartsCost = null
+);
+
+public record CreateTechnicianDto(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("phone")] string? Phone,
+    [property: JsonPropertyName("email")] string? Email,
+    [property: JsonPropertyName("brand")] string? Brand
+);
+
+public record UpdateTechnicianDto(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("phone")] string? Phone,
+    [property: JsonPropertyName("email")] string? Email,
+    [property: JsonPropertyName("isActive")] bool? IsActive
+);
+
+public record TechLoginDto(
+    [property: JsonPropertyName("code")] string? Code
+);
+
+public record TechJobUpdateDto(
+    [property: JsonPropertyName("status")] string? Status,
+    [property: JsonPropertyName("techEtaMinutes")] int? TechEtaMinutes,
+    [property: JsonPropertyName("completionNotes")] string? CompletionNotes,
+    [property: JsonPropertyName("beforePhotoBase64")] string? BeforePhotoBase64,
+    [property: JsonPropertyName("afterPhotoBase64")] string? AfterPhotoBase64,
+    [property: JsonPropertyName("signatureBase64")] string? SignatureBase64
+);
+
+public record PriceBookItemDto(
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("defaultPrice")] decimal? DefaultPrice,
+    [property: JsonPropertyName("isActive")] bool? IsActive,
+    [property: JsonPropertyName("brand")] string? Brand
+);
+
+public record QuoteLineDto(
+    [property: JsonPropertyName("description")] string? Description,
+    [property: JsonPropertyName("amount")] decimal? Amount,
+    [property: JsonPropertyName("quantity")] int? Quantity
+);
+
+public record SendQuoteDto(
+    [property: JsonPropertyName("lines")] List<QuoteLineDto>? Lines
+);
+
+public record QuoteDecisionDto(
+    [property: JsonPropertyName("decision")] string? Decision
+);
+
+public record MembershipCheckoutDto(
+    [property: JsonPropertyName("planId")] string? PlanId,
+    [property: JsonPropertyName("customerEmail")] string? CustomerEmail,
+    [property: JsonPropertyName("customerName")] string? CustomerName,
+    [property: JsonPropertyName("successUrl")] string? SuccessUrl,
+    [property: JsonPropertyName("cancelUrl")] string? CancelUrl
 );
 
 public record RegisterPushDto(

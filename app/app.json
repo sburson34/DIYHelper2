@@ -49,6 +49,7 @@
     },
     "plugins": [
       "expo-splash-screen",
+      "expo-font",
       "expo-audio",
       "expo-speech-recognition",
       "expo-sharing",

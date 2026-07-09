@@ -5,6 +5,7 @@
   "scheme": "acmehome",
   "bundleId": "com.acme.homehelp",
   "companyShortName": "Acme",
+  "fontFamily": "Poppins",
   "releasePrefix": "acme-home",
   "privacyPolicyUrl": "https://api.diyhelper.org/privacy-policy.html",
   "termsUrl": "https://api.diyhelper.org/terms-of-service.html",

@@ -43,6 +43,35 @@ public class Brand
     /// brand seeded without a password).</summary>
     public bool IsActive { get; set; } = true;
 
+    // ── Customer-app configuration (served by the public GET /api/config) ──
+    // These drive the branded mobile app's behavior per tenant so a plumber and
+    // a cleaner can ship the same binary with different copy/features.
+
+    /// <summary>Public phone number the app's "Call us" button dials. Null hides
+    /// the button.</summary>
+    public string? Phone { get; set; }
+
+    /// <summary>Deep link to the company's Google review page. The app funnels
+    /// happy customers here after a completed job. Null hides the review prompt.</summary>
+    public string? ReviewUrl { get; set; }
+
+    /// <summary>JSON array of service categories offered, e.g.
+    /// <c>["Plumbing","Drain cleaning","Water heaters"]</c>. Populates the
+    /// booking screen's service picker. Null/empty → a single generic option.</summary>
+    public string? ServiceTypesJson { get; set; }
+
+    /// <summary>JSON object of per-brand customer-app feature toggles
+    /// (booking, triage, appointmentTracking, reviews, referrals,
+    /// maintenanceReminders, memberships). Missing keys fall back to the
+    /// server defaults in <c>BrandConfigDefaults</c>. Lets a tenant turn a
+    /// feature off without a new build.</summary>
+    public string? FeaturesJson { get; set; }
+
+    /// <summary>Whether the paid membership / maintenance-plan flow is offered.
+    /// Requires the billing seam to be configured (Stripe) to actually charge;
+    /// off by default.</summary>
+    public bool MembershipEnabled { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

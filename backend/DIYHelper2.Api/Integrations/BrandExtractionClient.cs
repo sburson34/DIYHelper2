@@ -28,7 +28,8 @@ public record BrandExtractionResult(
 /// </summary>
 public class BrandExtractionClient
 {
-    private const int MaxHtmlBytes = 3 * 1024 * 1024;
+    private const int MaxHtmlBytes = 8 * 1024 * 1024;   // also caps proxied logo bytes
+    private const int MaxImageBytes = 6 * 1024 * 1024;
     private const int MaxCssFiles = 3;
 
     private readonly HttpClient _http;
@@ -94,6 +95,31 @@ public class BrandExtractionClient
             primary, secondary, accent, ranked,
             logos.FirstOrDefault(), logos,
             fonts, privacy, terms, warnings);
+    }
+
+    /// <summary>
+    /// Fetches a remote image (a logo) so the browser can composite it into an
+    /// app icon without CORS taint — the Brand Studio requests it same-origin
+    /// through our proxy. Validates the content type is an image and caps size.
+    /// SSRF-guarded via the same handler. Null on any failure.
+    /// </summary>
+    public async Task<(byte[] Bytes, string ContentType)?> FetchImageAsync(Uri url, CancellationToken ct = default)
+    {
+        try
+        {
+            using var resp = await _http.GetAsync(url, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+            var contentType = resp.Content.Headers.ContentType?.MediaType ?? "";
+            if (!contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return null;
+            var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            if (bytes.Length == 0 || bytes.Length > MaxImageBytes) return null;
+            return (bytes, contentType);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Brand image proxy failed to fetch {Url}", url);
+            return null;
+        }
     }
 
     // ── Color ranking ────────────────────────────────────────────────
