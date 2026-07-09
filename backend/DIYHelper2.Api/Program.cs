@@ -31,6 +31,7 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using static DIYHelper2.Api.Endpoints.EndpointHelpers;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddSburonSentry(opts =>
@@ -272,6 +273,14 @@ builder.Services.AddSingleton(_ => new Sburson.Shared.Mobile.DeviceQuotaOptions
 builder.Services.AddSingleton<Sburson.Shared.Mobile.DeviceQuotaService>();
 // Process-wide daily backstop on aggregate AI call volume (runaway-spend guard).
 builder.Services.AddSingleton<DIYHelper2.Api.Services.AiSpendGuard>();
+
+// Post-build-populated config (secrets bundle values), the translate cache and
+// the hazardous-chemicals list — singletons so endpoint handlers inject them
+// instead of closing over Program.cs locals (prerequisite for the endpoint-
+// group split under Endpoints/).
+builder.Services.AddSingleton<DIYHelper2.Api.Services.RuntimeConfigStore>();
+builder.Services.AddSingleton<DIYHelper2.Api.Services.TranslationCache>();
+builder.Services.AddSingleton<DIYHelper2.Api.Data.HazardousChemicalsProvider>();
 builder.Services.AddSburonEmail(builder.Configuration);
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
@@ -500,27 +509,15 @@ if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DATABASE_URL"))
     Environment.SetEnvironmentVariable("DATABASE_URL", dbUrlFromBundle);
 }
 
-// Affiliate program configuration
-// Env vars override the defaults; set AMAZON_ASSOCIATE_TAG and HOMEDEPOT_IMPACT_ID
-// in EB when the affiliate programs are approved. Empty value disables the param
-// so the URL is still a valid search link (no broken placeholder reaches users).
-string amazonAssociateTag = Environment.GetEnvironmentVariable("AMAZON_ASSOCIATE_TAG") ?? "diyhelper20-20";
-string homeDepotImpactId = Environment.GetEnvironmentVariable("HOMEDEPOT_IMPACT_ID") ?? "";
-
-// Google Cloud API key (used by Google Translate v2). Stored under key
-// "GOOGLE_API_KEY" (legacy "GOOGLE_TRANSLATE_API_KEY" is also accepted).
-string? googleApiKey = SecretOrEnv("GOOGLE_API_KEY", "GOOGLE_TRANSLATE_API_KEY");
-
-// In-memory cache keyed "source|target|text" → translated. Lives for the
-// process lifetime; per-device cache in AsyncStorage handles long-term reuse.
-var translationCache = new System.Collections.Concurrent.ConcurrentDictionary<string, string>();
-var translateHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-
-// Captured once for the AI endpoint handlers below: the process-wide daily AI
-// spend backstop and a logger for it (avoids threading these through every
-// handler's parameter list).
-var aiSpendGuard = app.Services.GetRequiredService<DIYHelper2.Api.Services.AiSpendGuard>();
-var aiCapLogger = app.Services.GetRequiredService<ILogger<Program>>();
+// Affiliate + Google API config lands in RuntimeConfigStore so handlers can
+// inject it. Env vars override the defaults; empty value disables the URL
+// param so shopping links stay valid search links. The Google key ("GOOGLE_API_KEY",
+// legacy "GOOGLE_TRANSLATE_API_KEY") may come from the Secrets Manager bundle,
+// which is only available here — after host build.
+var runtimeConfig = app.Services.GetRequiredService<DIYHelper2.Api.Services.RuntimeConfigStore>();
+runtimeConfig.AmazonAssociateTag = Environment.GetEnvironmentVariable("AMAZON_ASSOCIATE_TAG") ?? "diyhelper20-20";
+runtimeConfig.HomeDepotImpactId = Environment.GetEnvironmentVariable("HOMEDEPOT_IMPACT_ID") ?? "";
+runtimeConfig.GoogleApiKey = SecretOrEnv("GOOGLE_API_KEY", "GOOGLE_TRANSLATE_API_KEY");
 
 // Database schema setup.
 //  - Postgres: apply EF migrations (versioned, checked in under Migrations/).
@@ -754,26 +751,6 @@ app.MapGet("/readyz", async (AppDbContext db, CancellationToken ct) =>
 var communityProjects = new System.Collections.Concurrent.ConcurrentQueue<CommunityProjectDto>();
 const int CommunityProjectsMax = 500;
 
-// Hazardous-chemical keyword list loaded once at startup for PubChem enrichment
-HashSet<string> hazardousChemicals;
-try
-{
-    var hazPath = Path.Combine(AppContext.BaseDirectory, "Data", "HazardousChemicals.json");
-    if (File.Exists(hazPath))
-    {
-        var list = JsonSerializer.Deserialize<List<string>>(File.ReadAllText(hazPath)) ?? new();
-        hazardousChemicals = new HashSet<string>(list.Select(s => s.ToLowerInvariant()));
-    }
-    else
-    {
-        hazardousChemicals = new HashSet<string>();
-    }
-}
-catch
-{
-    hazardousChemicals = new HashSet<string>();
-}
-
 app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     [FromBody] AnalyzeProjectRequest request,
     HttpContext context,
@@ -786,6 +763,9 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     DIYHelper2.Api.AI.ModerationService moderation,
     PlayIntegrityVerifier integrity,
     DeviceQuotaService quota,
+    DIYHelper2.Api.Services.AiSpendGuard aiSpendGuard,
+    DIYHelper2.Api.Services.RuntimeConfigStore runtimeConfig,
+    DIYHelper2.Api.Data.HazardousChemicalsProvider hazardousChemicalsProvider,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -795,7 +775,7 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
     {
-        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        logger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
         return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
     }
 
@@ -1018,12 +998,12 @@ IMPORTANT for outdoor / weather_sensitive / repair_type:
                     if (string.IsNullOrWhiteSpace(itemName)) continue;
 
                     var encoded = Uri.EscapeDataString(itemName);
-                    var amazonUrl = string.IsNullOrEmpty(amazonAssociateTag)
+                    var amazonUrl = string.IsNullOrEmpty(runtimeConfig.AmazonAssociateTag)
                         ? $"https://www.amazon.com/s?k={encoded}"
-                        : $"https://www.amazon.com/s?k={encoded}&tag={amazonAssociateTag}";
-                    var homeDepotUrl = string.IsNullOrEmpty(homeDepotImpactId)
+                        : $"https://www.amazon.com/s?k={encoded}&tag={runtimeConfig.AmazonAssociateTag}";
+                    var homeDepotUrl = string.IsNullOrEmpty(runtimeConfig.HomeDepotImpactId)
                         ? $"https://www.homedepot.com/s/{encoded}"
-                        : $"https://www.homedepot.com/s/{encoded}?NCNI-5&irclickid={homeDepotImpactId}";
+                        : $"https://www.homedepot.com/s/{encoded}?NCNI-5&irclickid={runtimeConfig.HomeDepotImpactId}";
                     affiliateLinks.Add(new
                     {
                         item = itemName,
@@ -1105,7 +1085,7 @@ IMPORTANT for outdoor / weather_sensitive / repair_type:
                 {
                     if (tool.ValueKind != JsonValueKind.String) continue;
                     var text = tool.GetString()?.ToLowerInvariant() ?? "";
-                    foreach (var chem in hazardousChemicals)
+                    foreach (var chem in hazardousChemicalsProvider.Names)
                     {
                         if (!text.Contains(chem) || !seen.Add(chem)) continue;
                         var data = await pubChem.LookupAsync(chem);
@@ -1149,6 +1129,7 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     DIYHelper2.Api.AI.ModerationService moderation,
     PlayIntegrityVerifier integrity,
     DeviceQuotaService quota,
+    DIYHelper2.Api.Services.AiSpendGuard aiSpendGuard,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -1158,7 +1139,7 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
     {
-        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        logger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
         return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
     }
 
@@ -1278,192 +1259,6 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
 
     return Results.Created($"/api/help-requests/{helpRequest.Id}", new { id = helpRequest.Id });
 });
-
-// Tenant scoping is applied by AdminAuthMiddleware, which sets Items["BrandScope"]
-// for a per-brand login (and Items["IsSuperAdmin"] for the operator). A scoped
-// caller only ever sees/edits their own brand's leads; cross-tenant ids 404
-// (not 403) so a scoped user can't probe another brand's id space.
-static string? BrandScopeOf(HttpContext http)
-    => http.Items.TryGetValue("BrandScope", out var s) ? s as string : null;
-
-// White-label attribution for public customer endpoints: always from the
-// X-Brand header (never the body), lowercased, defaulting to the flagship brand
-// for un-branded builds. Mirrors the inline logic in the booking handler.
-// Guard for the public Twilio webhooks: if TWILIO_WEBHOOK_TOKEN is set, require a
-// matching ?token= (which the operator bakes into the Twilio webhook URL). Unset
-// → allow, so local dev works without configuration.
-static bool WebhookTokenOk(HttpContext http)
-{
-    var expected = Environment.GetEnvironmentVariable("TWILIO_WEBHOOK_TOKEN");
-    if (string.IsNullOrEmpty(expected)) return true;
-    var provided = http.Request.Query["token"].FirstOrDefault();
-    return !string.IsNullOrEmpty(provided) && provided == expected;
-}
-
-// Validate a Stripe webhook signature ("Stripe-Signature: t=...,v1=...") by
-// recomputing HMAC-SHA256 over "{t}.{payload}" with the signing secret.
-static bool StripeSignatureValid(string payload, string? sigHeader, string secret)
-{
-    if (string.IsNullOrEmpty(sigHeader)) return false;
-    string? t = null;
-    var v1s = new List<string>();
-    foreach (var part in sigHeader.Split(','))
-    {
-        var kv = part.Split('=', 2);
-        if (kv.Length != 2) continue;
-        if (kv[0] == "t") t = kv[1];
-        else if (kv[0] == "v1") v1s.Add(kv[1]);
-    }
-    if (t is null || v1s.Count == 0) return false;
-
-    using var h = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(secret));
-    var computed = Convert.ToHexString(h.ComputeHash(System.Text.Encoding.UTF8.GetBytes($"{t}.{payload}")))
-        .ToLowerInvariant();
-    return v1s.Any(v => System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
-        System.Text.Encoding.UTF8.GetBytes(v), System.Text.Encoding.UTF8.GetBytes(computed)));
-}
-
-static string BrandFromHeader(HttpContext http)
-{
-    var slug = (http.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
-    return string.IsNullOrEmpty(slug) ? "diyhelper" : slug;
-}
-
-// Upsert the lightweight, password-less customer for a booking. Matches an
-// existing record newest-first by device, then by email (a returning customer on
-// a new install). Only ever fills/refreshes fields — never nulls a known value.
-static async Task UpsertCustomerAsync(
-    AppDbContext db, string brand, string? deviceId, string name, string email, string phone)
-{
-    Customer? existing = null;
-    if (!string.IsNullOrEmpty(deviceId))
-        existing = await db.Customers
-            .Where(c => c.Brand == brand && c.DeviceId == deviceId)
-            .OrderByDescending(c => c.UpdatedAt)
-            .FirstOrDefaultAsync();
-    if (existing is null && !string.IsNullOrWhiteSpace(email))
-        existing = await db.Customers
-            .Where(c => c.Brand == brand && c.Email == email)
-            .OrderByDescending(c => c.UpdatedAt)
-            .FirstOrDefaultAsync();
-
-    var now = DateTime.UtcNow;
-    if (existing is null)
-    {
-        db.Customers.Add(new Customer
-        {
-            Brand = brand,
-            DeviceId = string.IsNullOrEmpty(deviceId) ? null : deviceId,
-            Name = name ?? string.Empty,
-            Email = string.IsNullOrWhiteSpace(email) ? null : email,
-            Phone = string.IsNullOrWhiteSpace(phone) ? null : phone,
-            CreatedAt = now,
-            UpdatedAt = now,
-            LastSeenAt = now,
-        });
-    }
-    else
-    {
-        if (!string.IsNullOrWhiteSpace(name)) existing.Name = name;
-        if (!string.IsNullOrWhiteSpace(email)) existing.Email = email;
-        if (!string.IsNullOrWhiteSpace(phone)) existing.Phone = phone;
-        if (!string.IsNullOrEmpty(deviceId)) existing.DeviceId = deviceId;
-        existing.UpdatedAt = now;
-        existing.LastSeenAt = now;
-    }
-}
-
-// A short, human-readable technician login code. Uppercase, excludes ambiguous
-// characters (0/O, 1/I/L) so it's easy to read aloud and type on a phone.
-static string GenerateTechCode()
-{
-    const string alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-    var bytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(8);
-    var chars = new char[8];
-    for (var i = 0; i < 8; i++) chars[i] = alphabet[bytes[i] % alphabet.Length];
-    return new string(chars);
-}
-
-// Resolve the technician from a request's bearer token (Authorization: Bearer
-// <token>, or X-Tech-Token). Null when absent/invalid/expired → the endpoint 401s.
-static DIYHelper2.Api.Services.TechPrincipal? TechPrincipalOf(
-    HttpContext http, DIYHelper2.Api.Services.TechTokenService tokens)
-{
-    string? token = null;
-    var auth = http.Request.Headers["Authorization"].FirstOrDefault();
-    if (!string.IsNullOrEmpty(auth) && auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-        token = auth.Substring("Bearer ".Length).Trim();
-    if (string.IsNullOrEmpty(token))
-        token = http.Request.Headers["X-Tech-Token"].FirstOrDefault();
-    return tokens.Validate(token);
-}
-
-// (Job-completion side effects — invoice, report, maintenance, review — now live
-// in JobCompletionService so the owner and tech PUTs share identical behavior.)
-
-// Parse a brand's JSON service-type array; malformed/empty → no configured types
-// (the app falls back to a single generic option).
-static List<string> ParseServiceTypes(string? json)
-{
-    if (string.IsNullOrWhiteSpace(json)) return new List<string>();
-    try
-    {
-        return System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
-    }
-    catch { return new List<string>(); }
-}
-
-// Merge a brand's per-feature toggles over the customer-app defaults. Unknown/
-// malformed config falls back to defaults so a bad brand row can't dark-ship a
-// core feature. Memberships are forced to the computed "effective" value
-// (brand opt-in AND a live payment provider), overriding any stale JSON.
-static Dictionary<string, bool> BuildBrandFeatures(string? featuresJson, bool membershipEffective)
-{
-    var features = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
-    {
-        ["booking"] = true,
-        ["triage"] = true,
-        ["appointmentTracking"] = true,
-        ["reviews"] = true,
-        ["referrals"] = true,
-        ["maintenanceReminders"] = true,
-        ["memberships"] = false,
-    };
-    if (!string.IsNullOrWhiteSpace(featuresJson))
-    {
-        try
-        {
-            var parsed = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, bool>>(featuresJson);
-            if (parsed is not null)
-                foreach (var kv in parsed) features[kv.Key] = kv.Value;
-        }
-        catch { /* malformed brand config → keep defaults */ }
-    }
-    features["memberships"] = membershipEffective;
-    return features;
-}
-
-// Shared shape for a campaign returned to the dashboard (list + detail).
-static object PushCampaignView(DIYHelper2.Api.Models.PushCampaign c) => new
-{
-    id = c.Id,
-    brand = c.Brand,
-    title = c.Title,
-    body = c.Body,
-    subtitle = c.Subtitle,
-    imageUrl = c.ImageUrl,
-    data = c.DataJson,
-    platform = c.PlatformFilter,
-    status = c.Status,
-    scheduledFor = c.ScheduledFor,
-    sentAt = c.SentAt,
-    recipientCount = c.RecipientCount,
-    deliveredCount = c.DeliveredCount,
-    failedCount = c.FailedCount,
-    createdBy = c.CreatedBy,
-    createdAt = c.CreatedAt,
-    updatedAt = c.UpdatedAt,
-};
 
 app.MapGet("/api/help-requests", async ([FromQuery] string? status, [FromQuery] string? brand, HttpContext http, AppDbContext db) =>
 {
@@ -3184,6 +2979,7 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
     DeviceQuotaService quota,
+    DIYHelper2.Api.Services.AiSpendGuard aiSpendGuard,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -3193,7 +2989,7 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
     {
-        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        logger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
         return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
     }
 
@@ -3266,6 +3062,7 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
     DeviceQuotaService quota,
+    DIYHelper2.Api.Services.AiSpendGuard aiSpendGuard,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -3275,7 +3072,7 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
     {
-        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        logger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
         return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
     }
 
@@ -3349,6 +3146,7 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
     DeviceQuotaService quota,
+    DIYHelper2.Api.Services.AiSpendGuard aiSpendGuard,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -3358,7 +3156,7 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
     {
-        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        logger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
         return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
     }
 
@@ -3440,6 +3238,7 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
     DIYHelper2.Api.AI.ModerationService moderation,
     PlayIntegrityVerifier integrity,
     DeviceQuotaService quota,
+    DIYHelper2.Api.Services.AiSpendGuard aiSpendGuard,
     FeatureFlags features) =>
 {
     if (features.AiKillSwitch)
@@ -3449,7 +3248,7 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
     {
-        aiCapLogger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
+        logger.LogWarning("Global daily AI cap ({Cap}) reached — rejecting request as a spend backstop.", aiSpendGuard.DailyCap);
         return ApiError.Response(context, 503, "AI features are temporarily unavailable. Please try again later.", "ai_capacity_reached");
     }
 
@@ -3741,7 +3540,7 @@ app.MapPost("/api/paint-color-match", ([FromBody] PaintColorRequest req, PaintCo
 // ── Google Translate v2 proxy ────────────────────────────────────
 // Batches up to 100 strings per call, caches results in-memory, and preserves
 // response order so the client can map translated[i] back to its original key.
-app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody] TranslateRequest req, ILogger<Program> logger) =>
+app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody] TranslateRequest req, ILogger<Program> logger, DIYHelper2.Api.Services.TranslationCache translationCache, DIYHelper2.Api.Services.RuntimeConfigStore runtimeConfig) =>
 {
     if (req.Q == null || req.Q.Length == 0 || string.IsNullOrWhiteSpace(req.Target))
         return Results.Json(new { error = "Missing q[] or target." }, statusCode: 400);
@@ -3757,7 +3556,7 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
     if (req.Q.Any(s => (s?.Length ?? 0) > MaxCharsPerString))
         return Results.Json(new { error = $"A string exceeds the maximum length of {MaxCharsPerString} characters." }, statusCode: 400);
 
-    if (string.IsNullOrEmpty(googleApiKey))
+    if (string.IsNullOrEmpty(runtimeConfig.GoogleApiKey))
         return Results.Json(new { error = "GOOGLE_API_KEY is not configured on the server." }, statusCode: 500);
 
     string source = string.IsNullOrWhiteSpace(req.Source) ? "en" : req.Source!;
@@ -3773,7 +3572,7 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
     for (int i = 0; i < req.Q.Length; i++)
     {
         var key = $"{source}|{target}|{req.Q[i]}";
-        if (translationCache.TryGetValue(key, out var cached))
+        if (translationCache.Cache.TryGetValue(key, out var cached))
             results[i] = cached;
         else
         {
@@ -3801,10 +3600,10 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
 
         using var googleReq = new HttpRequestMessage(HttpMethod.Post,
             "https://translation.googleapis.com/language/translate/v2");
-        googleReq.Headers.Add("X-Goog-Api-Key", googleApiKey);
+        googleReq.Headers.Add("X-Goog-Api-Key", runtimeConfig.GoogleApiKey);
         googleReq.Content = new StringContent(JsonSerializer.Serialize(payload), System.Text.Encoding.UTF8, "application/json");
 
-        using var googleResponse = await translateHttpClient.SendAsync(googleReq);
+        using var googleResponse = await translationCache.Http.SendAsync(googleReq);
         string body = await googleResponse.Content.ReadAsStringAsync();
         if (!googleResponse.IsSuccessStatusCode)
         {
@@ -3824,8 +3623,8 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
             // grow it without limit (memory-exhaustion DoS). Once full we simply
             // stop caching new entries — correctness is unaffected, we just miss
             // the cache for novel text.
-            if (translationCache.Count < 50_000)
-                translationCache[cacheKey] = translated;
+            if (translationCache.Cache.Count < 50_000)
+                translationCache.Cache[cacheKey] = translated;
         }
     }
 
@@ -3888,54 +3687,6 @@ app.MapGet("/api/admin/brand-mau", async (
     return Results.Ok(await digest.BuildBrandMauAsync(days, ct));
 });
 
-// Emails a newly-created lead to its brand's configured recipient. Best-effort:
-// swallows all failures (logged) so a mail outage never fails the customer's
-// submit. Falls back to the flagship brand's inbox so a lead is never dropped.
-static async Task NotifyBrandOfLeadAsync(
-    AppDbContext db,
-    Sburson.Shared.Email.IEmailService mailer,
-    ILogger logger,
-    string brandSlug,
-    HelpRequest lead)
-{
-    try
-    {
-        var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
-        var leadEmail = brand?.LeadEmail;
-        if (string.IsNullOrWhiteSpace(leadEmail))
-        {
-            var fallback = await db.Brands.FirstOrDefaultAsync(b => b.Slug == "diyhelper");
-            leadEmail = fallback?.LeadEmail;
-        }
-        if (string.IsNullOrWhiteSpace(leadEmail))
-        {
-            logger.LogWarning(
-                "No lead email configured for brand {Brand}; lead {LeadId} saved but not emailed.",
-                brandSlug, lead.Id);
-            return;
-        }
-
-        var contact = new List<string>();
-        if (!string.IsNullOrWhiteSpace(lead.CustomerName)) contact.Add($"Name:  {lead.CustomerName}");
-        if (!string.IsNullOrWhiteSpace(lead.CustomerPhone)) contact.Add($"Phone: {lead.CustomerPhone}");
-        if (!string.IsNullOrWhiteSpace(lead.CustomerEmail)) contact.Add($"Email: {lead.CustomerEmail}");
-
-        var subject = $"New job lead: {lead.ProjectTitle}";
-        var body =
-            "A customer requested a professional through your app.\n\n" +
-            $"Project: {lead.ProjectTitle}\n\n" +
-            string.Join("\n", contact) + "\n\n" +
-            $"What they described:\n{lead.UserDescription}\n\n" +
-            $"Lead #{lead.Id} · received {lead.CreatedAt:u}\n";
-
-        await mailer.SendAsync(leadEmail, subject, body);
-        logger.LogInformation("Lead {LeadId} for brand {Brand} emailed to its recipient.", lead.Id, brandSlug);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Failed to email lead {LeadId} for brand {Brand}.", lead.Id, brandSlug);
-    }
-}
 
 app.Run();
 
