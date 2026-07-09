@@ -230,6 +230,22 @@ builder.Services
         DIYHelper2.Api.Integrations.Billing.QuickBooksInvoiceProvider>()
     .AddHttpMessageHandler<SsrfGuardHandler>();
 
+// ── SMS / messaging seam (Twilio) ─────────────────────────────────────────
+// Provider-agnostic ISmsSender with a fail-soft Twilio impl (SSRF-guarded typed
+// client), plus MessagingService which composes + logs customer texts. Dormant
+// (IsConfigured=false) until TWILIO_* env is set, so nothing texts until then.
+builder.Services.AddSingleton(_ => new DIYHelper2.Api.Integrations.Messaging.TwilioOptions
+{
+    AccountSid = Environment.GetEnvironmentVariable("TWILIO_ACCOUNT_SID"),
+    AuthToken = Environment.GetEnvironmentVariable("TWILIO_AUTH_TOKEN"),
+    FromNumber = Environment.GetEnvironmentVariable("TWILIO_FROM_NUMBER"),
+});
+builder.Services
+    .AddHttpClient<DIYHelper2.Api.Integrations.Messaging.ISmsSender,
+        DIYHelper2.Api.Integrations.Messaging.TwilioSmsSender>()
+    .AddHttpMessageHandler<SsrfGuardHandler>();
+builder.Services.AddScoped<DIYHelper2.Api.Services.MessagingService>();
+
 // Mobile abuse-prevention from Sburson.Shared.Mobile. Env vars are read
 // lazily inside the Transient factory delegate so test fixtures that
 // set PLAY_INTEGRITY_* / DAILY_DEVICE_AI_LIMIT after the host builds
@@ -673,7 +689,19 @@ app.UseRateLimiter();
 // - AppKey: rejects requests missing the shared secret (no-op if unset)
 // - ExceptionHandler: catches unhandled throws, logs them, returns safe JSON
 // - RequestLogging: logs method/path/status/duration for every API request
-app.UseMiddleware<AppKeyMiddleware>(new AppKeyOptions { ExpectedKey = appKey });
+app.UseMiddleware<AppKeyMiddleware>(new AppKeyOptions
+{
+    ExpectedKey = appKey,
+    // Defaults + external webhook paths that can't carry X-App-Key. Twilio calls
+    // /api/sms/* directly; a shared webhook token (TWILIO_WEBHOOK_TOKEN) guards
+    // those handlers instead. (Note: the OAuth /callback endpoints likely need
+    // the same treatment for prod when APP_KEY is set — see OVERNIGHT-PROGRESS.)
+    PublicPathPrefixes = new[]
+    {
+        "/", "/healthz", "/api/health", "/openapi", "/openapi/", "/.well-known/",
+        "/api/sms/",
+    },
+});
 app.UseMiddleware<ExceptionHandlerMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 
@@ -1252,6 +1280,17 @@ static string? BrandScopeOf(HttpContext http)
 // White-label attribution for public customer endpoints: always from the
 // X-Brand header (never the body), lowercased, defaulting to the flagship brand
 // for un-branded builds. Mirrors the inline logic in the booking handler.
+// Guard for the public Twilio webhooks: if TWILIO_WEBHOOK_TOKEN is set, require a
+// matching ?token= (which the operator bakes into the Twilio webhook URL). Unset
+// → allow, so local dev works without configuration.
+static bool WebhookTokenOk(HttpContext http)
+{
+    var expected = Environment.GetEnvironmentVariable("TWILIO_WEBHOOK_TOKEN");
+    if (string.IsNullOrEmpty(expected)) return true;
+    var provided = http.Request.Query["token"].FirstOrDefault();
+    return !string.IsNullOrEmpty(provided) && provided == expected;
+}
+
 static string BrandFromHeader(HttpContext http)
 {
     var slug = (http.Request.Headers["X-Brand"].FirstOrDefault() ?? "").Trim().ToLowerInvariant();
@@ -1495,13 +1534,15 @@ app.MapGet("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDb
 });
 
 app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db,
-    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices, ILogger<Program> logger) =>
+    DIYHelper2.Api.Integrations.Billing.IInvoiceProvider invoices,
+    DIYHelper2.Api.Services.MessagingService messaging, ILogger<Program> logger) =>
 {
     var request = await db.HelpRequests.FindAsync(id);
     if (request is null) return Results.NotFound();
     var scope = BrandScopeOf(http);
     if (scope is not null && request.Brand != scope) return Results.NotFound();
 
+    var prevStatus = request.Status;
     if (dto.Status is not null) request.Status = dto.Status;
     if (dto.Notes is not null) request.Notes = dto.Notes;
     if (dto.FollowUpDate.HasValue) request.FollowUpDate = dto.FollowUpDate;
@@ -1519,6 +1560,19 @@ app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRe
 
     await db.SaveChangesAsync();
     if (request.Status == "completed") await TrySyncInvoiceAsync(invoices, db, request, logger);
+
+    // Fire an automated customer text on a real status transition (best-effort).
+    if (dto.Status is not null && dto.Status != prevStatus && messaging.IsConfigured)
+    {
+        var company = (await db.Brands.FirstOrDefaultAsync(b => b.Slug == request.Brand))?.CompanyName ?? "";
+        if (request.Status == "scheduled") await messaging.NotifyScheduledAsync(request, company);
+        else if (request.Status == "on_the_way") await messaging.NotifyOnTheWayAsync(request, company);
+        else if (request.Status == "completed")
+        {
+            var reviewUrl = (await db.Brands.FirstOrDefaultAsync(b => b.Slug == request.Brand))?.ReviewUrl;
+            await messaging.RequestReviewAsync(request, company, reviewUrl);
+        }
+    }
     return Results.Ok(request);
 });
 
@@ -2065,6 +2119,83 @@ app.MapGet("/api/accounting/status", async (HttpContext http, AppDbContext db) =
     if (string.IsNullOrWhiteSpace(slug)) return Results.Ok(new { connected = false });
     var conn = await db.BrandAccountingConnections.FirstOrDefaultAsync(c => c.BrandSlug == slug && c.IsActive);
     return Results.Ok(new { connected = conn is not null, realmId = conn?.RealmId });
+});
+
+// ── Customer SMS (owner-facing; admin-gated under /api/help-requests) ─────
+app.MapPut("/api/help-requests/{id:int}/message", async (
+    int id, [FromBody] SendMessageDto dto, HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.MessagingService messaging) =>
+{
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && r.Brand != scope) return Results.NotFound();
+    if (string.IsNullOrWhiteSpace(dto.Body)) return ApiError.BadRequest(http, "Message body is required.");
+
+    var result = await messaging.SendToLeadAsync(r, dto.Body!.Trim());
+    return result.Ok
+        ? Results.Ok(new { sent = true })
+        : Results.Ok(new { sent = false, reason = result.Error });
+});
+
+app.MapGet("/api/help-requests/{id:int}/messages", async (int id, HttpContext http, AppDbContext db) =>
+{
+    var r = await db.HelpRequests.FindAsync(id);
+    if (r is null) return Results.NotFound();
+    var scope = BrandScopeOf(http);
+    if (scope is not null && r.Brand != scope) return Results.NotFound();
+    var msgs = await db.SmsMessages
+        .Where(m => m.HelpRequestId == id)
+        .OrderBy(m => m.CreatedAt)
+        .Select(m => new { m.Id, m.Direction, m.Body, m.Sent, m.CreatedAt })
+        .ToListAsync();
+    return Results.Ok(msgs);
+});
+
+// ── Twilio webhooks (PUBLIC — /api/sms/ is AppKey-exempt) ─────────────────
+// Guarded by an optional shared token (TWILIO_WEBHOOK_TOKEN) since Twilio can't
+// send X-App-Key. Twilio POSTs form-encoded; the brand is resolved from the
+// receiving number (each brand has its own SmsFromNumber).
+app.MapPost("/api/sms/incoming", async (HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.MessagingService messaging) =>
+{
+    if (!WebhookTokenOk(http)) return Results.Unauthorized();
+    var form = await http.Request.ReadFormAsync();
+    var from = form["From"].FirstOrDefault() ?? "";
+    var to = form["To"].FirstOrDefault() ?? "";
+    var body = form["Body"].FirstOrDefault() ?? "";
+    var brand = (await db.Brands.FirstOrDefaultAsync(b => b.SmsFromNumber == to))?.Slug ?? "diyhelper";
+    await messaging.RecordInboundAsync(brand, from, to, body);
+    // Empty TwiML = accept, no auto-reply.
+    return Results.Content("<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>", "application/xml");
+});
+
+app.MapPost("/api/sms/voice", async (HttpContext http, AppDbContext db,
+    DIYHelper2.Api.Services.MessagingService messaging) =>
+{
+    if (!WebhookTokenOk(http)) return Results.Unauthorized();
+    var form = await http.Request.ReadFormAsync();
+    var from = form["From"].FirstOrDefault() ?? "";
+    var to = form["To"].FirstOrDefault() ?? "";
+    var brand = await db.Brands.FirstOrDefaultAsync(b => b.SmsFromNumber == to);
+    var company = brand?.CompanyName ?? "us";
+    // Missed-call text-back: we don't staff a phone line — text the caller back.
+    if (!string.IsNullOrWhiteSpace(from) && messaging.IsConfigured)
+    {
+        try
+        {
+            var lead = await db.HelpRequests
+                .Where(r => r.CustomerPhone == from && (brand == null || r.Brand == brand.Slug))
+                .OrderByDescending(r => r.CreatedAt).FirstOrDefaultAsync();
+            var pseudo = lead ?? new HelpRequest { Brand = brand?.Slug ?? "diyhelper", CustomerPhone = from };
+            await messaging.SendToLeadAsync(pseudo,
+                $"Thanks for calling {company}! We'll text you right back. Reply here and we'll help you out.");
+        }
+        catch { /* best-effort */ }
+    }
+    return Results.Content(
+        $"<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response><Say>Thanks for calling {System.Security.SecurityElement.Escape(company)}. We'll text you right back.</Say><Hangup/></Response>",
+        "application/xml");
 });
 
 // ── Ops summary (job costing + KPIs; admin-gated) ─────────────────────────
@@ -3563,6 +3694,10 @@ public record SendQuoteDto(
 
 public record QuoteDecisionDto(
     [property: JsonPropertyName("decision")] string? Decision
+);
+
+public record SendMessageDto(
+    [property: JsonPropertyName("body")] string? Body
 );
 
 public record MembershipCheckoutDto(

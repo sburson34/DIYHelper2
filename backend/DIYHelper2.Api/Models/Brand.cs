@@ -72,6 +72,11 @@ public class Brand
     /// off by default.</summary>
     public bool MembershipEnabled { get; set; }
 
+    /// <summary>Optional per-brand SMS sending number (E.164, e.g. +15551234567).
+    /// Overrides the app-level <c>TWILIO_FROM_NUMBER</c> so each company can text
+    /// from its own line. Null → use the app default.</summary>
+    public string? SmsFromNumber { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

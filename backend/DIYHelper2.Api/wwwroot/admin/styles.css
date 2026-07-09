@@ -568,3 +568,19 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-
 .costing-line { margin: 12px 0; font-size: 14px; color: var(--muted); }
 .costing-line .ok { color: var(--success); font-weight: 800; }
 .costing-line .warn { color: var(--danger); font-weight: 800; }
+
+/* ── Customer SMS ────────────────────────────────────────────────────── */
+.sms-log { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; max-height: 280px; overflow-y: auto; }
+.sms-empty { padding: 8px 0; }
+.sms-bubble { max-width: 80%; padding: 9px 12px; border-radius: 12px; }
+.sms-bubble.out { align-self: flex-end; background: var(--blue); }
+.sms-bubble.in { align-self: flex-start; background: var(--inset); border: 1px solid var(--border); }
+.sms-bubble.failed { background: var(--danger); }
+.sms-text { font-size: 14px; }
+.sms-meta { font-size: 11px; color: rgba(255,255,255,0.7); margin-top: 3px; }
+.sms-bubble.in .sms-meta { color: var(--muted); }
+.sms-compose { display: flex; gap: 8px; align-items: flex-end; }
+.sms-compose textarea {
+  flex: 1; background: var(--inset); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; color: var(--text); min-height: 44px; resize: vertical;
+}

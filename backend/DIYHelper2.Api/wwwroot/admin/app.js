@@ -231,6 +231,8 @@ function wireLeads() {
       renderQuoteLines();
     } else if (e.target.closest('#send-quote-btn')) {
       sendQuote();
+    } else if (e.target.closest('#sms-send-btn')) {
+      sendCustomerSms();
     }
   });
   // Live total as the operator edits line amounts/quantities.
@@ -290,6 +292,7 @@ async function viewRequest(id) {
     await loadPriceBookForBrand();       // populate the quote item picker
     renderDetail(data);
     renderQuoteLines();
+    loadMessages(id);
     el('request-list').classList.add('hidden');
     document.getElementById('lead-filters').classList.add('hidden');
     el('detail-panel').classList.remove('hidden');
@@ -341,6 +344,14 @@ function renderDetail(data) {
     ${arrTags('Safety tips', projectData.safety_tips)}
     ${arrTags('When to call a pro', projectData.when_to_call_pro)}
     ${quoteBuilderHtml(data)}
+    <div class="detail-section">
+      <h3>Text customer</h3>
+      <div id="sms-log" class="sms-log"></div>
+      <div class="sms-compose">
+        <textarea id="sms-body" placeholder="Type a text to the customer…" maxlength="480"></textarea>
+        <button class="btn accent" id="sms-send-btn" type="button">Send text</button>
+      </div>
+    </div>
     <div class="detail-section">
       <h3>Manage lead</h3>
       <div class="edit-form">
@@ -931,6 +942,40 @@ async function sendQuote() {
     viewRequest(state.currentRequestId);
   } catch (err) {
     toast(err.message || 'Could not send quote.', 'error');
+    btn.disabled = false;
+  }
+}
+
+/* ── Customer SMS (in the lead detail) ──────────────────────────────────── */
+async function loadMessages(id) {
+  const host = el('sms-log');
+  if (!host) return;
+  try {
+    const msgs = await getJson(`/api/help-requests/${encodeURIComponent(id)}/messages`);
+    if (!msgs.length) { host.innerHTML = '<div class="muted sms-empty">No texts yet.</div>'; return; }
+    host.innerHTML = msgs.map((m) => `
+      <div class="sms-bubble ${m.direction === 'in' ? 'in' : 'out'}${m.sent === false ? ' failed' : ''}">
+        <div class="sms-text">${escapeHtml(m.body)}</div>
+        <div class="sms-meta">${m.direction === 'in' ? 'Customer' : 'You'} · ${escapeHtml(fmtDateTime(m.createdAt))}${m.sent === false ? ' · not sent' : ''}</div>
+      </div>`).join('');
+  } catch (err) {
+    host.innerHTML = '<div class="muted sms-empty">Could not load messages.</div>';
+  }
+}
+
+async function sendCustomerSms() {
+  const body = el('sms-body').value.trim();
+  if (!body) { toast('Type a message first.', 'error'); return; }
+  const btn = el('sms-send-btn');
+  btn.disabled = true;
+  try {
+    const res = await sendJson(`/api/help-requests/${encodeURIComponent(state.currentRequestId)}/message`, 'PUT', { body });
+    if (res.sent) { toast('Text sent.', 'success'); el('sms-body').value = ''; }
+    else toast(res.reason || 'SMS is not configured.', 'error');
+    loadMessages(state.currentRequestId);
+  } catch (err) {
+    toast(err.message || 'Could not send text.', 'error');
+  } finally {
     btn.disabled = false;
   }
 }

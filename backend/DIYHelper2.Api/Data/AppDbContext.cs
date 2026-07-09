@@ -20,6 +20,7 @@ public class AppDbContext : DbContext
     public DbSet<Technician> Technicians => Set<Technician>();
     public DbSet<PriceBookItem> PriceBookItems => Set<PriceBookItem>();
     public DbSet<BrandAccountingConnection> BrandAccountingConnections => Set<BrandAccountingConnection>();
+    public DbSet<SmsMessage> SmsMessages => Set<SmsMessage>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -157,5 +158,10 @@ public class AppDbContext : DbContext
             .HasIndex(c => c.BrandSlug)
             .IsUnique()
             .HasDatabaseName("IX_BrandAccountingConnections_BrandSlug");
+
+        // SMS log is read per lead (conversation) and per brand (recent activity).
+        modelBuilder.Entity<SmsMessage>()
+            .HasIndex(m => new { m.Brand, m.HelpRequestId })
+            .HasDatabaseName("IX_SmsMessages_Brand_HelpRequestId");
     }
 }
