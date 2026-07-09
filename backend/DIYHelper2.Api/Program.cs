@@ -31,6 +31,7 @@ using OpenTelemetry;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
+using DIYHelper2.Api.Endpoints;
 using static DIYHelper2.Api.Endpoints.EndpointHelpers;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -627,10 +628,6 @@ using (var scope = app.Services.CreateScope())
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
-    app.MapGet("/api/sentry-test", () =>
-    {
-        throw new InvalidOperationException("Sentry wiring smoke test (intentional throw)");
-    });
 }
 
 // Trust X-Forwarded-* headers only when we are running behind the ALB so the
@@ -670,18 +667,6 @@ app.UseMiddleware<AdminAuthMiddleware>(new AdminAuthOptions
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// StaticFileMiddleware ignores dot-prefixed directories by default, so
-// /.well-known/security.txt would otherwise 404 even though the file exists in
-// wwwroot/.well-known/. Map it explicitly so security researchers can find
-// our disclosure contact per RFC 9116. AppKeyMiddleware already bypasses
-// /.well-known/ paths.
-app.MapGet("/.well-known/security.txt", (IWebHostEnvironment env) =>
-{
-    var path = Path.Combine(env.WebRootPath ?? "wwwroot", ".well-known", "security.txt");
-    if (!File.Exists(path)) return Results.NotFound();
-    return Results.File(path, "text/plain; charset=utf-8");
-});
-
 app.UseCors("MobilePolicy");
 
 app.UseRateLimiter();
@@ -711,40 +696,7 @@ app.UseMiddleware<AppKeyMiddleware>(new AppKeyOptions
 app.UseMiddleware<ExceptionHandlerMiddleware>();
 app.UseMiddleware<RequestLoggingMiddleware>();
 
-app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
-app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
-
-// Simple liveness probe for Docker / Caddy upstream healthcheck. Distinct
-// from /readyz so a transient DB blip never causes the orchestrator to kill an
-// otherwise-healthy container (that would turn a brief DB hiccup into a
-// full restart). Stays shallow on purpose.
-app.MapGet("/healthz", () => Results.Ok());
-
-// Readiness probe — verifies the process can actually reach its database before
-// it should be sent traffic. Returns 503 (not 200) when the DB is unreachable
-// so a load balancer / readiness check can drain this instance instead of
-// routing requests that will only fail. This is what catches the "started but
-// pointed at the wrong/dead DB" case that the static /healthz cannot.
-app.MapGet("/readyz", async (AppDbContext db, CancellationToken ct) =>
-{
-    try
-    {
-        var canConnect = await db.Database.CanConnectAsync(ct);
-        return canConnect
-            ? Results.Ok(new { status = "ready", db = "up" })
-            : Results.Json(new { status = "not_ready", db = "down" }, statusCode: 503);
-    }
-    catch (Exception)
-    {
-        return Results.Json(new { status = "not_ready", db = "down" }, statusCode: 503);
-    }
-});
-
-// RFC 9116 responsible-disclosure contact is served by the earlier
-// MapGet("/.well-known/security.txt", ...) registration above, which reads
-// from wwwroot/.well-known/security.txt. A previous duplicate inline
-// MapGet here was removed — keeping two registrations for the same route
-// triggers AmbiguousMatchException at request time. See ComplianceFilesTests.
+app.MapHealth(app.Environment);
 
 // In-memory community projects store (#18). Replace with DB once schema is settled.
 // ConcurrentQueue lets POST and GET run without serialising on a lock.
