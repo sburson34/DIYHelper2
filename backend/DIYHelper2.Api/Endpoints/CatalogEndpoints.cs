@@ -18,10 +18,7 @@ public static class CatalogEndpoints
         // ── Price book (owner-managed flat-rate items; admin-gated) ───────────────
         app.MapGet("/api/pricebook", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {
-            var scope = BrandScopeOf(http);
-            var q = db.PriceBookItems.AsQueryable();
-            if (scope is not null) q = q.Where(p => p.Brand == scope);
-            else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(p => p.Brand == brand);
+            var q = db.PriceBookItems.WhereBrandVisible(BrandScopeOf(http), brand);
             var items = await q.OrderBy(p => p.Name)
                 .Select(p => new { p.Id, p.Brand, p.Name, p.DefaultPrice, p.IsActive })
                 .ToListAsync();
@@ -52,8 +49,7 @@ public static class CatalogEndpoints
         {
             var item = await db.PriceBookItems.FindAsync(id);
             if (item is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && item.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, item.Brand)) return Results.NotFound();
             if (dto.Name is not null) item.Name = dto.Name.Trim();
             if (dto.DefaultPrice.HasValue) item.DefaultPrice = dto.DefaultPrice.Value;
             if (dto.IsActive.HasValue) item.IsActive = dto.IsActive.Value;
@@ -66,8 +62,7 @@ public static class CatalogEndpoints
         {
             var item = await db.PriceBookItems.FindAsync(id);
             if (item is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && item.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, item.Brand)) return Results.NotFound();
             db.PriceBookItems.Remove(item);
             await db.SaveChangesAsync();
             return Results.NoContent();
@@ -76,10 +71,7 @@ public static class CatalogEndpoints
         // ── Inventory / truck stock (owner-managed; admin-gated) ──────────────────
         app.MapGet("/api/inventory", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {
-            var scope = BrandScopeOf(http);
-            var q = db.InventoryItems.AsQueryable();
-            if (scope is not null) q = q.Where(i => i.Brand == scope);
-            else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(i => i.Brand == brand);
+            var q = db.InventoryItems.WhereBrandVisible(BrandScopeOf(http), brand);
             var items = await q.OrderBy(i => i.Name)
                 .Select(i => new { i.Id, i.Brand, i.Name, i.Sku, i.Quantity, i.ReorderAt, low = i.ReorderAt > 0 && i.Quantity <= i.ReorderAt })
                 .ToListAsync();
@@ -109,8 +101,7 @@ public static class CatalogEndpoints
         {
             var item = await db.InventoryItems.FindAsync(id);
             if (item is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && item.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, item.Brand)) return Results.NotFound();
             if (dto.Name is not null) item.Name = dto.Name.Trim();
             if (dto.Sku is not null) item.Sku = dto.Sku;
             if (dto.Quantity.HasValue) item.Quantity = dto.Quantity.Value;
@@ -124,8 +115,7 @@ public static class CatalogEndpoints
         {
             var item = await db.InventoryItems.FindAsync(id);
             if (item is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && item.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, item.Brand)) return Results.NotFound();
             db.InventoryItems.Remove(item);
             await db.SaveChangesAsync();
             return Results.NoContent();

@@ -1,6 +1,6 @@
 namespace DIYHelper2.Api.Models;
 
-public class HelpRequest
+public class HelpRequest : IBrandOwned
 {
     public int Id { get; set; }
 

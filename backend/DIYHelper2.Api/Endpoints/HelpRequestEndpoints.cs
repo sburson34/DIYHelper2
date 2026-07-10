@@ -28,11 +28,7 @@ public static class HelpRequestEndpoints
             if (!string.IsNullOrEmpty(status))
                 query = query.Where(r => r.Status == status);
 
-            var scope = BrandScopeOf(http);
-            if (scope is not null)
-                query = query.Where(r => r.Brand == scope);       // brand login → own leads only
-            else if (!string.IsNullOrEmpty(brand))
-                query = query.Where(r => r.Brand == brand);        // super-admin optional filter
+            query = query.WhereBrandVisible(BrandScopeOf(http), brand);
 
             var results = await query
                 .OrderByDescending(r => r.CreatedAt)
@@ -65,8 +61,7 @@ public static class HelpRequestEndpoints
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && request.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, request.Brand)) return Results.NotFound();
             return Results.Ok(request);
         });
 
@@ -75,8 +70,7 @@ public static class HelpRequestEndpoints
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && request.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, request.Brand)) return Results.NotFound();
 
             var prevStatus = request.Status;
             writer.ApplyStatus(request, dto.Status);
@@ -108,8 +102,7 @@ public static class HelpRequestEndpoints
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && request.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, request.Brand)) return Results.NotFound();
 
             db.HelpRequests.Remove(request);
             await db.SaveChangesAsync();
@@ -124,8 +117,7 @@ public static class HelpRequestEndpoints
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && request.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, request.Brand)) return Results.NotFound();
 
             var lines = dto.Lines ?? new List<QuoteLineDto>();
             if (lines.Count == 0) return ApiError.BadRequest(http, "A quote needs at least one line.");
@@ -157,8 +149,7 @@ public static class HelpRequestEndpoints
         {
             var r = await db.HelpRequests.FindAsync(id);
             if (r is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && r.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, r.Brand)) return Results.NotFound();
             if (string.IsNullOrWhiteSpace(dto.Body)) return ApiError.BadRequest(http, "Message body is required.");
 
             var result = await messaging.SendToLeadAsync(r, dto.Body!.Trim());
@@ -171,8 +162,7 @@ public static class HelpRequestEndpoints
         {
             var r = await db.HelpRequests.FindAsync(id);
             if (r is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && r.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, r.Brand)) return Results.NotFound();
             var msgs = await db.SmsMessages
                 .Where(m => m.HelpRequestId == id)
                 .OrderBy(m => m.CreatedAt)
@@ -189,8 +179,7 @@ public static class HelpRequestEndpoints
         {
             var r = await db.HelpRequests.FindAsync(id);
             if (r is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && r.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, r.Brand)) return Results.NotFound();
             if (string.IsNullOrWhiteSpace(r.CustomerEmail))
                 return Results.Ok(new { sent = false, reason = "This customer has no email on file." });
 
@@ -211,8 +200,7 @@ public static class HelpRequestEndpoints
         {
             var r = await db.HelpRequests.FindAsync(id);
             if (r is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && r.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, r.Brand)) return Results.NotFound();
             if (!payments.IsConfigured)
                 return Results.Ok(new { available = false, reason = "Payments aren't set up yet." });
 
@@ -238,8 +226,7 @@ public static class HelpRequestEndpoints
         {
             var r = await db.HelpRequests.FindAsync(id);
             if (r is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && r.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, r.Brand)) return Results.NotFound();
 
             var techs = await db.Technicians
                 .Where(t => t.Brand == r.Brand && t.IsActive)
@@ -273,8 +260,7 @@ public static class HelpRequestEndpoints
         {
             var r = await db.HelpRequests.FindAsync(id);
             if (r is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && r.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, r.Brand)) return Results.NotFound();
             if (features.AiKillSwitch) return ApiError.Response(http, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
             if (!aiSpend.TryConsume(out _)) return ApiError.Response(http, 503, "AI features are temporarily unavailable.", "ai_capacity_reached");
             if (string.IsNullOrEmpty(aiKeys.OpenAiKey)) return ApiError.NotConfigured(http, "OpenAI API key");

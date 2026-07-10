@@ -20,6 +20,28 @@ public static class EndpointHelpers
     public static string? BrandScopeOf(HttpContext http)
         => http.Items.TryGetValue("BrandScope", out var s) ? s as string : null;
 
+    // The standard tenant filter for admin list endpoints over any brand-owned
+    // table: a scoped (per-brand) login always wins and sees only its own rows;
+    // a super-admin sees everything, optionally narrowed by a ?brand= query
+    // param. Replaces the identical inline if/else that used to live in every
+    // list handler.
+    public static IQueryable<T> WhereBrandVisible<T>(this IQueryable<T> q, string? scope, string? brandParam)
+        where T : class, IBrandOwned
+    {
+        if (scope is not null) return q.Where(e => e.Brand == scope);            // brand login → own rows only
+        if (!string.IsNullOrWhiteSpace(brandParam)) return q.Where(e => e.Brand == brandParam); // super-admin optional filter
+        return q;
+    }
+
+    // The standard cross-tenant guard for admin detail/write endpoints: a scoped
+    // login touching another brand's row gets a 404 (not 403) so it can't probe
+    // another tenant's id space. Super-admin (no scope) is never cross-tenant.
+    public static bool CrossTenant(HttpContext http, string entityBrand)
+    {
+        var scope = BrandScopeOf(http);
+        return scope is not null && entityBrand != scope;
+    }
+
     // Guard for the public Twilio webhooks: if TWILIO_WEBHOOK_TOKEN is set, require a
     // matching ?token= (which the operator bakes into the Twilio webhook URL). Unset
     // → allow, so local dev works without configuration.

@@ -13,7 +13,7 @@ namespace DIYHelper2.Api.Models;
 /// <see cref="DeliveredCount"/>/<see cref="FailedCount"/> from Expo receipts.
 /// </para>
 /// </summary>
-public class PushCampaign
+public class PushCampaign : IBrandOwned
 {
     public int Id { get; set; }
 

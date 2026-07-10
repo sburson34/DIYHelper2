@@ -22,10 +22,7 @@ public static class AdminOpsEndpoints
         // revenue (approved-quote totals), cost (labor + parts), margin, and jobs/tech.
         app.MapGet("/api/ops/summary", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {
-            var scope = BrandScopeOf(http);
-            var q = db.HelpRequests.AsQueryable();
-            if (scope is not null) q = q.Where(r => r.Brand == scope);
-            else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(r => r.Brand == brand);
+            var q = db.HelpRequests.WhereBrandVisible(BrandScopeOf(http), brand);
 
             var rows = await q.Select(r => new
             {
@@ -107,11 +104,9 @@ public static class AdminOpsEndpoints
         app.MapGet("/api/ops/timesheet", async ([FromQuery] string? brand, [FromQuery] DateTime? from, [FromQuery] DateTime? to,
             HttpContext http, AppDbContext db) =>
         {
-            var scope = BrandScopeOf(http);
             var q = db.HelpRequests.Where(r => r.Status == "completed" && r.AssignedTechId != null
-                && r.StartedAt != null && r.CompletedAt != null);
-            if (scope is not null) q = q.Where(r => r.Brand == scope);
-            else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(r => r.Brand == brand);
+                    && r.StartedAt != null && r.CompletedAt != null)
+                .WhereBrandVisible(BrandScopeOf(http), brand);
             if (from is { } f) q = q.Where(r => r.CompletedAt >= f);
             if (to is { } t) q = q.Where(r => r.CompletedAt <= t);
 
@@ -133,9 +128,7 @@ public static class AdminOpsEndpoints
         app.MapGet("/api/ops/next-actions", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {
             var scope = BrandScopeOf(http);
-            var q = db.HelpRequests.AsQueryable();
-            if (scope is not null) q = q.Where(r => r.Brand == scope);
-            else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(r => r.Brand == brand);
+            var q = db.HelpRequests.WhereBrandVisible(scope, brand);
 
             var now = DateTime.UtcNow;
             var twoDaysAgo = now.AddDays(-2);

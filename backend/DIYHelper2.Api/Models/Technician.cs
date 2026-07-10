@@ -11,7 +11,7 @@ namespace DIYHelper2.Api.Models;
 /// <para>Tenant model matches the rest of the schema: a denormalized lowercase
 /// <see cref="Brand"/> slug (no FK), sourced from the <c>X-Brand</c> header.</para>
 /// </summary>
-public class Technician
+public class Technician : IBrandOwned
 {
     public int Id { get; set; }
 

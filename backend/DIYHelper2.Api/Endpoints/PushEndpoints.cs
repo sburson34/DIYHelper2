@@ -188,12 +188,7 @@ public static class PushEndpoints
         // Campaign history — brand-scoped list.
         app.MapGet("/api/push/campaigns", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {
-            var scope = BrandScopeOf(http);
-            var q = db.PushCampaigns.AsQueryable();
-            if (scope is not null)
-                q = q.Where(c => c.Brand == scope);
-            else if (!string.IsNullOrEmpty(brand))
-                q = q.Where(c => c.Brand == brand.Trim().ToLowerInvariant());
+            var q = db.PushCampaigns.WhereBrandVisible(BrandScopeOf(http), brand?.Trim().ToLowerInvariant());
 
             var rows = await q.OrderByDescending(c => c.CreatedAt).Take(100).ToListAsync();
             return Results.Ok(rows.Select(PushCampaignView));
@@ -203,8 +198,7 @@ public static class PushEndpoints
         {
             var c = await db.PushCampaigns.FindAsync(id);
             if (c is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && c.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, c.Brand)) return Results.NotFound();
             return Results.Ok(PushCampaignView(c));
         });
 
@@ -213,8 +207,7 @@ public static class PushEndpoints
         {
             var c = await db.PushCampaigns.FindAsync(id);
             if (c is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && c.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, c.Brand)) return Results.NotFound();
             if (c.Status != "scheduled")
                 return ApiError.BadRequest(http, "Only scheduled campaigns can be canceled.");
             c.Status = "canceled";

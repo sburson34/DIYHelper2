@@ -21,10 +21,7 @@ public static class TechnicianEndpoints
         // pass ?brand= / brand in the body.
         app.MapGet("/api/technicians", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {
-            var scope = BrandScopeOf(http);
-            var q = db.Technicians.AsQueryable();
-            if (scope is not null) q = q.Where(t => t.Brand == scope);
-            else if (!string.IsNullOrWhiteSpace(brand)) q = q.Where(t => t.Brand == brand);
+            var q = db.Technicians.WhereBrandVisible(BrandScopeOf(http), brand);
 
             var techs = await q
                 .OrderBy(t => t.Name)
@@ -61,8 +58,7 @@ public static class TechnicianEndpoints
         {
             var tech = await db.Technicians.FindAsync(id);
             if (tech is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && tech.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, tech.Brand)) return Results.NotFound();
 
             if (dto.Name is not null) tech.Name = dto.Name.Trim();
             if (dto.Phone is not null) tech.Phone = dto.Phone;
@@ -78,8 +74,7 @@ public static class TechnicianEndpoints
         {
             var tech = await db.Technicians.FindAsync(id);
             if (tech is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && tech.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, tech.Brand)) return Results.NotFound();
 
             var code = GenerateTechCode();
             tech.LoginCodeHash = Sburson.Shared.Auth.PasswordHasher.Hash(code);
@@ -92,8 +87,7 @@ public static class TechnicianEndpoints
         {
             var tech = await db.Technicians.FindAsync(id);
             if (tech is null) return Results.NotFound();
-            var scope = BrandScopeOf(http);
-            if (scope is not null && tech.Brand != scope) return Results.NotFound();
+            if (CrossTenant(http, tech.Brand)) return Results.NotFound();
             db.Technicians.Remove(tech);
             await db.SaveChangesAsync();
             return Results.NoContent();

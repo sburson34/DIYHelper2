@@ -5,7 +5,7 @@ namespace DIYHelper2.Api.Models;
 /// on hand, and a reorder threshold so the console can flag low stock. Brand-
 /// scoped like everything else.
 /// </summary>
-public class InventoryItem
+public class InventoryItem : IBrandOwned
 {
     public int Id { get; set; }
     public string Brand { get; set; } = "diyhelper";

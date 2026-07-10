@@ -6,7 +6,7 @@ namespace DIYHelper2.Api.Models;
 /// hand-typing prices every time. Brand-scoped like everything else (denormalized
 /// slug, no FK).
 /// </summary>
-public class PriceBookItem
+public class PriceBookItem : IBrandOwned
 {
     public int Id { get; set; }
     public string Brand { get; set; } = "diyhelper";
