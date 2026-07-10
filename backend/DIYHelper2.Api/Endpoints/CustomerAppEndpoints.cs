@@ -245,6 +245,8 @@ public static class CustomerAppEndpoints
                     r.TechEtaMinutes,
                     r.QuoteStatus,
                     r.QuoteTotal,
+                    r.QuoteOptionsJson,
+                    r.QuoteSelectedOption,
                     r.Address,
                     r.CreatedAt,
                     r.UpdatedAt,
@@ -267,6 +269,8 @@ public static class CustomerAppEndpoints
                 r.TechEtaMinutes,
                 r.QuoteStatus,
                 r.QuoteTotal,
+                QuoteOptions = ParseQuoteOptions(r.QuoteOptionsJson),
+                r.QuoteSelectedOption,
                 r.Address,
                 r.CreatedAt,
                 r.UpdatedAt,
@@ -304,6 +308,8 @@ public static class CustomerAppEndpoints
                 r.QuoteTotal,
                 r.QuoteStatus,
                 r.QuoteSentAt,
+                QuoteOptions = ParseQuoteOptions(r.QuoteOptionsJson),
+                r.QuoteSelectedOption,
                 r.Address,
                 r.CreatedAt,
                 r.UpdatedAt,
@@ -346,11 +352,49 @@ public static class CustomerAppEndpoints
             if (decision != "approved" && decision != "declined")
                 return ApiError.BadRequest(http, "decision must be 'approved' or 'declined'.");
 
+            // Approving a tiered quote requires picking one of its options; the
+            // choice is materialized into QuoteTotal/QuoteLinesJson so
+            // invoicing, payment links and the completion pipeline work exactly
+            // like a classic single quote. Declines keep the options around
+            // (the owner can revise and re-send).
+            if (decision == "approved" && !string.IsNullOrWhiteSpace(r.QuoteOptionsJson))
+            {
+                var optionName = dto.OptionName?.Trim();
+                if (string.IsNullOrEmpty(optionName))
+                    return ApiError.BadRequest(http, "optionName is required to approve this quote.");
+
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(r.QuoteOptionsJson);
+                    System.Text.Json.JsonElement? match = null;
+                    foreach (var opt in doc.RootElement.EnumerateArray())
+                    {
+                        if (opt.TryGetProperty("name", out var n) && n.GetString()?.Trim() == optionName)
+                        {
+                            match = opt;
+                            break;
+                        }
+                    }
+                    if (match is not { } chosen)
+                        return ApiError.BadRequest(http, "optionName doesn't match any option on this quote.");
+
+                    r.QuoteTotal = chosen.GetProperty("total").GetDecimal();
+                    r.QuoteLinesJson = chosen.GetProperty("lines").GetRawText();
+                    r.QuoteSelectedOption = chosen.GetProperty("name").GetString();
+                }
+                catch (Exception e) when (e is System.Text.Json.JsonException or KeyNotFoundException or InvalidOperationException or FormatException)
+                {
+                    // A malformed stored quote should read as "no open quote to
+                    // approve", not a 500.
+                    return ApiError.BadRequest(http, "This quote can't be approved — ask the company to re-send it.");
+                }
+            }
+
             r.QuoteStatus = decision;
             r.QuoteRespondedAt = DateTime.UtcNow;
             r.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync();
-            return Results.Ok(new { r.Id, quoteStatus = r.QuoteStatus });
+            return Results.Ok(new { r.Id, quoteStatus = r.QuoteStatus, quoteSelectedOption = r.QuoteSelectedOption });
         });
 
         // Start a membership / maintenance-plan checkout. Fail-soft and honest: returns

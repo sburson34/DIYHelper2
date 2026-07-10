@@ -130,12 +130,24 @@ public record QuoteLineDto(
     [property: JsonPropertyName("quantity")] int? Quantity
 );
 
-public record SendQuoteDto(
+// One tier of a Good/Better/Best quote (name + its line items).
+public record QuoteOptionDto(
+    [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("lines")] List<QuoteLineDto>? Lines
 );
 
+// Exactly one of Lines (classic single quote) or Options (1-3 tiers) must be
+// provided; totals are always computed server-side.
+public record SendQuoteDto(
+    [property: JsonPropertyName("lines")] List<QuoteLineDto>? Lines,
+    [property: JsonPropertyName("options")] List<QuoteOptionDto>? Options = null
+);
+
+// optionName is required when approving a tiered quote (must match one of the
+// sent options); ignored for classic single quotes and declines.
 public record QuoteDecisionDto(
-    [property: JsonPropertyName("decision")] string? Decision
+    [property: JsonPropertyName("decision")] string? Decision,
+    [property: JsonPropertyName("optionName")] string? OptionName = null
 );
 
 public record SendMessageDto(

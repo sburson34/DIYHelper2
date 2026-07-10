@@ -154,6 +154,15 @@ public static class EndpointHelpers
         return tokens.Validate(token);
     }
 
+    // Parse a job's stored tiered-quote JSON ([{name, lines, total}]) for
+    // projection to the console/app. Null/malformed → null (no options).
+    public static System.Text.Json.Nodes.JsonNode? ParseQuoteOptions(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.Nodes.JsonNode.Parse(json); }
+        catch (System.Text.Json.JsonException) { return null; }
+    }
+
     // The job's address as one display/geocode line: "street, city, state zip"
     // with whatever parts exist. Null when the job has no address at all.
     public static string? AddressLineOf(HelpRequest r)

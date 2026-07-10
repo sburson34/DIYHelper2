@@ -79,6 +79,9 @@ public static class HelpRequestEndpoints
             node["beforePhotoUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "before", "/api/help-requests");
             node["afterPhotoUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "after", "/api/help-requests");
             node["signatureUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "signature", "/api/help-requests");
+            // Tiered quote as a parsed array (the raw quoteOptionsJson column
+            // also serializes; the console reads this parsed shape).
+            node["quoteOptions"] = ParseQuoteOptions(request.QuoteOptionsJson);
             return Results.Json(node);
         });
 
@@ -194,21 +197,71 @@ public static class HelpRequestEndpoints
             if (request is null) return Results.NotFound();
             if (CrossTenant(http, request.Brand)) return Results.NotFound();
 
+            // Exactly one of lines | options. (Neither falls through to the
+            // classic "needs at least one line" 400 below, unchanged.)
+            if (dto.Lines is { Count: > 0 } && dto.Options is { Count: > 0 })
+                return ApiError.BadRequest(http, "Provide either 'lines' or 'options', not both.");
+
+            // Server-side money math shared by both paths.
+            static (decimal Total, List<object> Clean) Compute(List<QuoteLineDto> lines)
+            {
+                decimal total = 0m;
+                var clean = new List<object>();
+                foreach (var l in lines)
+                {
+                    var qty = l.Quantity is null or < 1 ? 1 : l.Quantity.Value;
+                    var amount = l.Amount ?? 0m;
+                    total += amount * qty;
+                    clean.Add(new { description = l.Description ?? "", amount, quantity = qty });
+                }
+                return (total, clean);
+            }
+
+            // ── Tiered (Good/Better/Best) path ────────────────────────────
+            if (dto.Options is { Count: > 0 } options)
+            {
+                if (options.Count > 3)
+                    return ApiError.BadRequest(http, "A tiered quote can have at most 3 options.");
+                var names = options.Select(o => o.Name?.Trim() ?? "").ToList();
+                if (names.Any(string.IsNullOrEmpty))
+                    return ApiError.BadRequest(http, "Every option needs a name.");
+                if (names.Distinct(StringComparer.OrdinalIgnoreCase).Count() != names.Count)
+                    return ApiError.BadRequest(http, "Option names must be unique.");
+                if (options.Any(o => o.Lines is not { Count: > 0 }))
+                    return ApiError.BadRequest(http, "Every option needs at least one line.");
+
+                var cleanOptions = options.Select(o =>
+                {
+                    var (total, clean) = Compute(o.Lines!);
+                    return (object)new { name = o.Name!.Trim(), lines = clean, total };
+                }).ToList();
+
+                request.QuoteOptionsJson = System.Text.Json.JsonSerializer.Serialize(cleanOptions);
+                // Total/lines stay empty until the customer picks an option —
+                // approval materializes the choice so invoicing/payment links
+                // downstream work unchanged.
+                request.QuoteTotal = null;
+                request.QuoteLinesJson = null;
+                request.QuoteSelectedOption = null;
+                request.QuoteStatus = "sent";
+                request.QuoteSentAt = DateTime.UtcNow;
+                request.QuoteRespondedAt = null;
+                request.UpdatedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync();
+                return Results.Ok(new { request.Id, request.QuoteTotal, request.QuoteStatus });
+            }
+
+            // ── Classic single-quote path (behavior unchanged) ─────────────
             var lines = dto.Lines ?? new List<QuoteLineDto>();
             if (lines.Count == 0) return ApiError.BadRequest(http, "A quote needs at least one line.");
 
-            decimal total = 0m;
-            var clean = new List<object>();
-            foreach (var l in lines)
-            {
-                var qty = l.Quantity is null or < 1 ? 1 : l.Quantity.Value;
-                var amount = l.Amount ?? 0m;
-                total += amount * qty;
-                clean.Add(new { description = l.Description ?? "", amount, quantity = qty });
-            }
-
-            request.QuoteLinesJson = System.Text.Json.JsonSerializer.Serialize(clean);
-            request.QuoteTotal = total;
+            var (singleTotal, singleClean) = Compute(lines);
+            request.QuoteLinesJson = System.Text.Json.JsonSerializer.Serialize(singleClean);
+            request.QuoteTotal = singleTotal;
+            // A single-quote re-send supersedes any earlier tiered quote —
+            // stale options would otherwise force optionName on approval.
+            request.QuoteOptionsJson = null;
+            request.QuoteSelectedOption = null;
             request.QuoteStatus = "sent";
             request.QuoteSentAt = DateTime.UtcNow;
             request.QuoteRespondedAt = null;

@@ -127,6 +127,19 @@ public class HelpRequest : IBrandOwned
     /// <c>declined</c> (the customer's choice, from the app).</summary>
     public string? QuoteStatus { get; set; }
 
+    /// <summary>Tiered (Good/Better/Best) quote, when the owner sent options
+    /// instead of a single line set: JSON array
+    /// <c>[{name, lines:[{description,amount,quantity}], total}]</c> with
+    /// totals computed server-side at send time. Null for single-line quotes.
+    /// While options are pending, <see cref="QuoteTotal"/> and
+    /// <see cref="QuoteLinesJson"/> stay null; approval materializes the
+    /// chosen option into them so invoicing/payments work unchanged.</summary>
+    public string? QuoteOptionsJson { get; set; }
+
+    /// <summary>The option name the customer approved (e.g. "Better").
+    /// Null until an options quote is approved.</summary>
+    public string? QuoteSelectedOption { get; set; }
+
     public DateTime? QuoteSentAt { get; set; }
     public DateTime? QuoteRespondedAt { get; set; }
 
