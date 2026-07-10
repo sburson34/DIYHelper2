@@ -83,6 +83,13 @@ public record TechJobUpdateDto(
     [property: JsonPropertyName("signatureBase64")] string? SignatureBase64
 );
 
+// Console login (POST /admin/session). Same two credential tiers as Basic auth:
+// super-admin config creds or a brand's dashboard login.
+public record AdminLoginDto(
+    [property: JsonPropertyName("username")] string? Username,
+    [property: JsonPropertyName("password")] string? Password
+);
+
 public record PriceBookItemDto(
     [property: JsonPropertyName("name")] string? Name,
     [property: JsonPropertyName("defaultPrice")] decimal? DefaultPrice,

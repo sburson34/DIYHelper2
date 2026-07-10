@@ -183,6 +183,12 @@ builder.Services.AddSingleton(_ => new DIYHelper2.Api.Integrations.Crm.JobberOpt
 builder.Services.AddSingleton<DIYHelper2.Api.Integrations.Crm.CrmTokenProtector>();
 // Signs/validates the mobile "tech mode" bearer tokens (HMAC). Key from env.
 builder.Services.AddSingleton<DIYHelper2.Api.Services.TechTokenService>();
+// Console session auth: the two-tier credential check + brute-force throttle
+// shared by AdminAuthMiddleware and POST /admin/session (super-admin creds are
+// populated post-Secrets-Manager below), and the HMAC session-cookie tokens
+// (key from ADMIN_SESSION_KEY, same posture as TECH_TOKEN_KEY).
+builder.Services.AddSingleton<DIYHelper2.Api.Services.AdminCredentialVerifier>();
+builder.Services.AddSingleton<DIYHelper2.Api.Services.AdminSessionService>();
 builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberTokenService>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberCrmSink>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddScoped<DIYHelper2.Api.Integrations.Crm.ICrmLeadSink>(
@@ -658,14 +664,13 @@ app.UseMiddleware<CorrelationIdMiddleware>();
 app.UseSburonSentry();
 app.UseMiddleware<SecurityHeadersMiddleware>();
 
-// Admin Basic-Auth gate BEFORE static files so /admin/* HTML/JS/CSS is
-// protected, and before the admin-only /api/help-requests and /api/feedback
-// GET endpoints. Mobile POST paths are not gated here.
-app.UseMiddleware<AdminAuthMiddleware>(new AdminAuthOptions
-{
-    Username = adminUsername,
-    Password = adminPassword,
-});
+// Admin auth gate (session cookie OR Basic) BEFORE static files, gating the
+// admin-only API surfaces. /admin/* static files themselves are served without
+// auth (UI shell only — the console renders its own login form); the
+// credentials live in AdminCredentialVerifier, shared with POST /admin/session.
+app.Services.GetRequiredService<DIYHelper2.Api.Services.AdminCredentialVerifier>()
+    .Configure(adminUsername, adminPassword);
+app.UseMiddleware<AdminAuthMiddleware>();
 
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -718,6 +723,8 @@ app.MapAccounting();
 app.MapWebhooks();
 
 app.MapAdminOps();
+
+app.MapAdminSession();
 
 app.MapBrands();
 

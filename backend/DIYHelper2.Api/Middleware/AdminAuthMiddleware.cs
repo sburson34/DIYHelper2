@@ -1,142 +1,144 @@
-using System.Security.Cryptography;
 using System.Text;
 using DIYHelper2.Api.Data;
-using Microsoft.EntityFrameworkCore;
-using Sburson.Shared.Auth;
+using DIYHelper2.Api.Services;
 
 namespace DIYHelper2.Api.Middleware;
 
 /// <summary>
-/// Configuration for <see cref="AdminAuthMiddleware"/>. These are the
-/// SUPER-ADMIN credentials (you) — a super-admin sees every brand's leads. If
-/// either is null/empty the super-admin path is disabled, but per-brand logins
-/// (from the Brands table) still work.
-/// </summary>
-public sealed class AdminAuthOptions
-{
-    public string? Username { get; init; }
-    public string? Password { get; init; }
-}
-
-/// <summary>
-/// Multi-tenant HTTP Basic Auth gate for admin surfaces:
-///   - /admin/*             (dashboard HTML/JS/CSS)
+/// Multi-tenant auth gate for the admin surfaces:
+///   - /admin/session       GET only (whoami; POST/DELETE are the login/logout
+///                          endpoints and handle themselves)
 ///   - /api/help-requests   GET (list, detail), PUT, DELETE
-///   - /api/brands          GET (brand list for the dashboard)
-///   - /api/feedback        GET (list)
+///   - /api/brands, /api/technicians, /api/pricebook, /api/inventory,
+///     /api/ops, /api/ai, /api/push (composer surfaces), /api/feedback GET,
+///     /api/crm + /api/accounting (except OAuth callbacks)
 ///
-/// Two credential tiers, checked in order:
-///   1. SUPER-ADMIN — the <see cref="AdminAuthOptions"/> config creds
-///      (ADMIN_USERNAME / ADMIN_PASSWORD). Sets <c>Items["IsSuperAdmin"]=true</c>
-///      and grants access to all brands' data.
-///   2. PER-BRAND — a <c>Brand.DashboardUsername</c> + BCrypt
-///      <c>DashboardPasswordHash</c> row (white-label tenant). Sets
-///      <c>Items["BrandScope"]=slug</c>; handlers must scope their queries to it.
+/// /admin/* STATIC files (index.html/js/css) are served WITHOUT auth — they
+/// are the UI shell only and contain no data; every API the shell calls stays
+/// gated here. That lets the console render its own login form.
 ///
-/// Fail-closed: <c>_next</c> is reached only on a positive super-admin or brand
-/// match; anything else returns 401. The per-brand path always runs a BCrypt
-/// verify (against <see cref="PasswordHasher.DummyHash"/> on a lookup miss) so
-/// response time never reveals whether a username exists.
+/// Two ways in, checked in order:
+///   1. SESSION COOKIE — a valid <c>dh_admin_session</c> HMAC token minted by
+///      POST /admin/session (the console login form).
+///   2. HTTP BASIC — unchanged legacy path (curl / scripts): super-admin
+///      config creds or a per-brand Brand.DashboardUsername + BCrypt hash.
 ///
-/// The mobile app still reaches /api/help-requests POST and /api/feedback POST
-/// without Basic Auth — those are user submit flows gated by X-App-Key instead.
+/// Both paths resolve through <see cref="AdminCredentialVerifier"/> semantics
+/// and stamp the same <c>Items["IsSuperAdmin"]</c> / <c>Items["BrandScope"]</c>
+/// (cross-tenant ids 404, not 403, so a scoped user can't probe another
+/// brand's id space).
+///
+/// 401 responses carry a <c>WWW-Authenticate: Basic</c> challenge ONLY when
+/// the request actually attempted Basic auth — otherwise the browser's native
+/// credentials popup would appear on top of (and defeat) the console's own
+/// login form.
+///
+/// CSRF stance for the cookie path: the session cookie is SameSite=Strict,
+/// CORS default-denies browser origins (ALLOWED_ORIGINS is empty unless
+/// deliberately configured), and — as defense-in-depth — any state-changing
+/// request a modern browser marks <c>Sec-Fetch-Site: cross-site</c> is
+/// rejected with 403 below. No CSRF token is needed on top of those three.
+///
+/// Fail-closed: <c>_next</c> is reached only on a positive cookie, super-admin
+/// or brand match; anything else returns 401. Per-IP brute-force lockout is
+/// shared with the login endpoint via <see cref="AdminCredentialVerifier"/>.
 /// </summary>
 public class AdminAuthMiddleware
 {
     private readonly RequestDelegate _next;
-    private readonly string? _username;
-    private readonly string? _password;
 
-    // ── Brute-force throttle ──────────────────────────────────────────
-    // Per-IP failed-login accounting. The dashboard is the branding company's
-    // primary interface with the product, so its login is a high-value target;
-    // BCrypt already slows guessing, but a lockout caps online brute force.
-    private const int MaxFailures = 10;                                  // per window
-    private static readonly TimeSpan FailureWindow = TimeSpan.FromMinutes(5);
-    private static readonly TimeSpan LockoutDuration = TimeSpan.FromMinutes(15);
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, AttemptRecord> _attempts = new();
+    public AdminAuthMiddleware(RequestDelegate next) => _next = next;
 
-    private sealed class AttemptRecord
+    // Scoped/per-request dependencies (AppDbContext) are injected via
+    // convention-based middleware method injection; the middleware itself stays
+    // a singleton, so no captive dependency. The verifier + session service are
+    // singletons but injected here too for symmetry/testability.
+    public async Task InvokeAsync(
+        HttpContext context, AppDbContext db,
+        AdminCredentialVerifier verifier, AdminSessionService sessions)
     {
-        public int Failures;
-        public DateTime WindowStart;
-        public DateTime? LockedUntil;
-    }
+        var path = context.Request.Path.Value ?? "";
+        var isAdminPath = path.StartsWith("/admin", StringComparison.OrdinalIgnoreCase);
+        var requiresAuth = RequiresAuth(context.Request);
 
-    public AdminAuthMiddleware(RequestDelegate next, AdminAuthOptions options)
-    {
-        _next = next;
-        _username = options.Username;
-        _password = options.Password;
-    }
+        // Strict, self-contained CSP + no-store on every admin response —
+        // static UI shell, session endpoints and gated APIs alike. The shared
+        // SecurityHeadersMiddleware sets nosniff / frame-options /
+        // referrer-policy but no CSP; the portal is a same-origin app with zero
+        // inline script/style, so a strict policy adds real XSS
+        // defense-in-depth without breaking it.
+        if (isAdminPath || requiresAuth)
+            ApplyAdminSecurityHeaders(context);
 
-    // AppDbContext is injected per-request via convention-based middleware method
-    // injection (the middleware itself stays a singleton, so no captive
-    // dependency). Needed to validate per-brand dashboard credentials.
-    public async Task InvokeAsync(HttpContext context, AppDbContext db)
-    {
-        if (!RequiresAuth(context.Request))
+        if (!requiresAuth)
         {
             await _next(context);
             return;
         }
 
-        // Strict, self-contained CSP + no-store on every admin response
-        // (documents and API). The shared SecurityHeadersMiddleware sets
-        // nosniff / frame-options / referrer-policy but no CSP; the portal is a
-        // same-origin app with zero inline script/style, so a strict policy adds
-        // real XSS defense-in-depth without breaking it.
-        ApplyAdminSecurityHeaders(context);
-
-        var clientIp = ClientIp(context);
+        var clientIp = AdminCredentialVerifier.ClientIp(context);
 
         // Refuse early if this IP is in a lockout window.
-        if (IsLockedOut(clientIp))
+        if (verifier.IsLockedOut(clientIp))
         {
             context.Response.StatusCode = 429;
-            context.Response.Headers["Retry-After"] = ((int)LockoutDuration.TotalSeconds).ToString();
+            context.Response.Headers["Retry-After"] = ((int)AdminCredentialVerifier.LockoutDuration.TotalSeconds).ToString();
             context.Response.ContentType = "application/json";
             await context.Response.WriteAsync(
                 System.Text.Json.JsonSerializer.Serialize(new { error = "Too many failed attempts. Try again later.", code = "admin_locked_out" }));
             return;
         }
 
+        // 1. Session cookie (console login form).
+        var session = sessions.Validate(context.Request.Cookies[AdminSessionService.CookieName]);
+        if (session is not null)
+        {
+            // Defense-in-depth CSRF check (see class comment): a cookie-authed
+            // state-changing request that the browser itself labels as
+            // cross-site can only be a forged navigation/fetch — reject it.
+            var method = context.Request.Method;
+            var stateChanging = !HttpMethods.IsGet(method) && !HttpMethods.IsHead(method) && !HttpMethods.IsOptions(method);
+            if (stateChanging && string.Equals(
+                    context.Request.Headers["Sec-Fetch-Site"].FirstOrDefault(), "cross-site",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                context.Response.StatusCode = 403;
+                context.Response.ContentType = "application/json";
+                await context.Response.WriteAsync(
+                    System.Text.Json.JsonSerializer.Serialize(new { error = "Cross-site request rejected.", code = "admin_cross_site" }));
+                return;
+            }
+
+            if (session.IsSuperAdmin) context.Items["IsSuperAdmin"] = true;
+            else context.Items["BrandScope"] = session.Brand;
+            await _next(context);
+            return;
+        }
+
+        // 2. HTTP Basic (curl / scripts) — behavior unchanged.
+        var attemptedBasic = (context.Request.Headers["Authorization"].FirstOrDefault() ?? "")
+            .StartsWith("Basic ", StringComparison.OrdinalIgnoreCase);
+
         if (!TryParseBasic(context.Request, out var user, out var pass))
         {
-            await WriteChallenge(context, "Authentication required.");
+            // No usable credentials at all. Challenge only an actual (malformed)
+            // Basic attempt — see class comment on the browser popup.
+            await WriteUnauthorized(context, "Authentication required.", challenge: attemptedBasic);
             return;
         }
 
-        // Tier 1: super-admin config creds → full cross-brand access.
-        if (!string.IsNullOrEmpty(_username) && !string.IsNullOrEmpty(_password)
-            && FixedTimeEquals(user, _username) && FixedTimeEquals(pass, _password))
+        var identity = await verifier.VerifyAsync(db, user, pass);
+        if (identity is not null)
         {
-            RegisterSuccess(clientIp);
-            context.Items["IsSuperAdmin"] = true;
+            verifier.RegisterSuccess(clientIp);
+            if (identity.IsSuperAdmin) context.Items["IsSuperAdmin"] = true;
+            else context.Items["BrandScope"] = identity.BrandScope;
             await _next(context);
             return;
         }
 
-        // Tier 2: per-brand scoped login. Always verify against a hash (dummy on
-        // miss) so a missing username is timing-indistinguishable from a wrong
-        // password — BCrypt's cost dominates the DB-lookup variance.
-        var brand = await db.Brands
-            .Where(b => b.DashboardUsername == user)
-            .Select(b => new { b.Slug, b.DashboardPasswordHash, b.IsActive })
-            .FirstOrDefaultAsync();
-
-        var passwordOk = PasswordHasher.Verify(pass, brand?.DashboardPasswordHash ?? PasswordHasher.DummyHash);
-
-        if (brand is not null && brand.IsActive && passwordOk)
-        {
-            RegisterSuccess(clientIp);
-            context.Items["BrandScope"] = brand.Slug;
-            await _next(context);
-            return;
-        }
-
-        RegisterFailure(clientIp);
-        await WriteChallenge(context, "Invalid credentials.");
+        verifier.RegisterFailure(clientIp);
+        await WriteUnauthorized(context, "Invalid credentials.", challenge: true);
     }
 
     // Registers strict security headers on the response just before it starts,
@@ -171,46 +173,21 @@ public class AdminAuthMiddleware
         });
     }
 
-    private static string ClientIp(HttpContext context) =>
-        context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
-        ?? context.Connection.RemoteIpAddress?.ToString()
-        ?? "unknown";
-
-    private static bool IsLockedOut(string ip) =>
-        ip != "unknown"
-        && _attempts.TryGetValue(ip, out var rec)
-        && rec.LockedUntil is { } until
-        && until > DateTime.UtcNow;
-
-    private static void RegisterFailure(string ip)
-    {
-        // No resolvable client IP (in-memory test host) → nothing to throttle by.
-        // In production the ALB always sets X-Forwarded-For / RemoteIpAddress.
-        if (ip == "unknown") return;
-        var rec = _attempts.GetOrAdd(ip, _ => new AttemptRecord { WindowStart = DateTime.UtcNow });
-        lock (rec)
-        {
-            var now = DateTime.UtcNow;
-            // Reset the counting window if it has elapsed (and no active lock).
-            if (rec.LockedUntil is null && now - rec.WindowStart > FailureWindow)
-            {
-                rec.WindowStart = now;
-                rec.Failures = 0;
-            }
-            rec.Failures++;
-            if (rec.Failures >= MaxFailures)
-                rec.LockedUntil = now + LockoutDuration;
-        }
-    }
-
-    private static void RegisterSuccess(string ip) => _attempts.TryRemove(ip, out _);
-
     private static bool RequiresAuth(HttpRequest req)
     {
         var path = req.Path.Value ?? "";
 
+        // Console session endpoints: POST (login) and DELETE (logout) handle
+        // their own auth; GET (whoami) is answered by the cookie/Basic branches
+        // above — never by a Basic challenge.
+        if (path.Equals("/admin/session", StringComparison.OrdinalIgnoreCase))
+            return HttpMethods.IsGet(req.Method);
+
+        // /admin/* static assets are the UI shell only (no data) and must load
+        // unauthenticated so the console can render its login form. Every API
+        // the shell calls remains gated below.
         if (path.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
-            return true;
+            return false;
 
         // Admin-only /api/help-requests operations: list (GET), detail (GET),
         // update (PUT), delete (DELETE). POST is the customer create flow.
@@ -298,19 +275,16 @@ public class AdminAuthMiddleware
         }
     }
 
-    private static async Task WriteChallenge(HttpContext ctx, string message)
+    private static async Task WriteUnauthorized(HttpContext ctx, string message, bool challenge)
     {
         ctx.Response.StatusCode = 401;
-        ctx.Response.Headers["WWW-Authenticate"] = "Basic realm=\"DIYHelper2 Admin\", charset=\"UTF-8\"";
+        // Challenge ONLY requests that attempted Basic auth; a challenge on a
+        // cookie-less browser request would pop the native login dialog over
+        // the console's own form.
+        if (challenge)
+            ctx.Response.Headers["WWW-Authenticate"] = "Basic realm=\"DIYHelper2 Admin\", charset=\"UTF-8\"";
         ctx.Response.ContentType = "application/json";
         await ctx.Response.WriteAsync(
             System.Text.Json.JsonSerializer.Serialize(new { error = message, code = "admin_unauthorized" }));
-    }
-
-    private static bool FixedTimeEquals(string a, string b)
-    {
-        var ab = Encoding.UTF8.GetBytes(a ?? "");
-        var bb = Encoding.UTF8.GetBytes(b ?? "");
-        return CryptographicOperations.FixedTimeEquals(ab, bb);
     }
 }
