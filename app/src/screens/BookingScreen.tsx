@@ -16,12 +16,28 @@ import { useTranslation } from '../i18n/I18nContext';
 import { useBrandConfig } from '../config/brandConfig';
 import { pickPhoto } from '../utils/pickPhoto';
 import theme from '../theme';
+import type { DrawerScreenProps } from '@react-navigation/drawer';
+import type { RootDrawerParamList, BookParams } from '../navigation/types';
 
 const WINDOWS = ['anytime', 'morning', 'afternoon', 'evening'];
 
+interface DayOption {
+  key: string;
+  label: string;
+  iso: string | null;
+}
+
+// The attached photo: either freshly picked (has uri) or prefilled from
+// Triage's route params (base64 only).
+interface BookingPhoto {
+  base64: string;
+  uri?: string;
+  mimeType?: string;
+}
+
 // Next 7 days as selectable chips, plus an "ASAP" option (null date).
-const buildDayOptions = (t) => {
-  const opts = [{ key: 'asap', label: t('booking_asap'), iso: null }];
+const buildDayOptions = (t: (key: string) => string): DayOption[] => {
+  const opts: DayOption[] = [{ key: 'asap', label: t('booking_asap'), iso: null }];
   const now = new Date();
   for (let i = 0; i < 7; i++) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
@@ -31,18 +47,18 @@ const buildDayOptions = (t) => {
   return opts;
 };
 
-export default function BookingScreen({ navigation, route }) {
+export default function BookingScreen({ navigation, route }: DrawerScreenProps<RootDrawerParamList, 'Book'>) {
   const { t } = useTranslation();
   const config = useBrandConfig();
-  const params = route?.params || {};
+  const params: BookParams = route?.params || {};
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [serviceType, setServiceType] = useState(params.serviceType || null);
+  const [serviceType, setServiceType] = useState<string | null>(params.serviceType || null);
   const [title, setTitle] = useState(params.prefillTitle || '');
   const [description, setDescription] = useState(params.prefillDescription || '');
-  const [photo, setPhoto] = useState(params.imageBase64 ? { base64: params.imageBase64 } : null);
+  const [photo, setPhoto] = useState<BookingPhoto | null>(params.imageBase64 ? { base64: params.imageBase64 } : null);
   const [day, setDay] = useState('asap');
   const [timeWindow, setTimeWindow] = useState('anytime');
   const [submitting, setSubmitting] = useState(false);
@@ -59,7 +75,7 @@ export default function BookingScreen({ navigation, route }) {
     });
   }, []);
 
-  const addPhoto = async (source) => {
+  const addPhoto = async (source: 'camera' | 'library') => {
     const p = await pickPhoto(source);
     if (p) setPhoto(p);
   };
@@ -98,7 +114,7 @@ export default function BookingScreen({ navigation, route }) {
       setDescription('');
       setPhoto(null);
       setServiceType(null);
-    } catch (e) {
+    } catch (e: any) {
       Alert.alert(t('booking_failed_title'), e.message);
     } finally {
       setSubmitting(false);

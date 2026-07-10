@@ -25,7 +25,7 @@ export default function TechLoginScreen() {
     try {
       await login(code);
       // On success the TechStack swaps to the jobs list automatically.
-    } catch (e) {
+    } catch (e: any) {
       Alert.alert(t('tech_login_failed_title'), e.message || t('tech_login_failed_msg'));
     } finally {
       setBusy(false);
