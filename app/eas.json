@@ -28,6 +28,18 @@
       "ios": {
         "autoIncrement": true
       }
+    },
+    "preview:acme-food-truck": {
+      "extends": "preview",
+      "env": {
+        "BRAND": "acme-food-truck"
+      }
+    },
+    "production:acme-food-truck": {
+      "extends": "production",
+      "env": {
+        "BRAND": "acme-food-truck"
+      }
     }
   },
   "submit": {

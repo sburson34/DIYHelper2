@@ -1,0 +1,19 @@
+{
+  "id": "acme-food-truck",
+  "name": "Acme Eats",
+  "slug": "acme-food-truck",
+  "scheme": "acmeeats",
+  "bundleId": "com.acmefoodtruck.eats",
+  "companyShortName": "Acme",
+  "fontFamily": "Poppins",
+  "releasePrefix": "acme-food-truck",
+  "privacyPolicyUrl": "https://acmefoodtruck.example/privacy",
+  "termsUrl": null,
+  "colors": {
+    "primary": "#e4572e",
+    "secondary": "#17337a",
+    "accent": "#ffc914"
+  },
+  "splashBackground": "#17337a",
+  "iconBackground": "#17337a"
+}

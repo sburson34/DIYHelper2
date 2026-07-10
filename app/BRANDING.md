@@ -55,6 +55,22 @@ BRAND=acme-home npm run android
 
 `npm run brands` lists every brand and its bundle id.
 
+### EAS cloud builds
+
+Local `BRAND=<id>` doesn't reach EAS's remote builders (they re-evaluate
+`app.config.js` in a fresh environment), so each client brand gets thin
+profiles in `eas.json` that pin the env var:
+
+```bash
+eas build --profile preview:acme-food-truck      # internal APK
+eas build --profile production:acme-food-truck   # store bundle
+```
+
+To add EAS profiles for a new brand, copy the two `*:acme-food-truck` entries
+in `eas.json` and change the `BRAND` value. Submission credentials in
+`eas.json → submit` must be the **client's own** store accounts — see the
+brand's checklist under `store/<id>/`.
+
 > **Native folder is regenerated.** `npm run prebuild` runs
 > `expo prebuild --clean`, which **overwrites `android/`**. `android/` is
 > committed as the `diyhelper` baseline, so to get back to the default after
@@ -77,6 +93,10 @@ BRAND=acme-home npm run android
    art. `icon.png` doubles as the Android adaptive-icon foreground, so keep the
    logo centered with padding.
 4. `BRAND=<new-id> npm run prebuild && BRAND=<new-id> npm run build:beta`
+5. Before the first store submission, write `store/<new-id>/store-listing.md`
+   (per-platform copy) and `store/<new-id>/differentiation-checklist.md`
+   (Apple 4.2.6/4.3 white-label checklist) — `store/acme-food-truck/` is the
+   template.
 
 ## Not yet automated (follow-ups)
 
