@@ -1,0 +1,306 @@
+{
+  "normalizeHex": [
+    {
+      "input": "#FCA004",
+      "expected": "#FCA004"
+    },
+    {
+      "input": "fca004",
+      "expected": "#FCA004"
+    },
+    {
+      "input": "#0af",
+      "expected": "#00AAFF"
+    },
+    {
+      "input": "  #0A4FA6  ",
+      "expected": "#0A4FA6"
+    },
+    {
+      "input": "bad",
+      "expected": "#BBAADD"
+    },
+    {
+      "input": "nope",
+      "expected": null
+    },
+    {
+      "input": "#12",
+      "expected": null
+    }
+  ],
+  "contrastRatio": [
+    {
+      "input": [
+        "#000000",
+        "#FFFFFF"
+      ],
+      "expected": 21
+    },
+    {
+      "input": [
+        "#FFFFFF",
+        "#000000"
+      ],
+      "expected": 21
+    },
+    {
+      "input": [
+        "#FCA004",
+        "#0F2253"
+      ],
+      "expected": 7.400981327466474
+    },
+    {
+      "input": [
+        "#0A4FA6",
+        "#FFFFFF"
+      ],
+      "expected": 7.830171457930327
+    },
+    {
+      "input": [
+        "#777777",
+        "#777777"
+      ],
+      "expected": 1
+    },
+    {
+      "input": [
+        "#FDD314",
+        "#10151F"
+      ],
+      "expected": 12.622523537827751
+    }
+  ],
+  "onColor": [
+    {
+      "input": {
+        "background": "#FDD314"
+      },
+      "expected": "#10151F"
+    },
+    {
+      "input": {
+        "background": "#0A4FA6"
+      },
+      "expected": "#FFFFFF"
+    },
+    {
+      "input": {
+        "background": "#FCA004"
+      },
+      "expected": "#10151F"
+    },
+    {
+      "input": {
+        "background": "#7F7F7F"
+      },
+      "expected": "#10151F"
+    },
+    {
+      "input": {
+        "background": "#111111"
+      },
+      "expected": "#FFFFFF"
+    },
+    {
+      "input": {
+        "background": "#F5F5F5"
+      },
+      "expected": "#10151F"
+    },
+    {
+      "input": {
+        "background": "#FCA004",
+        "darkInk": "#000000",
+        "lightInk": "#FFFFFF"
+      },
+      "expected": "#000000"
+    }
+  ],
+  "generateBrandColors": [
+    {
+      "input": {
+        "seed": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314"
+        },
+        "mode": "light",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#FFFFFF"
+        }
+      },
+      "expected": {
+        "primary": "#FCA004",
+        "onPrimary": "#10151F",
+        "primaryDark": "#D48603",
+        "primarySoft": "#FFF4E1",
+        "secondary": "#0A4FA6",
+        "onSecondary": "#FFFFFF",
+        "secondaryDark": "#08428B",
+        "accent": "#FDD314",
+        "onAccent": "#10151F"
+      }
+    },
+    {
+      "input": {
+        "seed": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314"
+        },
+        "mode": "dark",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#10151F"
+        }
+      },
+      "expected": {
+        "primary": "#FCA004",
+        "onPrimary": "#10151F",
+        "primaryDark": "#FCAB22",
+        "primarySoft": "#3F311A",
+        "secondary": "#0A4FA6",
+        "onSecondary": "#FFFFFF",
+        "secondaryDark": "#2764B1",
+        "accent": "#FDD314",
+        "onAccent": "#10151F"
+      }
+    },
+    {
+      "input": {
+        "seed": {
+          "primary": "#212121",
+          "secondary": "#1B5E20",
+          "accent": "#311B92"
+        },
+        "mode": "light",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#FFFFFF"
+        }
+      },
+      "expected": {
+        "primary": "#212121",
+        "onPrimary": "#FFFFFF",
+        "primaryDark": "#1C1C1C",
+        "primarySoft": "#E4E4E4",
+        "secondary": "#1B5E20",
+        "onSecondary": "#FFFFFF",
+        "secondaryDark": "#174F1B",
+        "accent": "#311B92",
+        "onAccent": "#FFFFFF"
+      }
+    },
+    {
+      "input": {
+        "seed": {
+          "primary": "#F8C8DC",
+          "secondary": "#AEDFF7",
+          "accent": "#FDFD96"
+        },
+        "mode": "light",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#FFFFFF"
+        }
+      },
+      "expected": {
+        "primary": "#F8C8DC",
+        "onPrimary": "#10151F",
+        "primaryDark": "#D0A8B9",
+        "primarySoft": "#FEF8FB",
+        "secondary": "#AEDFF7",
+        "onSecondary": "#10151F",
+        "secondaryDark": "#92BBCF",
+        "accent": "#FDFD96",
+        "onAccent": "#10151F"
+      }
+    },
+    {
+      "input": {
+        "seed": {
+          "primary": "#2E7D32"
+        },
+        "mode": "light",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#FFFFFF"
+        }
+      },
+      "expected": {
+        "primary": "#2E7D32",
+        "onPrimary": "#FFFFFF",
+        "primaryDark": "#27692A",
+        "primarySoft": "#E6EFE6",
+        "secondary": "#0A4FA6",
+        "onSecondary": "#FFFFFF",
+        "secondaryDark": "#08428B",
+        "accent": "#FDD314",
+        "onAccent": "#10151F"
+      }
+    },
+    {
+      "input": {
+        "seed": null,
+        "mode": "dark",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#10151F"
+        }
+      },
+      "expected": {
+        "primary": "#FCA004",
+        "onPrimary": "#10151F",
+        "primaryDark": "#FCAB22",
+        "primarySoft": "#3F311A",
+        "secondary": "#0A4FA6",
+        "onSecondary": "#FFFFFF",
+        "secondaryDark": "#2764B1",
+        "accent": "#FDD314",
+        "onAccent": "#10151F"
+      }
+    },
+    {
+      "input": {
+        "seed": {
+          "primary": "not-a-color",
+          "secondary": "795548"
+        },
+        "mode": "light",
+        "base": {
+          "primary": "#FCA004",
+          "secondary": "#0A4FA6",
+          "accent": "#FDD314",
+          "surface": "#FFFFFF"
+        }
+      },
+      "expected": {
+        "primary": "#FCA004",
+        "onPrimary": "#10151F",
+        "primaryDark": "#D48603",
+        "primarySoft": "#FFF4E1",
+        "secondary": "#795548",
+        "onSecondary": "#FFFFFF",
+        "secondaryDark": "#66473C",
+        "accent": "#FDD314",
+        "onAccent": "#10151F"
+      }
+    }
+  ]
+}
