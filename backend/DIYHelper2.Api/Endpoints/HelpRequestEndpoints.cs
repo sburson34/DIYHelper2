@@ -71,8 +71,7 @@ public static class HelpRequestEndpoints
         });
 
         app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db,
-            DIYHelper2.Api.Services.MessagingService messaging,
-            DIYHelper2.Api.Services.JobCompletionService completion, ILogger<Program> logger) =>
+            DIYHelper2.Api.Services.HelpRequestWriteService writer, ILogger<Program> logger) =>
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
@@ -80,8 +79,7 @@ public static class HelpRequestEndpoints
             if (scope is not null && request.Brand != scope) return Results.NotFound();
 
             var prevStatus = request.Status;
-            if (dto.Status is not null) request.Status = dto.Status;
-            if (request.Status == "in_progress" && request.StartedAt is null) request.StartedAt = DateTime.UtcNow;
+            writer.ApplyStatus(request, dto.Status);
             if (dto.Notes is not null) request.Notes = dto.Notes;
             if (dto.FollowUpDate.HasValue) request.FollowUpDate = dto.FollowUpDate;
             if (dto.ScheduledFor.HasValue) request.ScheduledFor = dto.ScheduledFor;
@@ -100,17 +98,9 @@ public static class HelpRequestEndpoints
 
             await db.SaveChangesAsync();
 
-            var transitioned = dto.Status is not null && dto.Status != prevStatus;
-            // On completion: invoice + report email + maintenance reminder + review SMS.
-            if (transitioned && request.Status == "completed")
-                await completion.HandleAsync(request);
-            // Other transitions fire the confirm / on-the-way texts (best-effort).
-            else if (transitioned && messaging.IsConfigured)
-            {
-                var company = (await db.Brands.FirstOrDefaultAsync(b => b.Slug == request.Brand))?.CompanyName ?? "";
-                if (request.Status == "scheduled") await messaging.NotifyScheduledAsync(request, company);
-                else if (request.Status == "on_the_way") await messaging.NotifyOnTheWayAsync(request, company);
-            }
+            // Real transitions fire the shared side effects: completion pipeline,
+            // or the scheduled / on-the-way customer texts (best-effort).
+            await writer.HandleTransitionAsync(request, prevStatus);
             return Results.Ok(request);
         });
 

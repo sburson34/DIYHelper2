@@ -72,6 +72,13 @@ public class ApiFactory : BaseApiFactory<Program>
         // Same defense for APP_KEY: AppKeyApiFactory sets it before its host
         // builds; make sure a plain ApiFactory never inherits it.
         Environment.SetEnvironmentVariable("APP_KEY", null);
+
+        // And for Twilio: SmsConfiguredApiFactory (TechModeTests) sets these
+        // before its host builds; a plain ApiFactory must stay unconfigured so
+        // the fail-soft "SMS off" contract tests keep meaning something.
+        Environment.SetEnvironmentVariable("TWILIO_ACCOUNT_SID", null);
+        Environment.SetEnvironmentVariable("TWILIO_AUTH_TOKEN", null);
+        Environment.SetEnvironmentVariable("TWILIO_FROM_NUMBER", null);
     }
 
     /// <summary>
@@ -108,6 +115,9 @@ public class ApiFactory : BaseApiFactory<Program>
     public FakeHttpMessageHandler FakeHousecallTokenHandler { get; } = new();
     /// <summary>Stubs Housecall Pro's REST API (POST /customers, /leads).</summary>
     public FakeHttpMessageHandler FakeHousecallApiHandler { get; } = new();
+    /// <summary>Stubs Twilio's REST API so tests that configure SMS (via
+    /// <c>SmsConfiguredApiFactory</c>) never hit the network.</summary>
+    public FakeHttpMessageHandler FakeTwilioHandler { get; } = new();
 
     /// <summary>Captures lead-routing emails instead of hitting SES. Tests read
     /// <c>FakeEmail.SentMessages</c> and can set <c>FakeEmail.OnSend</c> to throw.</summary>
@@ -180,6 +190,9 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeJobberGraphQlHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallTokenService>().ConfigurePrimaryHttpMessageHandler(() => FakeHousecallTokenHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeHousecallApiHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Messaging.ISmsSender,
+                DIYHelper2.Api.Integrations.Messaging.TwilioSmsSender>()
+                .ConfigurePrimaryHttpMessageHandler(() => FakeTwilioHandler);
         });
     }
 

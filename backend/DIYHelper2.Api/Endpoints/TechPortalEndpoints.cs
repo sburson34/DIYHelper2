@@ -115,7 +115,7 @@ public static class TechPortalEndpoints
         app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
             int id, [FromBody] TechJobUpdateDto dto, HttpContext http, AppDbContext db,
             DIYHelper2.Api.Services.TechTokenService tokens,
-            DIYHelper2.Api.Services.JobCompletionService completion) =>
+            DIYHelper2.Api.Services.HelpRequestWriteService writer) =>
         {
             var who = TechPrincipalOf(http, tokens);
             if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
@@ -123,26 +123,23 @@ public static class TechPortalEndpoints
             if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
             var prevStatus = r.Status;
 
-            // Guard oversize images the same way the customer submit does.
-            foreach (var img in new[] { dto.BeforePhotoBase64, dto.AfterPhotoBase64, dto.SignatureBase64 })
-            {
-                if (!string.IsNullOrEmpty(img) && img.Length > MediaValidation.MaxBase64LengthPerItem)
-                    return ApiError.BadRequest(http, "An attached image exceeds the maximum size.");
-            }
+            // Guard oversize / malformed images the same way the customer submit does.
+            if (MediaValidation.ValidateBase64Image(dto.BeforePhotoBase64, http, "beforePhotoBase64") is { } beforeErr) return beforeErr;
+            if (MediaValidation.ValidateBase64Image(dto.AfterPhotoBase64, http, "afterPhotoBase64") is { } afterErr) return afterErr;
+            if (MediaValidation.ValidateBase64Image(dto.SignatureBase64, http, "signatureBase64") is { } sigErr) return sigErr;
 
-            if (dto.Status is not null) r.Status = dto.Status;
-            if (r.Status == "in_progress" && r.StartedAt is null) r.StartedAt = DateTime.UtcNow;
+            writer.ApplyStatus(r, dto.Status);
             if (dto.TechEtaMinutes.HasValue)
                 r.TechEtaMinutes = dto.TechEtaMinutes.Value < 0 ? null : dto.TechEtaMinutes.Value;
             if (dto.CompletionNotes is not null) r.CompletionNotes = dto.CompletionNotes;
             if (dto.BeforePhotoBase64 is not null) r.BeforePhotoBase64 = dto.BeforePhotoBase64;
             if (dto.AfterPhotoBase64 is not null) r.AfterPhotoBase64 = dto.AfterPhotoBase64;
             if (dto.SignatureBase64 is not null) r.SignatureBase64 = dto.SignatureBase64;
-            if (dto.Status == "completed" && r.CompletedAt is null) r.CompletedAt = DateTime.UtcNow;
             r.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync();
-            // On the transition into completed: invoice + report + maintenance + review.
-            if (r.Status == "completed" && prevStatus != "completed") await completion.HandleAsync(r);
+            // Shared transition side effects: completion pipeline, or the
+            // scheduled / on-the-way customer texts — identical to the owner PUT.
+            await writer.HandleTransitionAsync(r, prevStatus);
             return Results.Ok(new { r.Id, r.Status, r.TechEtaMinutes, r.CompletedAt });
         });
 

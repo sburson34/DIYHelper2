@@ -23,6 +23,27 @@ public static class MediaValidation
         "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif",
     };
 
+    /// <summary>
+    /// Guard a single base64-encoded image field (booking photo, tech
+    /// before/after/signature): size cap first — before any decode — so an
+    /// abusive payload can't force a huge allocation, then a real base64
+    /// decode check so junk never lands in the database. Null/empty is fine
+    /// (the field is optional everywhere it's used). Returns null on success
+    /// or a 400 IResult to short-circuit the handler.
+    /// </summary>
+    public static IResult? ValidateBase64Image(string? b64, HttpContext ctx, string fieldName)
+    {
+        if (string.IsNullOrEmpty(b64)) return null;
+
+        if (b64.Length > MaxBase64LengthPerItem)
+            return ApiError.BadRequest(ctx, $"{fieldName} exceeds the maximum size of 10 MB.");
+
+        try { _ = Convert.FromBase64String(b64); }
+        catch { return ApiError.BadRequest(ctx, $"{fieldName} is not valid base64."); }
+
+        return null;
+    }
+
     public static IResult? Validate(string? description, MediaItem[]? media, HttpContext context, bool allowVideo = false)
     {
         if (!string.IsNullOrEmpty(description) && description.Length > MaxDescriptionLength)

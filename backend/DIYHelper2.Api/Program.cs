@@ -290,6 +290,9 @@ builder.Services.AddHostedService<DIYHelper2.Api.Services.RetentionService>();
 // Job-completion side effects (invoice, report email, maintenance, review SMS)
 // + the daily maintenance-reminder sweep.
 builder.Services.AddScoped<DIYHelper2.Api.Services.JobCompletionService>();
+// Shared status-write path (timestamp stamping + transition side effects) so
+// the owner PUT and tech PUT behave identically.
+builder.Services.AddScoped<DIYHelper2.Api.Services.HelpRequestWriteService>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.MaintenanceReminderService>();
 
 // Push notifications: the send service is scoped (per-request / per-tick DbContext),

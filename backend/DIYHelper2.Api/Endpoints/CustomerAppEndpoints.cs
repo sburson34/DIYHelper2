@@ -28,13 +28,8 @@ public static class CustomerAppEndpoints
         {
             // Reject oversize / malformed image payloads before persisting. Mobile app
             // compresses to well under 10 MB — anything larger is an abuse signal.
-            if (!string.IsNullOrEmpty(dto.ImageBase64))
-            {
-                if (dto.ImageBase64.Length > MediaValidation.MaxBase64LengthPerItem)
-                    return ApiError.BadRequest(context, "Image exceeds maximum size of 10 MB.");
-                try { _ = Convert.FromBase64String(dto.ImageBase64); }
-                catch { return ApiError.BadRequest(context, "imageBase64 is not valid base64."); }
-            }
+            if (MediaValidation.ValidateBase64Image(dto.ImageBase64, context, "imageBase64") is { } imageErr)
+                return imageErr;
             if (!string.IsNullOrEmpty(dto.UserDescription) && dto.UserDescription.Length > MediaValidation.MaxDescriptionLength)
                 return ApiError.BadRequest(context, $"Description exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
 
