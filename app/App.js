@@ -43,6 +43,7 @@ import ReportProblem from './src/screens/ReportProblem';
 import TriageScreen from './src/screens/TriageScreen';
 import BookingScreen from './src/screens/BookingScreen';
 import MyJobsScreen from './src/screens/MyJobsScreen';
+import EquipmentScreen from './src/screens/EquipmentScreen';
 import TechLoginScreen from './src/screens/tech/TechLoginScreen';
 import TechJobsScreen from './src/screens/tech/TechJobsScreen';
 import TechJobDetailScreen from './src/screens/tech/TechJobDetailScreen';
@@ -166,6 +167,7 @@ const linking = {
       Triage: 'triage',
       Book: 'book',
       MyJobs: 'my-jobs',
+      Equipment: 'equipment',
       Emergency: 'emergency',
       Settings: 'settings',
     },
@@ -418,6 +420,13 @@ function AppContent() {
             name="MyJobs"
             component={MyJobsScreen}
             options={({ navigation }) => proScreenOptions({ navigation, t, title: t('nav_my_jobs'), icon: 'clipboard-outline' })}
+          />
+        )}
+        {config.features.assets && (
+          <Drawer.Screen
+            name="Equipment"
+            component={EquipmentScreen}
+            options={({ navigation }) => proScreenOptions({ navigation, t, title: t('nav_equipment'), icon: 'cube-outline' })}
           />
         )}
         <Drawer.Screen

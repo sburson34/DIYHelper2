@@ -66,6 +66,17 @@ jest.mock('../api/backendClient', () => ({
   })),
   techRequestPayment: jest.fn(() => Promise.resolve({ url: null })),
   AiConsentRequiredError: class AiConsentRequiredError extends Error {},
+  // F1-F4 feature surface
+  getAvailability: jest.fn(() => Promise.resolve({ date: '2026-07-10', slotMinutes: 120, slots: [] })),
+  listMyAssets: jest.fn(() => Promise.resolve([])),
+  createMyAsset: jest.fn(() => Promise.resolve({ id: 1, label: 'Stub' })),
+  updateMyAsset: jest.fn(() => Promise.resolve({ id: 1, label: 'Stub' })),
+  deleteMyAsset: jest.fn(() => Promise.resolve()),
+  getAssetHistory: jest.fn(() => Promise.resolve([])),
+  listMyProperties: jest.fn(() => Promise.resolve([])),
+  createMyProperty: jest.fn(() => Promise.resolve({ id: 1, label: 'Home' })),
+  deleteMyProperty: jest.fn(() => Promise.resolve()),
+  getTechToken: jest.fn(() => null),
 }));
 
 jest.mock('../config/brandConfig', () => ({
@@ -216,6 +227,7 @@ const cases = [
   { name: 'Booking',      module: '../screens/BookingScreen',     params: {} },
   { name: 'MyJobs',       module: '../screens/MyJobsScreen',      params: {} },
   { name: 'PromoConsent', module: '../screens/PromoConsentScreen', params: {}, extraProps: { onDone: jest.fn() } },
+  { name: 'Equipment',    module: '../screens/EquipmentScreen',   params: {} },
   // Tech field mode
   { name: 'TechLogin',    module: '../screens/tech/TechLoginScreen',     params: {} },
   { name: 'TechJobs',     module: '../screens/tech/TechJobsScreen',      params: {} },

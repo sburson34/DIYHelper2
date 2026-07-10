@@ -67,6 +67,7 @@ export type BookParams = {
   prefillDescription?: string;
   imageBase64?: string | null;
   projectData?: Record<string, unknown> | null;
+  assetId?: number; // book against a piece of tracked equipment (EquipmentScreen)
 };
 
 export type RootDrawerParamList = {
@@ -74,6 +75,7 @@ export type RootDrawerParamList = {
   Triage: undefined; // conditionally registered (config.features.triage)
   Book: BookParams | undefined; // conditionally registered (config.features.booking)
   MyJobs: undefined; // conditionally registered (config.features.appointmentTracking)
+  Equipment: undefined; // conditionally registered (config.features.assets)
   HoneyDoList: undefined;
   ContractorList: undefined;
   Inventory: undefined;

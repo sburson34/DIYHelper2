@@ -352,6 +352,7 @@ export const translations = {
     nav_book: 'Book a Visit',
     nav_my_jobs: 'My Jobs',
     common_ok: 'OK',
+    common_edit: 'Edit',
     ai_disabled_title: 'AI is off',
 
     // Triage screen
@@ -893,6 +894,7 @@ export const translations = {
     nav_book: 'Reservar Visita',
     nav_my_jobs: 'Mis Trabajos',
     common_ok: 'OK',
+    common_edit: 'Editar',
     ai_disabled_title: 'IA desactivada',
 
     // Pantalla de triaje

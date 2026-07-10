@@ -5,15 +5,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, Alert, Image, Linking, Dimensions,
+  ActivityIndicator, Alert, Linking, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { techGetJob, techRequestPayment, TechJobDetail, TechJobPatch } from '../../api/backendClient';
+import { techGetJob, techRequestPayment, getTechToken, TechJobDetail, TechJobPatch } from '../../api/backendClient';
 import { enqueuePatch, flushQueue, pendingPatch } from '../../tech/techQueue';
 import { pickPhoto } from '../../utils/pickPhoto';
 import { useTranslation } from '../../i18n/I18nContext';
 import DrawingCanvas from '../../components/DrawingCanvas';
+import RemoteImage from '../../components/RemoteImage';
 import theme from '../../theme';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { TechStackParamList } from '../../navigation/types';
@@ -129,8 +130,8 @@ export default function TechJobDetailScreen({ route, navigation }: NativeStackSc
   const completeJob = () => {
     // job is always loaded by the time this button is rendered (see the
     // loading/!job guard below), hence the non-null assertions.
-    if (!job!.beforePhotoBase64) { Alert.alert(t('tech_complete_need_before_title'), t('tech_complete_need_before_msg')); return; }
-    if (!job!.afterPhotoBase64) { Alert.alert(t('tech_complete_need_photo_title'), t('tech_complete_need_photo_msg')); return; }
+    if (!job!.beforePhotoBase64 && !job!.beforePhotoUrl) { Alert.alert(t('tech_complete_need_before_title'), t('tech_complete_need_before_msg')); return; }
+    if (!job!.afterPhotoBase64 && !job!.afterPhotoUrl) { Alert.alert(t('tech_complete_need_photo_title'), t('tech_complete_need_photo_msg')); return; }
     if (!job!.signatureBase64) { Alert.alert(t('tech_complete_need_sig_title'), t('tech_complete_need_sig_msg')); return; }
     Alert.alert(t('tech_complete_confirm_title'), t('tech_complete_confirm_msg'), [
       { text: t('common_cancel'), style: 'cancel' },
@@ -167,6 +168,29 @@ export default function TechJobDetailScreen({ route, navigation }: NativeStackSc
               <Text style={styles.callText}>{job.customerPhone}</Text>
             </TouchableOpacity>
           ) : null}
+          {job.address ? (
+            <View style={styles.addressRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.addressLabel}>{t('tech_address')}</Text>
+                <Text style={styles.addressText}>
+                  {[job.address, job.city, job.state, job.zip].filter(Boolean).join(', ')}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.navigateBtn}
+                onPress={() => {
+                  const url = job.mapsUrl
+                    || `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent([job.address, job.city, job.zip].filter(Boolean).join(', '))}`;
+                  Linking.openURL(url).catch(() => {});
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={t('tech_navigate')}
+              >
+                <Icon name="navigate-circle" size={18} color="#fff" />
+                <Text style={styles.navigateText}>{t('tech_navigate')}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
 
         {job.userDescription ? (
@@ -176,10 +200,15 @@ export default function TechJobDetailScreen({ route, navigation }: NativeStackSc
           </View>
         ) : null}
 
-        {job.imageBase64 ? (
+        {job.imageBase64 || job.imageUrl ? (
           <View style={styles.block}>
             <Text style={styles.blockLabel}>{t('tech_customer_photo')}</Text>
-            <Image source={{ uri: `data:image/jpeg;base64,${job.imageBase64}` }} style={styles.photo} />
+            <RemoteImage
+              base64={job.imageBase64}
+              uri={job.imageUrl}
+              headers={getTechToken() ? { Authorization: `Bearer ${getTechToken()}` } : undefined}
+              style={styles.photo}
+            />
           </View>
         ) : null}
 
@@ -208,8 +237,13 @@ export default function TechJobDetailScreen({ route, navigation }: NativeStackSc
           <View style={styles.photoGrid}>
             {([['beforePhotoBase64', 'tech_before'], ['afterPhotoBase64', 'tech_after']] as const).map(([field, label]) => (
               <View key={field} style={styles.photoCell}>
-                {job[field] ? (
-                  <Image source={{ uri: `data:image/jpeg;base64,${job[field]}` }} style={styles.photoThumb} />
+                {job[field] || job[field === 'beforePhotoBase64' ? 'beforePhotoUrl' : 'afterPhotoUrl'] ? (
+                  <RemoteImage
+                    base64={job[field]}
+                    uri={job[field === 'beforePhotoBase64' ? 'beforePhotoUrl' : 'afterPhotoUrl']}
+                    headers={getTechToken() ? { Authorization: `Bearer ${getTechToken()}` } : undefined}
+                    style={styles.photoThumb}
+                  />
                 ) : (
                   <View style={[styles.photoThumb, styles.photoEmpty]}><Icon name="camera-outline" size={26} color={theme.colors.textSecondary} /></View>
                 )}
@@ -278,6 +312,11 @@ const styles = StyleSheet.create({
   block: { marginTop: 22 },
   blockLabel: { fontSize: 12, fontWeight: '800', color: theme.colors.textSecondary, textTransform: 'uppercase', marginBottom: 8 },
   customerName: { fontSize: 17, fontWeight: '700', color: theme.colors.text },
+  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  addressLabel: { color: theme.colors.textSecondary, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
+  addressText: { color: theme.colors.text, fontSize: 14, marginTop: 2 },
+  navigateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.colors.secondary, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
+  navigateText: { color: '#fff', fontWeight: '800', fontSize: 13 },
   callBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', backgroundColor: theme.colors.success, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, marginTop: 8 },
   callText: { color: '#fff', fontWeight: '700' },
   desc: { color: theme.colors.text, fontSize: 15, lineHeight: 21 },

@@ -19,6 +19,7 @@ import theme from '../theme';
 import { JOB_STEPS as STEPS, JOB_STATUS_COLOR as STEP_COLOR } from '../constants/jobStatus';
 import { fmtDateTime as fmtDate } from '../utils/datetime';
 import JobStatusPill from '../components/JobStatusPill';
+import QuoteOptionCard from '../components/QuoteOptionCard';
 import type { DrawerScreenProps } from '@react-navigation/drawer';
 import type { RootDrawerParamList } from '../navigation/types';
 
@@ -103,9 +104,9 @@ export default function MyJobsScreen({ navigation }: DrawerScreenProps<RootDrawe
     }
   };
 
-  const respondQuote = async (job: MyRequest, decision: 'approved' | 'declined') => {
+  const respondQuote = async (job: MyRequest, decision: 'approved' | 'declined', optionName?: string) => {
     try {
-      await respondToQuote(job.id, decision);
+      await respondToQuote(job.id, decision, optionName);
       load();
     } catch (e: any) {
       Alert.alert(t('myjobs_quote_failed'), e.message || '');
@@ -126,6 +127,11 @@ export default function MyJobsScreen({ navigation }: DrawerScreenProps<RootDrawe
           <JobStatusPill status={status} />
         </View>
         {item.serviceType ? <Text style={styles.serviceType}>{item.serviceType}</Text> : null}
+        {item.address ? (
+          <Text style={styles.addressLine} numberOfLines={1}>
+            <Icon name="location-outline" size={12} color={theme.colors.textSecondary} /> {item.address}
+          </Text>
+        ) : null}
 
         {!cancelled && (
           <View style={styles.timeline}>
@@ -153,8 +159,27 @@ export default function MyJobsScreen({ navigation }: DrawerScreenProps<RootDrawe
           </View>
         ) : null}
 
-        {/* Quote the company sent — approve or decline right here. */}
-        {item.quoteStatus === 'sent' ? (
+        {/* Quote the company sent — approve or decline right here. Tiered
+            (Good/Better/Best) quotes render as a horizontal option rail;
+            single quotes keep the classic box. */}
+        {item.quoteStatus === 'sent' && (item.quoteOptions?.length ?? 0) > 1 ? (
+          <View style={styles.quoteBox}>
+            <Text style={styles.quoteLabel}>{t('myjobs_quote_options_title')}</Text>
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={item.quoteOptions!}
+              keyExtractor={(o) => o.name}
+              style={styles.optionsRail}
+              renderItem={({ item: opt }) => (
+                <QuoteOptionCard option={opt} onChoose={(o) => respondQuote(item, 'approved', o.name)} />
+              )}
+            />
+            <TouchableOpacity onPress={() => respondQuote(item, 'declined')} accessibilityRole="button">
+              <Text style={styles.declineAllText}>{t('myjobs_quote_decline_all')}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : item.quoteStatus === 'sent' ? (
           <View style={styles.quoteBox}>
             <Text style={styles.quoteLabel}>{t('myjobs_quote_received')}</Text>
             <Text style={styles.quoteAmount}>${Number(item.quoteTotal || 0).toFixed(2)}</Text>
@@ -170,7 +195,13 @@ export default function MyJobsScreen({ navigation }: DrawerScreenProps<RootDrawe
         ) : item.quoteStatus === 'approved' ? (
           <View style={styles.quoteResolved}>
             <Icon name="checkmark-circle" size={16} color={theme.colors.success} />
-            <Text style={styles.quoteResolvedText}>{t('myjobs_quote_approved').replace('{amount}', `$${Number(item.quoteTotal || 0).toFixed(2)}`)}</Text>
+            <Text style={styles.quoteResolvedText}>
+              {item.quoteSelectedOption
+                ? t('myjobs_quote_approved_option')
+                    .replace('{option}', item.quoteSelectedOption)
+                    .replace('{amount}', `$${Number(item.quoteTotal || 0).toFixed(2)}`)
+                : t('myjobs_quote_approved').replace('{amount}', `$${Number(item.quoteTotal || 0).toFixed(2)}`)}
+            </Text>
           </View>
         ) : item.quoteStatus === 'declined' ? (
           <View style={styles.quoteResolved}>
@@ -262,6 +293,9 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   jobTitle: { flex: 1, fontWeight: '800', fontSize: 16, color: theme.colors.text },
   serviceType: { color: theme.colors.textSecondary, fontSize: 13, marginTop: 4 },
+  addressLine: { color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 },
+  optionsRail: { marginTop: 10 },
+  declineAllText: { color: theme.colors.textSecondary, fontWeight: '700', fontSize: 13, marginTop: 12, textAlign: 'center' },
   timeline: { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 4 },
   tlDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: theme.colors.border },
   tlLine: { flex: 1, height: 3, backgroundColor: theme.colors.border, marginHorizontal: 2 },

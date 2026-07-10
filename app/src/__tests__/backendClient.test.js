@@ -32,6 +32,13 @@ const {
   matchPaintColor,
   registerPushToken,
   unregisterPushToken,
+  submitBooking,
+  respondToQuote,
+  getAvailability,
+  listMyAssets,
+  createMyAsset,
+  getAssetHistory,
+  createMyProperty,
 } = require('../api/backendClient');
 
 const { reportError, reportHandledError, addBreadcrumb } = require('../services/monitoring');
@@ -367,6 +374,67 @@ describe('Push notifications', () => {
     expect(url).toBe('http://test-api:5206/api/push/unregister');
     expect(opts.method).toBe('POST');
     expect(JSON.parse(opts.body).token).toBe('ExponentPushToken[abc]');
+  });
+});
+
+// ── Booking + F1-F4 feature payloads ────────────────────────────
+describe('Booking and feature endpoints', () => {
+  it('submitBooking carries address, slotStart, assetId and propertyId', async () => {
+    mockJsonResponse({ id: 7 });
+    await submitBooking({
+      customerName: 'A', customerEmail: 'a@b.c', customerPhone: '555',
+      projectTitle: 'Leak', userDescription: 'Drips',
+      address: '12 Main St', slotStart: '2026-07-10T14:00:00Z',
+      assetId: 3, propertyId: 9,
+    });
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://test-api:5206/api/help-requests');
+    const body = JSON.parse(opts.body);
+    expect(body.address).toBe('12 Main St');
+    expect(body.slotStart).toBe('2026-07-10T14:00:00Z');
+    expect(body.assetId).toBe(3);
+    expect(body.propertyId).toBe(9);
+  });
+
+  it('respondToQuote includes the chosen optionName for tiered quotes', async () => {
+    mockJsonResponse({ id: 4, quoteStatus: 'approved' });
+    await respondToQuote(4, 'approved', 'Better');
+    const [url, opts] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://test-api:5206/api/my/requests/4/quote');
+    expect(opts.method).toBe('PUT');
+    const body = JSON.parse(opts.body);
+    expect(body.decision).toBe('approved');
+    expect(body.optionName).toBe('Better');
+  });
+
+  it('getAvailability encodes the date query param', async () => {
+    mockJsonResponse({ date: '2026-07-10', slotMinutes: 120, slots: [] });
+    await getAvailability('2026-07-10');
+    const [url] = global.fetch.mock.calls[0];
+    expect(url).toBe('http://test-api:5206/api/availability?date=2026-07-10');
+  });
+
+  it('asset CRUD + history hit the device-scoped /api/my endpoints', async () => {
+    mockJsonResponse([]);
+    await listMyAssets();
+    expect(global.fetch.mock.calls[0][0]).toBe('http://test-api:5206/api/my/assets');
+
+    mockJsonResponse({ id: 1, label: 'Water heater' });
+    await createMyAsset({ label: 'Water heater', make: 'Rheem' });
+    const [createUrl, createOpts] = global.fetch.mock.calls[1];
+    expect(createUrl).toBe('http://test-api:5206/api/my/assets');
+    expect(createOpts.method).toBe('POST');
+    expect(JSON.parse(createOpts.body).label).toBe('Water heater');
+
+    mockJsonResponse([]);
+    await getAssetHistory(1);
+    expect(global.fetch.mock.calls[2][0]).toBe('http://test-api:5206/api/my/assets/1/history');
+
+    mockJsonResponse({ id: 2, label: 'Home' });
+    await createMyProperty({ label: 'Home', address: '12 Main St' });
+    const [propUrl, propOpts] = global.fetch.mock.calls[3];
+    expect(propUrl).toBe('http://test-api:5206/api/my/properties');
+    expect(JSON.parse(propOpts.body).address).toBe('12 Main St');
   });
 });
 

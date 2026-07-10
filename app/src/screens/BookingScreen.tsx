@@ -10,11 +10,15 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { submitBooking } from '../api/backendClient';
+import {
+  submitBooking, getAvailability, listMyAssets,
+  AvailabilitySlot, CustomerAsset, CustomerProperty,
+} from '../api/backendClient';
 import { getUserProfile, saveUserProfile } from '../utils/storage';
 import { useTranslation } from '../i18n/I18nContext';
 import { useBrandConfig } from '../config/brandConfig';
 import { pickPhoto } from '../utils/pickPhoto';
+import PropertyPicker from '../components/PropertyPicker';
 import theme from '../theme';
 import type { DrawerScreenProps } from '@react-navigation/drawer';
 import type { RootDrawerParamList, BookParams } from '../navigation/types';
@@ -63,7 +67,23 @@ export default function BookingScreen({ navigation, route }: DrawerScreenProps<R
   const [timeWindow, setTimeWindow] = useState('anytime');
   const [submitting, setSubmitting] = useState(false);
 
+  // F1 — service address. Persisted with the profile; superseded by the
+  // selected property's address when multiProperty is on.
+  const [address, setAddress] = useState('');
+  // F2 — real slots. Only active when the brand enables selfScheduling and a
+  // concrete day is picked; requestMode falls back to the legacy window chips.
+  const [slots, setSlots] = useState<AvailabilitySlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
+  const [requestMode, setRequestMode] = useState(false);
+  // F4 — equipment + property attribution.
+  const [assets, setAssets] = useState<CustomerAsset[]>([]);
+  const [assetId, setAssetId] = useState<number | null>(null);
+  const [property, setProperty] = useState<CustomerProperty | null>(null);
+
   const dayOptions = buildDayOptions(t);
+  const selfScheduling = !!config.features.selfScheduling;
+  const slotsActive = selfScheduling && !requestMode && day !== 'asap';
 
   // Prefill contact info from the saved profile so returning customers don't retype.
   useEffect(() => {
@@ -72,8 +92,28 @@ export default function BookingScreen({ navigation, route }: DrawerScreenProps<R
       if (p.name) setName(p.name);
       if (p.email) setEmail(p.email);
       if (p.phone) setPhone(p.phone);
+      if (p.address) setAddress(p.address);
     });
   }, []);
+
+  // Equipment chips (only when the brand runs the assets feature).
+  useEffect(() => {
+    if (!config.features.assets) return;
+    listMyAssets().then((a) => setAssets(Array.isArray(a) ? a : [])).catch(() => {});
+  }, [config.features.assets]);
+
+  // Fetch open slots whenever the picked day changes.
+  useEffect(() => {
+    if (!slotsActive) return;
+    let alive = true;
+    setSlotsLoading(true);
+    setSelectedSlot(null);
+    getAvailability(day)
+      .then((res) => { if (alive) setSlots(res.slots || []); })
+      .catch(() => { if (alive) setSlots([]); })
+      .finally(() => { if (alive) setSlotsLoading(false); });
+    return () => { alive = false; };
+  }, [slotsActive, day]);
 
   const addPhoto = async (source: 'camera' | 'library') => {
     const p = await pickPhoto(source);
@@ -92,7 +132,8 @@ export default function BookingScreen({ navigation, route }: DrawerScreenProps<R
     setSubmitting(true);
     try {
       const selectedDay = dayOptions.find((d) => d.key === day);
-      await saveUserProfile({ name: name.trim(), email: email.trim(), phone: phone.trim() });
+      const effectiveAddress = (property?.address || address).trim();
+      await saveUserProfile({ name: name.trim(), email: email.trim(), phone: phone.trim(), address: address.trim() });
       await submitBooking({
         customerName: name.trim(),
         customerEmail: email.trim(),
@@ -104,6 +145,10 @@ export default function BookingScreen({ navigation, route }: DrawerScreenProps<R
         preferredWindow: timeWindow,
         projectData: params.projectData,
         imageBase64: photo?.base64,
+        address: effectiveAddress || null,
+        slotStart: slotsActive ? selectedSlot : null,
+        assetId,
+        propertyId: property?.id ?? null,
       });
       Alert.alert(t('booking_sent_title'), t('booking_sent_msg'), [
         { text: t('booking_view_jobs'), onPress: () => navigation.navigate('MyJobs') },
@@ -114,8 +159,20 @@ export default function BookingScreen({ navigation, route }: DrawerScreenProps<R
       setDescription('');
       setPhoto(null);
       setServiceType(null);
+      setSelectedSlot(null);
+      setAssetId(null);
     } catch (e: any) {
-      Alert.alert(t('booking_failed_title'), e.message);
+      if (e.status === 409) {
+        // Someone claimed the slot between fetch and submit — refresh the list.
+        Alert.alert(t('booking_slot_taken_title'), t('booking_slot_taken_msg'));
+        setSelectedSlot(null);
+        try {
+          const res = await getAvailability(day);
+          setSlots(res.slots || []);
+        } catch { /* keep stale list; user can re-pick the day */ }
+      } else {
+        Alert.alert(t('booking_failed_title'), e.message);
+      }
     } finally {
       setSubmitting(false);
     }
@@ -196,22 +253,97 @@ export default function BookingScreen({ navigation, route }: DrawerScreenProps<R
           })}
         </View>
 
-        <Text style={styles.label}>{t('booking_time_window')}</Text>
-        <View style={styles.chips}>
-          {WINDOWS.map((w) => {
-            const active = timeWindow === w;
-            return (
-              <TouchableOpacity key={w} style={[styles.chip, active && styles.chipActive]} onPress={() => setTimeWindow(w)} accessibilityRole="button" accessibilityState={{ selected: active }}>
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>{t(`booking_window_${w}`)}</Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
+        {slotsActive ? (
+          <>
+            <Text style={styles.label}>{t('booking_pick_slot')}</Text>
+            {slotsLoading ? (
+              <View style={styles.slotsLoading}>
+                <ActivityIndicator color={theme.colors.primary} />
+                <Text style={styles.slotsLoadingText}>{t('booking_slots_loading')}</Text>
+              </View>
+            ) : slots.length ? (
+              <View style={styles.chips}>
+                {slots.map((s) => {
+                  const active = selectedSlot === s.start;
+                  const label = new Date(s.start).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+                  return (
+                    <TouchableOpacity
+                      key={s.start}
+                      style={[styles.chip, active && styles.chipActive]}
+                      onPress={() => setSelectedSlot(active ? null : s.start)}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                    >
+                      <Text style={[styles.chipText, active && styles.chipTextActive]}>{label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : (
+              <View>
+                <Text style={styles.noSlots}>{t('booking_no_slots')}</Text>
+                <TouchableOpacity onPress={() => setRequestMode(true)} accessibilityRole="button">
+                  <Text style={styles.requestInstead}>{t('booking_request_instead')}</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </>
+        ) : (
+          <>
+            <Text style={styles.label}>{t('booking_time_window')}</Text>
+            <View style={styles.chips}>
+              {WINDOWS.map((w) => {
+                const active = timeWindow === w;
+                return (
+                  <TouchableOpacity key={w} style={[styles.chip, active && styles.chipActive]} onPress={() => setTimeWindow(w)} accessibilityRole="button" accessibilityState={{ selected: active }}>
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{t(`booking_window_${w}`)}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        )}
+
+        {config.features.assets && assets.length ? (
+          <>
+            <Text style={styles.label}>{t('booking_which_equipment')}</Text>
+            <View style={styles.chips}>
+              {assets.map((a) => {
+                const active = assetId === a.id;
+                return (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={[styles.chip, active && styles.chipActive]}
+                    onPress={() => setAssetId(active ? null : a.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{a.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </>
+        ) : null}
+
+        {config.features.multiProperty ? (
+          <PropertyPicker selectedId={property?.id ?? null} onSelect={setProperty} />
+        ) : null}
 
         <Text style={styles.sectionLabel}>{t('booking_your_details')}</Text>
         <TextInput style={styles.field} placeholder={t('booking_name')} placeholderTextColor={theme.colors.textSecondary} value={name} onChangeText={setName} testID="booking-name-input" />
         <TextInput style={styles.field} placeholder={t('booking_email')} placeholderTextColor={theme.colors.textSecondary} value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" testID="booking-email-input" />
         <TextInput style={styles.field} placeholder={t('booking_phone')} placeholderTextColor={theme.colors.textSecondary} value={phone} onChangeText={setPhone} keyboardType="phone-pad" testID="booking-phone-input" />
+        {!property ? (
+          <TextInput
+            style={styles.field}
+            placeholder={t('booking_address_placeholder')}
+            placeholderTextColor={theme.colors.textSecondary}
+            value={address}
+            onChangeText={setAddress}
+            testID="booking-address-input"
+          />
+        ) : null}
 
         <TouchableOpacity
           style={styles.submitBtn}
@@ -274,4 +406,8 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary, padding: 16, borderRadius: 16, marginTop: 24,
   },
   submitText: { color: '#fff', fontWeight: '800', fontSize: 16 },
+  slotsLoading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10 },
+  slotsLoadingText: { color: theme.colors.textSecondary, fontSize: 13 },
+  noSlots: { color: theme.colors.textSecondary, fontSize: 13, lineHeight: 19 },
+  requestInstead: { color: theme.colors.primary, fontWeight: '700', marginTop: 8 },
 });
