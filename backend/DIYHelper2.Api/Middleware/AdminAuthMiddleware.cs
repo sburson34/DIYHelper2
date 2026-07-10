@@ -9,9 +9,9 @@ namespace DIYHelper2.Api.Middleware;
 ///   - /admin/session       GET only (whoami; POST/DELETE are the login/logout
 ///                          endpoints and handle themselves)
 ///   - /api/help-requests   GET (list, detail), PUT, DELETE
-///   - /api/brands, /api/technicians, /api/pricebook, /api/inventory,
-///     /api/ops, /api/ai, /api/push (composer surfaces), /api/feedback GET,
-///     /api/crm + /api/accounting (except OAuth callbacks)
+///   - /api/brands, /api/technicians, /api/assets, /api/pricebook,
+///     /api/inventory, /api/ops, /api/ai, /api/push (composer surfaces),
+///     /api/feedback GET, /api/crm + /api/accounting (except OAuth callbacks)
 ///
 /// /admin/* STATIC files (index.html/js/css) are served WITHOUT auth — they
 /// are the UI shell only and contain no data; every API the shell calls stays
@@ -203,6 +203,12 @@ public class AdminAuthMiddleware
         // The tech-facing /api/tech/* endpoints are NOT here — they authenticate
         // with a signed tech bearer token, not Basic auth.
         if (path.StartsWith("/api/technicians", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Customer-equipment management (/api/assets) is owner-only. The
+        // customer-facing /api/my/assets routes do NOT match this prefix and
+        // stay public (device-scoped) — pinned by a regression test.
+        if (path.StartsWith("/api/assets", StringComparison.OrdinalIgnoreCase))
             return true;
 
         // Price-book management is owner-only.

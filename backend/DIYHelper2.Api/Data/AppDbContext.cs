@@ -24,6 +24,8 @@ public class AppDbContext : DbContext
     public DbSet<MaintenanceReminder> MaintenanceReminders => Set<MaintenanceReminder>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
     public DbSet<SlotClaim> SlotClaims => Set<SlotClaim>();
+    public DbSet<Asset> Assets => Set<Asset>();
+    public DbSet<CustomerProperty> CustomerProperties => Set<CustomerProperty>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -194,5 +196,26 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<SlotClaim>()
             .HasIndex(c => c.HelpRequestId)
             .HasDatabaseName("IX_SlotClaims_HelpRequestId");
+
+        // ── Assets + properties (A8) ──────────────────────────────────────
+        // A device's equipment list matches by (Brand, DeviceId) or by
+        // (Brand, CustomerEmail) — the email-follow path for owner-entered
+        // assets and reinstalls.
+        modelBuilder.Entity<Asset>()
+            .HasIndex(a => new { a.Brand, a.DeviceId })
+            .HasDatabaseName("IX_Assets_Brand_DeviceId");
+        modelBuilder.Entity<Asset>()
+            .HasIndex(a => new { a.Brand, a.CustomerEmail })
+            .HasDatabaseName("IX_Assets_Brand_CustomerEmail");
+
+        // A customer's saved properties are listed by (Brand, CustomerId).
+        modelBuilder.Entity<CustomerProperty>()
+            .HasIndex(p => new { p.Brand, p.CustomerId })
+            .HasDatabaseName("IX_CustomerProperties_Brand_CustomerId");
+
+        // Per-asset service history scans jobs by (Brand, AssetId).
+        modelBuilder.Entity<HelpRequest>()
+            .HasIndex(r => new { r.Brand, r.AssetId })
+            .HasDatabaseName("IX_HelpRequests_Brand_AssetId");
     }
 }

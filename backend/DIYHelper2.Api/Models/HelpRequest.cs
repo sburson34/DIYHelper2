@@ -41,6 +41,16 @@ public class HelpRequest : IBrandOwned
     /// "evening" / "anytime". Free text kept short.</summary>
     public string? PreferredWindow { get; set; }
 
+    /// <summary>The customer's <see cref="Asset"/> this job is about (per-asset
+    /// service history). Ownership-validated at booking; denormalized id, no FK,
+    /// so history survives asset deletion.</summary>
+    public int? AssetId { get; set; }
+
+    /// <summary>The <see cref="CustomerProperty"/> this job was booked against.
+    /// Its address columns (and coords, when known) are copied onto this row at
+    /// booking time. Denormalized id, no FK.</summary>
+    public int? PropertyId { get; set; }
+
     // ── Service address (where the tech goes) ─────────────────────────────
     /// <summary>Street address line. The app sends a single line at booking;
     /// City/State/Zip are refined from the console.</summary>

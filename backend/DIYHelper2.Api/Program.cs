@@ -728,6 +728,8 @@ app.MapHelpRequests();
 
 app.MapTechnicians();
 
+app.MapAssets();
+
 app.MapTechPortal();
 
 app.MapCatalog();

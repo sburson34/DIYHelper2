@@ -49,6 +49,37 @@ public static class CustomerAppEndpoints
             // without a login. Sourced from the header, never the body.
             var deviceId = context.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
 
+            // Assets + multi-property (A8): a booking may reference the
+            // customer's equipment and/or a saved service address. Both are
+            // ownership-validated HERE, before anything persists — a foreign
+            // (or unknown) id is a 400 with nothing saved, same posture as the
+            // media validation above.
+            Asset? bookedAsset = null;
+            CustomerProperty? bookedProperty = null;
+            if (dto.AssetId.HasValue || dto.PropertyId.HasValue)
+            {
+                if (string.IsNullOrEmpty(deviceId))
+                    return ApiError.BadRequest(context, "An X-Device-Id header is required to book against an asset or property.");
+                var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+                if (dto.AssetId.HasValue)
+                {
+                    var email = customer?.Email;
+                    bookedAsset = await db.Assets.FirstOrDefaultAsync(a =>
+                        a.Id == dto.AssetId.Value && a.Brand == brandSlug &&
+                        (a.DeviceId == deviceId || (email != null && a.CustomerEmail == email)));
+                    if (bookedAsset is null)
+                        return ApiError.BadRequest(context, "assetId doesn't match any of your equipment.");
+                }
+                if (dto.PropertyId.HasValue)
+                {
+                    if (customer is not null)
+                        bookedProperty = await db.CustomerProperties.FirstOrDefaultAsync(p =>
+                            p.Id == dto.PropertyId.Value && p.Brand == brandSlug && p.CustomerId == customer.Id);
+                    if (bookedProperty is null)
+                        return ApiError.BadRequest(context, "propertyId doesn't match any of your properties.");
+                }
+            }
+
             var helpRequest = new HelpRequest
             {
                 Brand = brandSlug,
@@ -66,10 +97,26 @@ public static class CustomerAppEndpoints
                 // The app sends a single address line; City/State/Zip stay null
                 // until the console refines them.
                 Address = string.IsNullOrWhiteSpace(dto.Address) ? null : dto.Address.Trim(),
+                AssetId = bookedAsset?.Id,
+                PropertyId = bookedProperty?.Id,
                 Status = "new",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
+
+            // Booking against a saved property: its address columns (and
+            // coords, when known) ARE the job's service address. Copied
+            // coords make the geocode hook below a no-op (Lat is non-null),
+            // so a property geocoded once never burns another lookup.
+            if (bookedProperty is not null)
+            {
+                helpRequest.Address = bookedProperty.Address;
+                helpRequest.City = bookedProperty.City;
+                helpRequest.State = bookedProperty.State;
+                helpRequest.Zip = bookedProperty.Zip;
+                helpRequest.Lat = bookedProperty.Lat;
+                helpRequest.Lng = bookedProperty.Lng;
+            }
 
             if (dto.SlotStart.HasValue)
             {
@@ -248,6 +295,7 @@ public static class CustomerAppEndpoints
                     r.QuoteOptionsJson,
                     r.QuoteSelectedOption,
                     r.Address,
+                    r.AssetId,
                     r.CreatedAt,
                     r.UpdatedAt,
                     HasImage = r.ImageKey != null || r.ImageBase64 != null,
@@ -272,6 +320,7 @@ public static class CustomerAppEndpoints
                 QuoteOptions = ParseQuoteOptions(r.QuoteOptionsJson),
                 r.QuoteSelectedOption,
                 r.Address,
+                r.AssetId,
                 r.CreatedAt,
                 r.UpdatedAt,
                 ImageUrl = r.HasImage ? $"/api/my/requests/{r.Id}/media/image" : null,
@@ -311,6 +360,7 @@ public static class CustomerAppEndpoints
                 QuoteOptions = ParseQuoteOptions(r.QuoteOptionsJson),
                 r.QuoteSelectedOption,
                 r.Address,
+                r.AssetId,
                 r.CreatedAt,
                 r.UpdatedAt,
                 ImageUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "image", "/api/my/requests"),
@@ -397,6 +447,231 @@ public static class CustomerAppEndpoints
             return Results.Ok(new { r.Id, quoteStatus = r.QuoteStatus, quoteSelectedOption = r.QuoteSelectedOption });
         });
 
+        // ── Customer equipment (assets) ────────────────────────────────────
+        // Device-scoped like the other /api/my routes (X-Brand + X-Device-Id,
+        // no login). Ownership is by device id OR by email match: an asset the
+        // owner entered against the customer's email shows up on whatever
+        // device that customer books from. Wrong owner → 404, never 403.
+
+        app.MapGet("/api/my/assets", async (HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = DeviceIdOf(http);
+            if (string.IsNullOrEmpty(deviceId)) return Results.Ok(Array.Empty<object>());
+
+            var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+            var email = customer?.Email;
+            var assets = await db.Assets
+                .Where(a => a.Brand == brandSlug &&
+                    (a.DeviceId == deviceId || (email != null && a.CustomerEmail == email)))
+                .OrderBy(a => a.Id)
+                .ToListAsync();
+            return Results.Ok(assets.Select(MyAssetView));
+        });
+
+        app.MapPost("/api/my/assets", [EnableRateLimiting("submit")] async (
+            [FromBody] MyAssetDto dto, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = DeviceIdOf(http);
+            if (string.IsNullOrEmpty(deviceId))
+                return ApiError.BadRequest(http, "An X-Device-Id header is required.");
+            if (string.IsNullOrWhiteSpace(dto.Label))
+                return ApiError.BadRequest(http, "label is required.");
+
+            var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+            if (dto.PropertyId.HasValue &&
+                await OwnedPropertyAsync(db, brandSlug, customer, dto.PropertyId.Value) is null)
+                return ApiError.BadRequest(http, "propertyId doesn't match any of your properties.");
+
+            var asset = new Asset
+            {
+                Brand = brandSlug,
+                DeviceId = deviceId,
+                // Attach the known customer email (if any) so the asset follows
+                // the customer onto a reinstall / new device.
+                CustomerEmail = string.IsNullOrWhiteSpace(customer?.Email) ? null : customer!.Email,
+                PropertyId = dto.PropertyId,
+                Label = dto.Label.Trim(),
+                Make = dto.Make,
+                Model = dto.Model,
+                Serial = dto.Serial,
+                InstalledAt = dto.InstalledAt,
+                WarrantyExpiresAt = dto.WarrantyExpiresAt,
+                Notes = dto.Notes,
+            };
+            db.Assets.Add(asset);
+            await db.SaveChangesAsync();
+            return Results.Created($"/api/my/assets/{asset.Id}", MyAssetView(asset));
+        });
+
+        app.MapPut("/api/my/assets/{id:int}", async (
+            int id, [FromBody] MyAssetDto dto, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = DeviceIdOf(http);
+            var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+            var asset = await db.Assets.FindAsync(id);
+            if (asset is null || asset.Brand != brandSlug || !OwnsAsset(asset, deviceId, customer))
+                return Results.NotFound();
+            if (string.IsNullOrWhiteSpace(dto.Label))
+                return ApiError.BadRequest(http, "label is required.");
+            if (dto.PropertyId.HasValue &&
+                await OwnedPropertyAsync(db, brandSlug, customer, dto.PropertyId.Value) is null)
+                return ApiError.BadRequest(http, "propertyId doesn't match any of your properties.");
+
+            // Full replace: the app sends the whole form each save, so omitted
+            // optional fields clear their stored values.
+            asset.PropertyId = dto.PropertyId;
+            asset.Label = dto.Label.Trim();
+            asset.Make = dto.Make;
+            asset.Model = dto.Model;
+            asset.Serial = dto.Serial;
+            asset.InstalledAt = dto.InstalledAt;
+            asset.WarrantyExpiresAt = dto.WarrantyExpiresAt;
+            asset.Notes = dto.Notes;
+            asset.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(MyAssetView(asset));
+        });
+
+        app.MapDelete("/api/my/assets/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = DeviceIdOf(http);
+            var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+            var asset = await db.Assets.FindAsync(id);
+            if (asset is null || asset.Brand != brandSlug || !OwnsAsset(asset, deviceId, customer))
+                return Results.NotFound();
+            db.Assets.Remove(asset);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        });
+
+        // Per-asset service history: every job (any device) booked against
+        // this asset for this brand, newest first. The asset itself must be
+        // owned by the caller — otherwise 404, same probing posture as above.
+        app.MapGet("/api/my/assets/{id:int}/history", async (int id, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = DeviceIdOf(http);
+            var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+            var asset = await db.Assets.FindAsync(id);
+            if (asset is null || asset.Brand != brandSlug || !OwnsAsset(asset, deviceId, customer))
+                return Results.NotFound();
+
+            var jobs = await db.HelpRequests
+                .Where(r => r.Brand == brandSlug && r.AssetId == id)
+                .OrderByDescending(r => r.CreatedAt).ThenByDescending(r => r.Id)
+                .Select(r => new
+                {
+                    r.Id,
+                    r.ProjectTitle,
+                    r.ServiceType,
+                    r.Status,
+                    r.CompletedAt,
+                    r.QuoteTotal,
+                })
+                .ToListAsync();
+            return Results.Ok(jobs);
+        });
+
+        // ── Saved service addresses (multi-property customers) ─────────────
+        // Scoped by the Customer row the device resolves to (Brand + CustomerId);
+        // a device that never booked has no customer row → empty list, and
+        // POST creates a minimal customer anchor first.
+
+        app.MapGet("/api/my/properties", async (HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var customer = await ResolveCustomerAsync(db, brandSlug, DeviceIdOf(http));
+            if (customer is null) return Results.Ok(Array.Empty<object>());
+
+            var props = await db.CustomerProperties
+                .Where(p => p.Brand == brandSlug && p.CustomerId == customer.Id)
+                .OrderBy(p => p.Id)
+                .ToListAsync();
+            return Results.Ok(props.Select(MyPropertyView));
+        });
+
+        app.MapPost("/api/my/properties", [EnableRateLimiting("submit")] async (
+            [FromBody] MyPropertyDto dto, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = DeviceIdOf(http);
+            if (string.IsNullOrEmpty(deviceId))
+                return ApiError.BadRequest(http, "An X-Device-Id header is required.");
+            if (string.IsNullOrWhiteSpace(dto.Label))
+                return ApiError.BadRequest(http, "label is required.");
+            if (dto.Address is { Length: > 200 })
+                return ApiError.BadRequest(http, "address exceeds the maximum length of 200 characters.");
+
+            // Resolve-or-create the customer anchor for this device (a customer
+            // may save properties before their first booking).
+            var customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+            if (customer is null)
+            {
+                await UpsertCustomerAsync(db, brandSlug, deviceId, "", "", "");
+                await db.SaveChangesAsync();
+                customer = await ResolveCustomerAsync(db, brandSlug, deviceId);
+                if (customer is null) return ApiError.BadRequest(http, "Couldn't create a customer record for this device.");
+            }
+
+            var prop = new CustomerProperty
+            {
+                Brand = brandSlug,
+                CustomerId = customer.Id,
+                Label = dto.Label.Trim(),
+                Address = dto.Address,
+                City = dto.City,
+                State = dto.State,
+                Zip = dto.Zip,
+            };
+            db.CustomerProperties.Add(prop);
+            await db.SaveChangesAsync();
+            return Results.Created($"/api/my/properties/{prop.Id}", MyPropertyView(prop));
+        });
+
+        app.MapPut("/api/my/properties/{id:int}", async (
+            int id, [FromBody] MyPropertyDto dto, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var customer = await ResolveCustomerAsync(db, brandSlug, DeviceIdOf(http));
+            var prop = await OwnedPropertyAsync(db, brandSlug, customer, id);
+            if (prop is null) return Results.NotFound();
+            if (string.IsNullOrWhiteSpace(dto.Label))
+                return ApiError.BadRequest(http, "label is required.");
+            if (dto.Address is { Length: > 200 })
+                return ApiError.BadRequest(http, "address exceeds the maximum length of 200 characters.");
+
+            // Full replace, like the asset PUT. An address edit invalidates any
+            // stale coords; the next booking against this property re-geocodes.
+            if (prop.Address != dto.Address || prop.City != dto.City || prop.State != dto.State || prop.Zip != dto.Zip)
+            {
+                prop.Lat = null;
+                prop.Lng = null;
+            }
+            prop.Label = dto.Label.Trim();
+            prop.Address = dto.Address;
+            prop.City = dto.City;
+            prop.State = dto.State;
+            prop.Zip = dto.Zip;
+            prop.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            return Results.Ok(MyPropertyView(prop));
+        });
+
+        app.MapDelete("/api/my/properties/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var customer = await ResolveCustomerAsync(db, brandSlug, DeviceIdOf(http));
+            var prop = await OwnedPropertyAsync(db, brandSlug, customer, id);
+            if (prop is null) return Results.NotFound();
+            db.CustomerProperties.Remove(prop);
+            await db.SaveChangesAsync();
+            return Results.NoContent();
+        });
+
         // Start a membership / maintenance-plan checkout. Fail-soft and honest: returns
         // available=false with a reason whenever the brand hasn't opted in or the
         // payment provider isn't wired, so the app hides or greys the CTA rather than
@@ -432,4 +707,60 @@ public static class CustomerAppEndpoints
 
         return app;
     }
+
+    // ── A8 helpers (device-scoped identity for assets/properties) ─────────
+
+    private static string? DeviceIdOf(HttpContext http)
+        => http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+
+    /// <summary>The customer record this device resolves to (newest first, same
+    /// match the booking upsert uses). Null when the device is unknown.</summary>
+    private static async Task<Customer?> ResolveCustomerAsync(AppDbContext db, string brand, string? deviceId)
+        => string.IsNullOrEmpty(deviceId)
+            ? null
+            : await db.Customers
+                .Where(c => c.Brand == brand && c.DeviceId == deviceId)
+                .OrderByDescending(c => c.UpdatedAt)
+                .FirstOrDefaultAsync();
+
+    /// <summary>Asset ownership: the caller's device created it, or its
+    /// attached email matches the caller's customer email (owner-entered
+    /// equipment / reinstalls). Brand is checked by the caller.</summary>
+    private static bool OwnsAsset(Asset a, string? deviceId, Customer? customer)
+        => (!string.IsNullOrEmpty(deviceId) && a.DeviceId == deviceId)
+           || (a.CustomerEmail != null && customer?.Email != null && a.CustomerEmail == customer.Email);
+
+    /// <summary>The property, iff it belongs to this brand + customer; null
+    /// otherwise (callers turn that into 404 or 400 as appropriate).</summary>
+    private static async Task<CustomerProperty?> OwnedPropertyAsync(
+        AppDbContext db, string brand, Customer? customer, int propertyId)
+        => customer is null
+            ? null
+            : await db.CustomerProperties.FirstOrDefaultAsync(p =>
+                p.Id == propertyId && p.Brand == brand && p.CustomerId == customer.Id);
+
+    // Customer-safe asset projection (no Brand/DeviceId/CustomerEmail — the
+    // caller's identity is implicit, and other identities are nobody's business).
+    private static object MyAssetView(Asset a) => new
+    {
+        id = a.Id,
+        propertyId = a.PropertyId,
+        label = a.Label,
+        make = a.Make,
+        model = a.Model,
+        serial = a.Serial,
+        installedAt = a.InstalledAt,
+        warrantyExpiresAt = a.WarrantyExpiresAt,
+        notes = a.Notes,
+    };
+
+    private static object MyPropertyView(CustomerProperty p) => new
+    {
+        id = p.Id,
+        label = p.Label,
+        address = p.Address,
+        city = p.City,
+        state = p.State,
+        zip = p.Zip,
+    };
 }

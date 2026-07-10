@@ -43,7 +43,13 @@ public record CreateHelpRequestDto(
     // Self-scheduling: an open slot's ISO UTC start from GET /api/availability.
     // Present → the booking claims a seat in the same transaction (all seats
     // taken → 409 slot_taken, nothing persisted) and lands pre-scheduled.
-    [property: JsonPropertyName("slotStart")] DateTime? SlotStart = null
+    [property: JsonPropertyName("slotStart")] DateTime? SlotStart = null,
+    // Assets + multi-property (A8). Both are ownership-validated against the
+    // caller's device/customer (a foreign id is a 400, nothing persisted). A
+    // valid propertyId copies the property's address columns + coords onto the
+    // job, skipping the geocoder when coords already exist.
+    [property: JsonPropertyName("assetId")] int? AssetId = null,
+    [property: JsonPropertyName("propertyId")] int? PropertyId = null
 );
 
 public record UpdateHelpRequestDto(
@@ -171,6 +177,48 @@ public record InventoryItemDto(
     [property: JsonPropertyName("quantity")] int? Quantity,
     [property: JsonPropertyName("reorderAt")] int? ReorderAt,
     [property: JsonPropertyName("brand")] string? Brand
+);
+
+// Customer create/update of their own equipment (POST/PUT /api/my/assets).
+// label is required; propertyId, when supplied, must be one of the caller's
+// saved properties. Full-replace semantics on PUT (the app sends the whole
+// form each time), so an omitted optional field clears the stored value.
+public record MyAssetDto(
+    [property: JsonPropertyName("label")] string? Label,
+    [property: JsonPropertyName("propertyId")] int? PropertyId = null,
+    [property: JsonPropertyName("make")] string? Make = null,
+    [property: JsonPropertyName("model")] string? Model = null,
+    [property: JsonPropertyName("serial")] string? Serial = null,
+    [property: JsonPropertyName("installedAt")] DateTime? InstalledAt = null,
+    [property: JsonPropertyName("warrantyExpiresAt")] DateTime? WarrantyExpiresAt = null,
+    [property: JsonPropertyName("notes")] string? Notes = null
+);
+
+// Customer create/update of a saved service address (POST/PUT
+// /api/my/properties). label is required; full-replace semantics on PUT.
+public record MyPropertyDto(
+    [property: JsonPropertyName("label")] string? Label,
+    [property: JsonPropertyName("address")] string? Address = null,
+    [property: JsonPropertyName("city")] string? City = null,
+    [property: JsonPropertyName("state")] string? State = null,
+    [property: JsonPropertyName("zip")] string? Zip = null
+);
+
+// Owner asset CRUD (/api/assets). brand follows the technicians POST pattern:
+// a scoped login's brand always wins; super-admin supplies it in the body.
+// PUT is a partial update (null leaves a field untouched), like technicians.
+public record OwnerAssetDto(
+    [property: JsonPropertyName("brand")] string? Brand = null,
+    [property: JsonPropertyName("customerEmail")] string? CustomerEmail = null,
+    [property: JsonPropertyName("propertyId")] int? PropertyId = null,
+    [property: JsonPropertyName("label")] string? Label = null,
+    [property: JsonPropertyName("make")] string? Make = null,
+    [property: JsonPropertyName("model")] string? Model = null,
+    [property: JsonPropertyName("serial")] string? Serial = null,
+    [property: JsonPropertyName("installedAt")] DateTime? InstalledAt = null,
+    [property: JsonPropertyName("warrantyExpiresAt")] DateTime? WarrantyExpiresAt = null,
+    [property: JsonPropertyName("notes")] string? Notes = null,
+    [property: JsonPropertyName("isActive")] bool? IsActive = null
 );
 
 public record MembershipCheckoutDto(
