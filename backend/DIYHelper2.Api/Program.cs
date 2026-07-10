@@ -310,6 +310,9 @@ builder.Services.AddScoped<DIYHelper2.Api.Services.JobCompletionService>();
 // Shared status-write path (timestamp stamping + transition side effects) so
 // the owner PUT and tech PUT behave identically.
 builder.Services.AddScoped<DIYHelper2.Api.Services.HelpRequestWriteService>();
+// Online self-scheduling: slot expansion, open-slot queries, transactional
+// seat claims (unique index on SlotClaims is the double-booking guarantee).
+builder.Services.AddScoped<DIYHelper2.Api.Services.AvailabilityService>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.MaintenanceReminderService>();
 
 // Push notifications: the send service is scoped (per-request / per-tick DbContext),

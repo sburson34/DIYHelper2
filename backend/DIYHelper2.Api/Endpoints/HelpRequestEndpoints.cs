@@ -165,7 +165,8 @@ public static class HelpRequestEndpoints
         });
 
         app.MapDelete("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDbContext db,
-            DIYHelper2.Api.Services.JobMediaService jobMedia) =>
+            DIYHelper2.Api.Services.JobMediaService jobMedia,
+            DIYHelper2.Api.Services.AvailabilityService availability) =>
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
@@ -174,6 +175,9 @@ public static class HelpRequestEndpoints
             // Clean this job's S3 objects first (per-key fail-soft; the bucket
             // lifecycle rule reaps anything a hiccup leaves behind).
             await jobMedia.DeleteForAsync(request);
+
+            // Free any self-scheduling seats so the slot reopens.
+            await availability.ReleaseAsync(request.Id);
 
             db.HelpRequests.Remove(request);
             await db.SaveChangesAsync();

@@ -242,7 +242,11 @@ public class ApiFactory : BaseApiFactory<Program>
         string? username = null, string? password = null, bool isActive = true,
         string? leadWebhookUrl = null,
         string? serviceTypesJson = null, string? featuresJson = null,
-        bool membershipEnabled = false, string? phone = null, string? reviewUrl = null)
+        bool membershipEnabled = false, string? phone = null, string? reviewUrl = null,
+        // Self-scheduling knobs (A6). Null → leave the model defaults / the
+        // existing row's values untouched.
+        string? businessHoursJson = null, int? slotMinutes = null,
+        int? slotCapacity = null, string? timeZoneId = null)
     {
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -250,36 +254,24 @@ public class ApiFactory : BaseApiFactory<Program>
         var existing = await db.Brands.FirstOrDefaultAsync(b => b.Slug == slug);
         if (existing is null)
         {
-            db.Brands.Add(new DIYHelper2.Api.Models.Brand
-            {
-                Slug = slug,
-                CompanyName = companyName,
-                LeadEmail = leadEmail,
-                DashboardUsername = username,
-                DashboardPasswordHash = hash,
-                IsActive = isActive,
-                LeadWebhookUrl = leadWebhookUrl,
-                ServiceTypesJson = serviceTypesJson,
-                FeaturesJson = featuresJson,
-                MembershipEnabled = membershipEnabled,
-                Phone = phone,
-                ReviewUrl = reviewUrl,
-            });
+            existing = new DIYHelper2.Api.Models.Brand { Slug = slug };
+            db.Brands.Add(existing);
         }
-        else
-        {
-            existing.CompanyName = companyName;
-            existing.LeadEmail = leadEmail;
-            existing.DashboardUsername = username;
-            existing.DashboardPasswordHash = hash;
-            existing.IsActive = isActive;
-            existing.LeadWebhookUrl = leadWebhookUrl;
-            existing.ServiceTypesJson = serviceTypesJson;
-            existing.FeaturesJson = featuresJson;
-            existing.MembershipEnabled = membershipEnabled;
-            existing.Phone = phone;
-            existing.ReviewUrl = reviewUrl;
-        }
+        existing.CompanyName = companyName;
+        existing.LeadEmail = leadEmail;
+        existing.DashboardUsername = username;
+        existing.DashboardPasswordHash = hash;
+        existing.IsActive = isActive;
+        existing.LeadWebhookUrl = leadWebhookUrl;
+        existing.ServiceTypesJson = serviceTypesJson;
+        existing.FeaturesJson = featuresJson;
+        existing.MembershipEnabled = membershipEnabled;
+        existing.Phone = phone;
+        existing.ReviewUrl = reviewUrl;
+        if (businessHoursJson is not null) existing.BusinessHoursJson = businessHoursJson;
+        if (slotMinutes is not null) existing.SlotMinutes = slotMinutes.Value;
+        if (slotCapacity is not null) existing.SlotCapacity = slotCapacity;
+        if (timeZoneId is not null) existing.TimeZoneId = timeZoneId;
         await db.SaveChangesAsync();
     }
 

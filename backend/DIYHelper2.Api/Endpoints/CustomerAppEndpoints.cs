@@ -26,6 +26,8 @@ public static class CustomerAppEndpoints
             DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher crmDispatcher,
             DIYHelper2.Api.Services.JobMediaService jobMedia,
             DIYHelper2.Api.Integrations.GeocodingClient geocoder,
+            DIYHelper2.Api.Services.AvailabilityService availability,
+            DIYHelper2.Api.Services.HelpRequestWriteService writer,
             ILogger<Program> logger) =>
         {
             // Reject oversize / malformed image payloads before persisting. Mobile app
@@ -68,17 +70,58 @@ public static class CustomerAppEndpoints
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
-            db.HelpRequests.Add(helpRequest);
 
-            // Upsert the lightweight, password-less customer record so return visits are
-            // recognized (by device, or by email on a new install) and later features
-            // (memberships, reminders) have a stable anchor. Best-effort: a failure here
-            // must not fail the booking, so it shares the same SaveChanges and any
-            // exception bubbles only to the catch-all handler (the lead is still saved
-            // first-class above). Match newest-first on device, then email.
-            await UpsertCustomerAsync(db, brandSlug, deviceId, dto.CustomerName, dto.CustomerEmail, dto.CustomerPhone);
+            if (dto.SlotStart.HasValue)
+            {
+                // Self-scheduling: create the job and claim a slot seat in ONE
+                // transaction — either both persist or neither does. All seats
+                // taken (a concurrent booking won the race, or the brand has no
+                // capacity) → 409 slot_taken with nothing saved; the app
+                // re-fetches availability and offers another slot.
+                var slotUtc = DIYHelper2.Api.Services.AvailabilityService.AsUtc(dto.SlotStart.Value);
+                var brandRow = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+                helpRequest.ScheduledFor = slotUtc;
+                writer.ApplyStatus(helpRequest, "scheduled");
 
-            await db.SaveChangesAsync();
+                // EnableRetryOnFailure requires user transactions to run inside
+                // the provider's execution strategy.
+                var strategy = db.Database.CreateExecutionStrategy();
+                var claimed = await strategy.ExecuteAsync(async () =>
+                {
+                    await using var tx = await db.Database.BeginTransactionAsync();
+                    db.HelpRequests.Add(helpRequest);
+                    await UpsertCustomerAsync(db, brandSlug, deviceId, dto.CustomerName, dto.CustomerEmail, dto.CustomerPhone);
+                    await db.SaveChangesAsync();
+                    if (brandRow is null || !await availability.TryClaimAsync(brandRow, slotUtc, helpRequest.Id))
+                    {
+                        await tx.RollbackAsync();
+                        return false;
+                    }
+                    await tx.CommitAsync();
+                    return true;
+                });
+                if (!claimed)
+                {
+                    db.ChangeTracker.Clear(); // rollback left Added/Unchanged ghosts behind
+                    return Results.Json(
+                        new { error = "That time slot was just taken — please pick another.", code = "slot_taken" },
+                        statusCode: 409);
+                }
+            }
+            else
+            {
+                db.HelpRequests.Add(helpRequest);
+
+                // Upsert the lightweight, password-less customer record so return visits are
+                // recognized (by device, or by email on a new install) and later features
+                // (memberships, reminders) have a stable anchor. Best-effort: a failure here
+                // must not fail the booking, so it shares the same SaveChanges and any
+                // exception bubbles only to the catch-all handler (the lead is still saved
+                // first-class above). Match newest-first on device, then email.
+                await UpsertCustomerAsync(db, brandSlug, deviceId, dto.CustomerName, dto.CustomerEmail, dto.CustomerPhone);
+
+                await db.SaveChangesAsync();
+            }
 
             // Offload the booking photo to S3 once the row has an id (the key
             // embeds it). Fail-soft: an unconfigured bucket or a failed Put
@@ -146,6 +189,32 @@ public static class CustomerAppEndpoints
                 serviceTypes = ParseServiceTypes(brand?.ServiceTypesJson),
                 membershipEnabled = membershipEffective,
                 features = BuildBrandFeatures(brand?.FeaturesJson, membershipEffective),
+            });
+        });
+
+        // Open self-scheduling slots for one brand-local day. PUBLIC like
+        // /api/config (X-Brand only; no admin-gate pattern matches
+        // /api/availability — pinned by a test). A brand that hasn't configured
+        // business hours returns an empty slot list and the app falls back to
+        // the legacy preferred-day/window chips. Times are ISO UTC.
+        app.MapGet("/api/availability", async (
+            [FromQuery] string? date, HttpContext http, AppDbContext db,
+            DIYHelper2.Api.Services.AvailabilityService availability) =>
+        {
+            if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", out var day))
+                return ApiError.BadRequest(http, "date must be YYYY-MM-DD.");
+
+            var brandSlug = BrandFromHeader(http);
+            var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+            if (brand is null)
+                return Results.Ok(new { date = day.ToString("yyyy-MM-dd"), slotMinutes = 120, slots = Array.Empty<object>() });
+
+            var slots = await availability.GetOpenSlotsAsync(brand, day);
+            return Results.Ok(new
+            {
+                date = day.ToString("yyyy-MM-dd"),
+                slotMinutes = brand.SlotMinutes,
+                slots = slots.Select(s => new { start = s.StartUtc, end = s.EndUtc, remaining = s.Remaining }),
             });
         });
 

@@ -143,10 +143,26 @@ public static class AdminOpsEndpoints
             if (tech is null || CrossTenant(http, tech.Brand)) return Results.NotFound();
             if (!string.IsNullOrWhiteSpace(brand) && tech.Brand != brand) return Results.NotFound();
 
-            // Day window in UTC. TODO(A6): use the brand's TimeZoneId so the
-            // "day" matches the brand's local calendar day.
-            var dayStartUtc = day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            var dayEndUtc = dayStartUtc.AddDays(1);
+            // Day window in the brand's local time zone, so "2026-08-03" means
+            // the brand's calendar day, not the UTC one. Falls back to a UTC
+            // day if the zone is missing/unknown or local midnight is invalid.
+            DateTime dayStartUtc, dayEndUtc;
+            try
+            {
+                var tzId = (await db.Brands
+                    .Where(b => b.Slug == tech.Brand)
+                    .Select(b => b.TimeZoneId)
+                    .FirstOrDefaultAsync()) ?? "America/Chicago";
+                var tz = TimeZoneInfo.FindSystemTimeZoneById(tzId);
+                var localMidnight = day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Unspecified);
+                dayStartUtc = TimeZoneInfo.ConvertTimeToUtc(localMidnight, tz);
+                dayEndUtc = TimeZoneInfo.ConvertTimeToUtc(localMidnight.AddDays(1), tz);
+            }
+            catch
+            {
+                dayStartUtc = day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+                dayEndUtc = dayStartUtc.AddDays(1);
+            }
 
             var activeStatuses = new[] { "scheduled", "on_the_way", "in_progress" };
             var stops = await db.HelpRequests

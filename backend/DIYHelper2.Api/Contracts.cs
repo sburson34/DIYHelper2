@@ -39,7 +39,11 @@ public record CreateHelpRequestDto(
     [property: JsonPropertyName("preferredWindow")] string? PreferredWindow = null,
     // Service address — the app sends ONE line (≤200 chars); City/State/Zip
     // stay null until the console edits them. Geocoded best-effort after save.
-    [property: JsonPropertyName("address")] string? Address = null
+    [property: JsonPropertyName("address")] string? Address = null,
+    // Self-scheduling: an open slot's ISO UTC start from GET /api/availability.
+    // Present → the booking claims a seat in the same transaction (all seats
+    // taken → 409 slot_taken, nothing persisted) and lands pre-scheduled.
+    [property: JsonPropertyName("slotStart")] DateTime? SlotStart = null
 );
 
 public record UpdateHelpRequestDto(
@@ -84,6 +88,17 @@ public record UpdateTechnicianDto(
 
 public record TechLoginDto(
     [property: JsonPropertyName("code")] string? Code
+);
+
+// Owner PUT /api/brands/{slug}/scheduling. businessHours arrives as the parsed
+// JSON object ({"mon":[{"start":"08:00","end":"17:00"}],...}); JSON null
+// explicitly clears it (turns self-scheduling off). slotCapacity null ⇒
+// "auto" (active-tech count). Omitted slotMinutes/timeZoneId keep their value.
+public record UpdateSchedulingDto(
+    [property: JsonPropertyName("businessHours")] System.Text.Json.JsonElement? BusinessHours,
+    [property: JsonPropertyName("slotMinutes")] int? SlotMinutes,
+    [property: JsonPropertyName("slotCapacity")] int? SlotCapacity,
+    [property: JsonPropertyName("timeZoneId")] string? TimeZoneId
 );
 
 public record TechJobUpdateDto(

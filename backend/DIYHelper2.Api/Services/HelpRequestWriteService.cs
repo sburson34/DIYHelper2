@@ -16,12 +16,16 @@ public class HelpRequestWriteService
     private readonly AppDbContext _db;
     private readonly MessagingService _messaging;
     private readonly JobCompletionService _completion;
+    private readonly AvailabilityService _availability;
 
-    public HelpRequestWriteService(AppDbContext db, MessagingService messaging, JobCompletionService completion)
+    public HelpRequestWriteService(
+        AppDbContext db, MessagingService messaging, JobCompletionService completion,
+        AvailabilityService availability)
     {
         _db = db;
         _messaging = messaging;
         _completion = completion;
+        _availability = availability;
     }
 
     /// <summary>
@@ -50,6 +54,14 @@ public class HelpRequestWriteService
     public async Task HandleTransitionAsync(HelpRequest r, string? prevStatus, CancellationToken ct = default)
     {
         if (r.Status == prevStatus) return;
+
+        // Cancellation frees any self-scheduling seats the booking held so the
+        // slot immediately reopens on /api/availability.
+        if (r.Status == "cancelled")
+        {
+            await _availability.ReleaseAsync(r.Id, ct);
+            return;
+        }
 
         // On completion: invoice + report email + maintenance reminder + review SMS.
         if (r.Status == "completed")

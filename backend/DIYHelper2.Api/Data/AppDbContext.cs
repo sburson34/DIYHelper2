@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
     public DbSet<SmsMessage> SmsMessages => Set<SmsMessage>();
     public DbSet<MaintenanceReminder> MaintenanceReminders => Set<MaintenanceReminder>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
+    public DbSet<SlotClaim> SlotClaims => Set<SlotClaim>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -178,5 +179,20 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<InventoryItem>()
             .HasIndex(i => i.Brand)
             .HasDatabaseName("IX_InventoryItems_Brand");
+
+        // ── Self-scheduling slot claims ───────────────────────────────────
+        // THE double-booking guarantee: one row per booked seat, unique per
+        // (brand, slot, seat). Concurrent bookings racing for the last seat
+        // collide here and the loser gets 409 slot_taken. Portable to the
+        // SQLite test provider (plain unique index, no filters).
+        modelBuilder.Entity<SlotClaim>()
+            .HasIndex(c => new { c.Brand, c.SlotStartUtc, c.Seq })
+            .IsUnique()
+            .HasDatabaseName("IX_SlotClaims_Brand_SlotStartUtc_Seq");
+
+        // Cancellation/deletion releases a booking's claims by HelpRequestId.
+        modelBuilder.Entity<SlotClaim>()
+            .HasIndex(c => c.HelpRequestId)
+            .HasDatabaseName("IX_SlotClaims_HelpRequestId");
     }
 }
