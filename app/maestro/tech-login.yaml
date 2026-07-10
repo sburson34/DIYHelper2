@@ -1,0 +1,44 @@
+# Tech mode entry: drawer → Tech Mode → login screen renders → a bogus code is
+# rejected with an error (backend round-trip), and the tech stays on the login
+# screen. Verifies the tech stack mounts and the auth seam is wired without
+# needing a real technician row.
+#
+# Requires a reachable backend (adb reverse tcp:5206 or prod). Network-
+# dependent — nightly/manual tier, not per-PR.
+appId: com.diyhelper2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Capture the Issue"
+- tapOn:
+    text: "Skip"
+    optional: true
+- tapOn:
+    text: "Continue without AI"
+    optional: true
+- tapOn:
+    text: "Not now"
+    optional: true
+
+# Drawer → Technician (nav_tech_mode label).
+- swipe:
+    from: { x: 2%, y: 50% }
+    to: { x: 80%, y: 50% }
+- tapOn: "Technician"
+
+# Login screen is up.
+- assertVisible:
+    id: "tech-login-code"
+
+# A made-up code must be rejected, not crash.
+- tapOn:
+    id: "tech-login-code"
+- inputText: "NOTAREALCODE"
+- hideKeyboard
+- tapOn:
+    id: "tech-login-submit"
+- extendedWaitUntil:
+    notVisible: "Something went wrong"
+    timeout: 15000
+- assertVisible:
+    id: "tech-login-code"

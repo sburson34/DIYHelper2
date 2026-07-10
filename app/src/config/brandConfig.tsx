@@ -22,6 +22,12 @@ export const DEFAULT_BRAND_CONFIG: BrandConfig = {
     referrals: true,
     maintenanceReminders: true,
     memberships: false,
+    // Rollout-gated features: OFF by default, a brand turns them on via
+    // Brand.FeaturesJson once the company has configured the server side
+    // (business hours for selfScheduling; nothing extra for assets/properties).
+    selfScheduling: false,
+    assets: false,
+    multiProperty: false,
   },
 };
 
