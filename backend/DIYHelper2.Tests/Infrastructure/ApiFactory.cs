@@ -100,6 +100,9 @@ public class ApiFactory : BaseApiFactory<Program>
     public FakeHttpMessageHandler FakeAttomHandler { get; } = new();
     public FakeHttpMessageHandler FakeReceiptOcrHandler { get; } = new();
     public FakeHttpMessageHandler FakeYouTubeHandler { get; } = new();
+    /// <summary>Stubs the Google Geocoding API (job service addresses). Tests
+    /// also set <see cref="SetGoogleApiKey"/> so the client is "configured".</summary>
+    public FakeHttpMessageHandler FakeGeocodeHandler { get; } = new();
     public FakeHttpMessageHandler FakeModerationHandler { get; } = new();
     public FakeHttpMessageHandler FakePlayIntegrityHandler { get; } = new();
     public FakeHttpMessageHandler FakeExpoHandler { get; } = new();
@@ -197,6 +200,7 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<AttomClient>().ConfigurePrimaryHttpMessageHandler(() => FakeAttomHandler);
             services.AddHttpClient<ReceiptOcrClient>().ConfigurePrimaryHttpMessageHandler(() => FakeReceiptOcrHandler);
             services.AddHttpClient<YouTubeClient>().ConfigurePrimaryHttpMessageHandler(() => FakeYouTubeHandler);
+            services.AddHttpClient<GeocodingClient>().ConfigurePrimaryHttpMessageHandler(() => FakeGeocodeHandler);
             services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().ConfigurePrimaryHttpMessageHandler(() => FakeModerationHandler);
             services.AddHttpClient<PlayIntegrityVerifier>().ConfigurePrimaryHttpMessageHandler(() => FakePlayIntegrityHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
@@ -369,6 +373,16 @@ public class ApiFactory : BaseApiFactory<Program>
         using var scope = Services.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<AiKeyStore>();
         store.OpenAiKey = key;
+    }
+
+    /// <summary>
+    /// Populate RuntimeConfigStore.GoogleApiKey so GeocodingClient (and the
+    /// translate endpoint) consider themselves configured. Pair with
+    /// <see cref="FakeGeocodeHandler"/> to shape the geocode response.
+    /// </summary>
+    public void SetGoogleApiKey(string key)
+    {
+        Services.GetRequiredService<DIYHelper2.Api.Services.RuntimeConfigStore>().GoogleApiKey = key;
     }
 
     public new Task InitializeAsync()

@@ -157,6 +157,10 @@ builder.Services.AddHttpClient<RedditClient>().AddHttpMessageHandler<SsrfGuardHa
 builder.Services.AddHttpClient<PubChemClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<AttomClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+// Google Geocoding for job service addresses (route view / Navigate button).
+// Key comes from RuntimeConfigStore.GoogleApiKey post-Secrets-Manager; the
+// client is fail-soft (null) whenever unconfigured or the lookup misses.
+builder.Services.AddHttpClient<GeocodingClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<SsrfGuardHandler>();
 // Expo push service — fans promotional broadcasts out to registered devices.
 builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().AddHttpMessageHandler<SsrfGuardHandler>();

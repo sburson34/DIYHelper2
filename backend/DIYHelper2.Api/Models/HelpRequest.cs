@@ -41,6 +41,22 @@ public class HelpRequest : IBrandOwned
     /// "evening" / "anytime". Free text kept short.</summary>
     public string? PreferredWindow { get; set; }
 
+    // ── Service address (where the tech goes) ─────────────────────────────
+    /// <summary>Street address line. The app sends a single line at booking;
+    /// City/State/Zip are refined from the console.</summary>
+    public string? Address { get; set; }
+
+    public string? City { get; set; }
+    public string? State { get; set; }
+    public string? Zip { get; set; }
+
+    /// <summary>Geocoded (or console-entered) coordinates. Filled best-effort
+    /// by <see cref="Integrations.GeocodingClient"/> after save; power the
+    /// route view and the tech app's Navigate button.</summary>
+    public double? Lat { get; set; }
+
+    public double? Lng { get; set; }
+
     // ── Scheduling (operator-confirmed, drives "tech on the way") ──────────
     /// <summary>The appointment time the operator confirmed. Distinct from
     /// <see cref="PreferredDate"/>: this is the committed slot shown to the

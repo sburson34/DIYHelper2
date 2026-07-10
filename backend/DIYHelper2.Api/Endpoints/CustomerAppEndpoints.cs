@@ -25,6 +25,7 @@ public static class CustomerAppEndpoints
             Sburson.Shared.Email.IEmailService mailer,
             DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher crmDispatcher,
             DIYHelper2.Api.Services.JobMediaService jobMedia,
+            DIYHelper2.Api.Integrations.GeocodingClient geocoder,
             ILogger<Program> logger) =>
         {
             // Reject oversize / malformed image payloads before persisting. Mobile app
@@ -33,6 +34,8 @@ public static class CustomerAppEndpoints
                 return imageErr;
             if (!string.IsNullOrEmpty(dto.UserDescription) && dto.UserDescription.Length > MediaValidation.MaxDescriptionLength)
                 return ApiError.BadRequest(context, $"Description exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
+            if (dto.Address is { Length: > 200 })
+                return ApiError.BadRequest(context, "address exceeds the maximum length of 200 characters.");
 
             // White-label attribution: which company's app produced this lead. Sourced
             // from the X-Brand header (NOT the body) so a client can't spoof another
@@ -58,6 +61,9 @@ public static class CustomerAppEndpoints
                 ServiceType = dto.ServiceType,
                 PreferredDate = dto.PreferredDate,
                 PreferredWindow = dto.PreferredWindow,
+                // The app sends a single address line; City/State/Zip stay null
+                // until the console refines them.
+                Address = string.IsNullOrWhiteSpace(dto.Address) ? null : dto.Address.Trim(),
                 Status = "new",
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
@@ -84,6 +90,19 @@ public static class CustomerAppEndpoints
                 {
                     helpRequest.ImageKey = key;
                     helpRequest.ImageBase64 = null;
+                    await db.SaveChangesAsync();
+                }
+            }
+
+            // Geocode the service address best-effort AFTER the save — a miss
+            // (unconfigured key, timeout, junk address) leaves coords null and
+            // never fails the customer's submit.
+            if (helpRequest.Address is not null && helpRequest.Lat is null)
+            {
+                if (await geocoder.GeocodeAsync(helpRequest.Address) is { } geo)
+                {
+                    helpRequest.Lat = geo.Lat;
+                    helpRequest.Lng = geo.Lng;
                     await db.SaveChangesAsync();
                 }
             }
@@ -157,6 +176,7 @@ public static class CustomerAppEndpoints
                     r.TechEtaMinutes,
                     r.QuoteStatus,
                     r.QuoteTotal,
+                    r.Address,
                     r.CreatedAt,
                     r.UpdatedAt,
                     HasImage = r.ImageKey != null || r.ImageBase64 != null,
@@ -178,6 +198,7 @@ public static class CustomerAppEndpoints
                 r.TechEtaMinutes,
                 r.QuoteStatus,
                 r.QuoteTotal,
+                r.Address,
                 r.CreatedAt,
                 r.UpdatedAt,
                 ImageUrl = r.HasImage ? $"/api/my/requests/{r.Id}/media/image" : null,
@@ -214,6 +235,7 @@ public static class CustomerAppEndpoints
                 r.QuoteTotal,
                 r.QuoteStatus,
                 r.QuoteSentAt,
+                r.Address,
                 r.CreatedAt,
                 r.UpdatedAt,
                 ImageUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "image", "/api/my/requests"),

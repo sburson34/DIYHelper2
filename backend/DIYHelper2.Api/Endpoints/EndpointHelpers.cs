@@ -154,6 +154,31 @@ public static class EndpointHelpers
         return tokens.Validate(token);
     }
 
+    // The job's address as one display/geocode line: "street, city, state zip"
+    // with whatever parts exist. Null when the job has no address at all.
+    public static string? AddressLineOf(HelpRequest r)
+    {
+        var parts = new[] { r.Address, r.City, r.State, r.Zip }
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .Select(p => p!.Trim())
+            .ToArray();
+        return parts.Length == 0 ? null : string.Join(", ", parts);
+    }
+
+    // Google Maps directions deep link for the tech app's Navigate button:
+    // coordinates when the job is geocoded (exact), else the URL-encoded
+    // address string, else null (no address to navigate to).
+    public static string? MapsUrlOf(HelpRequest r)
+    {
+        if (r.Lat is { } lat && r.Lng is { } lng)
+            return "https://www.google.com/maps/dir/?api=1&destination=" +
+                $"{lat.ToString(System.Globalization.CultureInfo.InvariantCulture)}," +
+                $"{lng.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+        var line = AddressLineOf(r);
+        return line is null ? null
+            : $"https://www.google.com/maps/dir/?api=1&destination={Uri.EscapeDataString(line)}";
+    }
+
     // Parse a brand's JSON service-type array; malformed/empty → no configured types
     // (the app falls back to a single generic option).
     public static List<string> ParseServiceTypes(string? json)

@@ -36,7 +36,10 @@ public record CreateHelpRequestDto(
     // Booking details (optional — a plain "call a pro" lead omits them).
     [property: JsonPropertyName("serviceType")] string? ServiceType = null,
     [property: JsonPropertyName("preferredDate")] DateTime? PreferredDate = null,
-    [property: JsonPropertyName("preferredWindow")] string? PreferredWindow = null
+    [property: JsonPropertyName("preferredWindow")] string? PreferredWindow = null,
+    // Service address — the app sends ONE line (≤200 chars); City/State/Zip
+    // stay null until the console edits them. Geocoded best-effort after save.
+    [property: JsonPropertyName("address")] string? Address = null
 );
 
 public record UpdateHelpRequestDto(
@@ -53,7 +56,16 @@ public record UpdateHelpRequestDto(
     [property: JsonPropertyName("laborCost")] decimal? LaborCost = null,
     [property: JsonPropertyName("partsCost")] decimal? PartsCost = null,
     // Recurring maintenance: schedule a reminder this many months after completion.
-    [property: JsonPropertyName("maintenanceIntervalMonths")] int? MaintenanceIntervalMonths = null
+    [property: JsonPropertyName("maintenanceIntervalMonths")] int? MaintenanceIntervalMonths = null,
+    // Service address (console-editable). Manual lat/lng are allowed; when the
+    // address changes and no manual coords accompany it, the row is re-geocoded
+    // best-effort after save.
+    [property: JsonPropertyName("address")] string? Address = null,
+    [property: JsonPropertyName("city")] string? City = null,
+    [property: JsonPropertyName("state")] string? State = null,
+    [property: JsonPropertyName("zip")] string? Zip = null,
+    [property: JsonPropertyName("lat")] double? Lat = null,
+    [property: JsonPropertyName("lng")] double? Lng = null
 );
 
 public record CreateTechnicianDto(

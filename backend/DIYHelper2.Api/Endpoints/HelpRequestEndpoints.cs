@@ -50,6 +50,13 @@ public static class HelpRequestEndpoints
                     r.PreferredWindow,
                     r.ScheduledFor,
                     r.TechEtaMinutes,
+                    // Service address (route view / lead cards).
+                    r.Address,
+                    r.City,
+                    r.State,
+                    r.Zip,
+                    r.Lat,
+                    r.Lng,
                     r.CreatedAt,
                     r.UpdatedAt
                 })
@@ -89,11 +96,14 @@ public static class HelpRequestEndpoints
         });
 
         app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db,
-            DIYHelper2.Api.Services.HelpRequestWriteService writer, ILogger<Program> logger) =>
+            DIYHelper2.Api.Services.HelpRequestWriteService writer,
+            DIYHelper2.Api.Integrations.GeocodingClient geocoder, ILogger<Program> logger) =>
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
             if (CrossTenant(http, request.Brand)) return Results.NotFound();
+            if (dto.Address is { Length: > 200 })
+                return ApiError.BadRequest(http, "address exceeds the maximum length of 200 characters.");
 
             var prevStatus = request.Status;
             writer.ApplyStatus(request, dto.Status);
@@ -111,9 +121,42 @@ public static class HelpRequestEndpoints
             if (dto.PartsCost.HasValue) request.PartsCost = dto.PartsCost.Value < 0 ? null : dto.PartsCost.Value;
             if (dto.MaintenanceIntervalMonths.HasValue)
                 request.MaintenanceIntervalMonths = dto.MaintenanceIntervalMonths.Value <= 0 ? null : dto.MaintenanceIntervalMonths.Value;
+
+            // Service address. Manual lat/lng always win; when the address text
+            // changes without manual coords, stale coordinates are cleared and
+            // re-geocoded best-effort after the save below.
+            var addressChanged = false;
+            void ApplyAddressPart(string? incoming, Func<string?> get, Action<string?> set)
+            {
+                if (incoming is null) return; // omitted → untouched
+                var value = string.IsNullOrWhiteSpace(incoming) ? null : incoming.Trim();
+                if (value == get()) return;
+                set(value);
+                addressChanged = true;
+            }
+            ApplyAddressPart(dto.Address, () => request.Address, v => request.Address = v);
+            ApplyAddressPart(dto.City, () => request.City, v => request.City = v);
+            ApplyAddressPart(dto.State, () => request.State, v => request.State = v);
+            ApplyAddressPart(dto.Zip, () => request.Zip, v => request.Zip = v);
+            var manualCoords = dto.Lat.HasValue || dto.Lng.HasValue;
+            if (dto.Lat.HasValue) request.Lat = dto.Lat.Value;
+            if (dto.Lng.HasValue) request.Lng = dto.Lng.Value;
+            if (addressChanged && !manualCoords) { request.Lat = null; request.Lng = null; }
+
             request.UpdatedAt = DateTime.UtcNow;
 
             await db.SaveChangesAsync();
+
+            // Best-effort re-geocode AFTER save (a miss just leaves coords null).
+            if (addressChanged && !manualCoords && AddressLineOf(request) is { } line)
+            {
+                if (await geocoder.GeocodeAsync(line) is { } geo)
+                {
+                    request.Lat = geo.Lat;
+                    request.Lng = geo.Lng;
+                    await db.SaveChangesAsync();
+                }
+            }
 
             // Real transitions fire the shared side effects: completion pipeline,
             // or the scheduled / on-the-way customer texts (best-effort).

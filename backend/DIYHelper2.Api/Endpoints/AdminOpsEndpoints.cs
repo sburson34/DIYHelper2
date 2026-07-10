@@ -124,6 +124,59 @@ public static class AdminOpsEndpoints
             return Results.Ok(new { perTech, totalHours = Math.Round(perTech.Sum(t => t.hours), 2) });
         });
 
+        // Day-route view for one technician: the tech's active jobs (scheduled /
+        // on_the_way / in_progress) with ScheduledFor in the requested day,
+        // ordered by RouteOptimizer (nearest-neighbor from the earliest-scheduled
+        // geocoded stop). Un-geocoded jobs trail the list in schedule order and
+        // are reported in `unroutable`. Admin-gated + brand-scoped (/api/ops).
+        app.MapGet("/api/ops/route", async (
+            [FromQuery] int? techId, [FromQuery] string? date, [FromQuery] string? brand,
+            HttpContext http, AppDbContext db) =>
+        {
+            if (techId is null) return ApiError.BadRequest(http, "techId is required.");
+            if (!DateOnly.TryParseExact(date, "yyyy-MM-dd", out var day))
+                return ApiError.BadRequest(http, "date must be YYYY-MM-DD.");
+
+            var tech = await db.Technicians.FindAsync(techId.Value);
+            // Cross-tenant probes (and a super-admin ?brand= filter that doesn't
+            // match the tech) 404 like every other scoped detail endpoint.
+            if (tech is null || CrossTenant(http, tech.Brand)) return Results.NotFound();
+            if (!string.IsNullOrWhiteSpace(brand) && tech.Brand != brand) return Results.NotFound();
+
+            // Day window in UTC. TODO(A6): use the brand's TimeZoneId so the
+            // "day" matches the brand's local calendar day.
+            var dayStartUtc = day.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+            var dayEndUtc = dayStartUtc.AddDays(1);
+
+            var activeStatuses = new[] { "scheduled", "on_the_way", "in_progress" };
+            var stops = await db.HelpRequests
+                .Where(r => r.Brand == tech.Brand && r.AssignedTechId == techId.Value
+                    && r.ScheduledFor >= dayStartUtc && r.ScheduledFor < dayEndUtc
+                    && activeStatuses.Contains(r.Status))
+                .Select(r => new DIYHelper2.Api.Services.RouteOptimizer.Stop(
+                    r.Id, r.ProjectTitle, r.Address, r.City, r.Zip, r.Lat, r.Lng, r.ScheduledFor))
+                .ToListAsync();
+
+            var plan = DIYHelper2.Api.Services.RouteOptimizer.Optimize(stops);
+            return Results.Ok(new
+            {
+                stops = plan.Stops.Select(l => new
+                {
+                    id = l.Stop.Id,
+                    projectTitle = l.Stop.ProjectTitle,
+                    address = l.Stop.Address,
+                    city = l.Stop.City,
+                    zip = l.Stop.Zip,
+                    lat = l.Stop.Lat,
+                    lng = l.Stop.Lng,
+                    scheduledFor = l.Stop.ScheduledFor,
+                    legMiles = l.LegMiles,
+                }),
+                totalMiles = plan.TotalMiles,
+                unroutable = plan.Unroutable,
+            });
+        });
+
         // Owner "next best action" — a rule-based to-do rollup (no AI needed).
         app.MapGet("/api/ops/next-actions", async ([FromQuery] string? brand, HttpContext http, AppDbContext db) =>
         {

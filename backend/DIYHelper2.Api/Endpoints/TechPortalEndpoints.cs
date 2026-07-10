@@ -106,6 +106,12 @@ public static class TechPortalEndpoints
                 r.ScheduledFor,
                 r.PreferredWindow,
                 r.TechEtaMinutes,
+                // Service address + a ready-made directions link for Navigate.
+                r.Address,
+                r.City,
+                r.State,
+                r.Zip,
+                MapsUrl = MapsUrlOf(r),
                 r.BeforePhotoBase64,
                 r.AfterPhotoBase64,
                 r.SignatureBase64,
