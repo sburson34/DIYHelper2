@@ -24,6 +24,7 @@ public static class CustomerAppEndpoints
             AppDbContext db,
             Sburson.Shared.Email.IEmailService mailer,
             DIYHelper2.Api.Integrations.Crm.CrmLeadDispatcher crmDispatcher,
+            DIYHelper2.Api.Services.JobMediaService jobMedia,
             ILogger<Program> logger) =>
         {
             // Reject oversize / malformed image payloads before persisting. Mobile app
@@ -72,6 +73,20 @@ public static class CustomerAppEndpoints
             await UpsertCustomerAsync(db, brandSlug, deviceId, dto.CustomerName, dto.CustomerEmail, dto.CustomerPhone);
 
             await db.SaveChangesAsync();
+
+            // Offload the booking photo to S3 once the row has an id (the key
+            // embeds it). Fail-soft: an unconfigured bucket or a failed Put
+            // simply leaves the base64 in its column, exactly as before.
+            if (jobMedia.IsConfigured && !string.IsNullOrEmpty(helpRequest.ImageBase64))
+            {
+                var key = await jobMedia.StoreAsync(brandSlug, helpRequest.Id, "image", helpRequest.ImageBase64);
+                if (key is not null)
+                {
+                    helpRequest.ImageKey = key;
+                    helpRequest.ImageBase64 = null;
+                    await db.SaveChangesAsync();
+                }
+            }
 
             // Route the lead to the branding company by email. Falls back to the
             // flagship inbox so a lead is never silently dropped. Best-effort: an email
@@ -124,7 +139,10 @@ public static class CustomerAppEndpoints
             var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
             if (string.IsNullOrEmpty(deviceId)) return Results.Ok(Array.Empty<object>());
 
-            var results = await db.HelpRequests
+            // Materialize the customer-safe columns, then compute the media
+            // proxy URLs in memory (has* booleans keep multi-MB legacy base64
+            // payloads out of the list query).
+            var rows = await db.HelpRequests
                 .Where(r => r.Brand == brandSlug && r.DeviceId == deviceId)
                 .OrderByDescending(r => r.CreatedAt)
                 .Select(r => new
@@ -141,8 +159,32 @@ public static class CustomerAppEndpoints
                     r.QuoteTotal,
                     r.CreatedAt,
                     r.UpdatedAt,
+                    HasImage = r.ImageKey != null || r.ImageBase64 != null,
+                    HasBefore = r.BeforePhotoKey != null || r.BeforePhotoBase64 != null,
+                    HasAfter = r.AfterPhotoKey != null || r.AfterPhotoBase64 != null,
+                    HasSignature = r.SignatureKey != null || r.SignatureBase64 != null,
                 })
                 .ToListAsync();
+
+            var results = rows.Select(r => new
+            {
+                r.Id,
+                r.ProjectTitle,
+                r.ServiceType,
+                r.Status,
+                r.PreferredDate,
+                r.PreferredWindow,
+                r.ScheduledFor,
+                r.TechEtaMinutes,
+                r.QuoteStatus,
+                r.QuoteTotal,
+                r.CreatedAt,
+                r.UpdatedAt,
+                ImageUrl = r.HasImage ? $"/api/my/requests/{r.Id}/media/image" : null,
+                BeforePhotoUrl = r.HasBefore ? $"/api/my/requests/{r.Id}/media/before" : null,
+                AfterPhotoUrl = r.HasAfter ? $"/api/my/requests/{r.Id}/media/after" : null,
+                SignatureUrl = r.HasSignature ? $"/api/my/requests/{r.Id}/media/signature" : null,
+            });
             return Results.Ok(results);
         });
 
@@ -174,7 +216,26 @@ public static class CustomerAppEndpoints
                 r.QuoteSentAt,
                 r.CreatedAt,
                 r.UpdatedAt,
+                ImageUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "image", "/api/my/requests"),
+                BeforePhotoUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "before", "/api/my/requests"),
+                AfterPhotoUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "after", "/api/my/requests"),
+                SignatureUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "signature", "/api/my/requests"),
             });
+        });
+
+        // Media proxy for the customer's own job (photo / before / after /
+        // signature). Same device-scope posture as the other /api/my routes:
+        // wrong brand/device (or an unknown kind) is a 404, never a 403.
+        app.MapGet("/api/my/requests/{id:int}/media/{kind}", async (
+            int id, string kind, HttpContext http, AppDbContext db,
+            DIYHelper2.Api.Services.JobMediaService jobMedia) =>
+        {
+            var brandSlug = BrandFromHeader(http);
+            var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
+            var r = await db.HelpRequests.FindAsync(id);
+            if (r is null || r.Brand != brandSlug || string.IsNullOrEmpty(deviceId) || r.DeviceId != deviceId)
+                return Results.NotFound();
+            return await jobMedia.ServeAsync(r, kind);
         });
 
         // Customer responds to a quote from the app (approve/decline). Device-scoped

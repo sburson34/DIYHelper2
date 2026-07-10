@@ -67,6 +67,28 @@ public class HelpRequest : IBrandOwned
     /// <summary>Base64 PNG of the customer's on-site signature.</summary>
     public string? SignatureBase64 { get; set; }
 
+    // ── S3 media keys (JobMediaService) ────────────────────────────────────
+    // When object storage is configured, new photo/signature uploads land in
+    // S3 and only the key is stored here (the matching *Base64 column is
+    // nulled). The base64 columns above remain for the dual-read window: rows
+    // written before the offload still stream their bytes directly.
+    // TODO(DropLegacyBase64Columns): schedule a migration dropping
+    // ImageBase64/BeforePhotoBase64/AfterPhotoBase64/SignatureBase64 no
+    // earlier than 2026-10-08 (90 days after the A4 offload shipped) — the
+    // 90-day retention purge will have aged every legacy base64 row out by then.
+
+    /// <summary>S3 object key of the customer's booking photo (null = not offloaded).</summary>
+    public string? ImageKey { get; set; }
+
+    /// <summary>S3 object key of the tech's "before" photo.</summary>
+    public string? BeforePhotoKey { get; set; }
+
+    /// <summary>S3 object key of the tech's "after" photo.</summary>
+    public string? AfterPhotoKey { get; set; }
+
+    /// <summary>S3 object key of the customer's signature PNG.</summary>
+    public string? SignatureKey { get; set; }
+
     /// <summary>Free-text notes the tech adds from the field (what was done).</summary>
     public string? CompletionNotes { get; set; }
 

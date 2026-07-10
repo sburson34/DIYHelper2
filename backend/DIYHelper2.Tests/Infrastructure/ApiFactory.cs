@@ -123,6 +123,12 @@ public class ApiFactory : BaseApiFactory<Program>
     /// <c>FakeEmail.SentMessages</c> and can set <c>FakeEmail.OnSend</c> to throw.</summary>
     public FakeEmailService FakeEmail { get; } = new();
 
+    /// <summary>In-memory S3 stand-in for the job-media offload. Registered as
+    /// the app's IObjectStorage so booking/tech photo writes store here; tests
+    /// read <c>Storage.Objects</c> and can set <c>ThrowOnEverything</c> to
+    /// exercise the fail-soft base64 fallback.</summary>
+    public FakeObjectStorage Storage { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Lets BaseApiFactory layer ConfigOverrides + the per-fixture connection
@@ -130,6 +136,11 @@ public class ApiFactory : BaseApiFactory<Program>
         base.ConfigureWebHost(builder);
 
         builder.UseEnvironment("Development");
+
+        // Makes AddSburonObjectStorage register a (real) IObjectStorage, which
+        // we then replace with the in-memory fake below — so JobMediaService
+        // sees storage as configured and the offload write paths run in tests.
+        builder.UseSetting("Storage:S3:Bucket", "fake-test-bucket");
 
         builder.ConfigureServices(services =>
         {
@@ -165,6 +176,11 @@ public class ApiFactory : BaseApiFactory<Program>
             // is unset — the fake lets tests assert on what would have been sent).
             services.RemoveAll<Sburson.Shared.Email.IEmailService>();
             services.AddSingleton<Sburson.Shared.Email.IEmailService>(FakeEmail);
+
+            // Replace the S3 client AddSburonObjectStorage registered (because
+            // Storage:S3:Bucket is set above) with the in-memory fake.
+            services.RemoveAll<Sburson.Shared.Storage.IObjectStorage>();
+            services.AddSingleton<Sburson.Shared.Storage.IObjectStorage>(Storage);
 
             // AiKeyStore stays empty by default — keeps the "not configured"
             // 503 tests working. Tests that want to reach the AI path call

@@ -99,6 +99,9 @@ public static class TechPortalEndpoints
                 r.CustomerEmail,
                 r.UserDescription,
                 r.ProjectData,
+                // Legacy base64 columns: non-null only while the row still
+                // carries pre-offload data (dual-read window). New uploads live
+                // in S3 and are reachable via the *Url proxy paths below.
                 r.ImageBase64,
                 r.ScheduledFor,
                 r.PreferredWindow,
@@ -109,13 +112,32 @@ public static class TechPortalEndpoints
                 r.CompletionNotes,
                 r.CompletedAt,
                 r.CreatedAt,
+                ImageUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "image", "/api/tech/jobs"),
+                BeforePhotoUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "before", "/api/tech/jobs"),
+                AfterPhotoUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "after", "/api/tech/jobs"),
+                SignatureUrl = DIYHelper2.Api.Services.JobMediaService.MediaUrl(r, "signature", "/api/tech/jobs"),
             });
+        });
+
+        // Media proxy for a tech's assigned job — same token + assigned-job
+        // scope as the detail route above.
+        app.MapGet("/api/tech/jobs/{id:int}/media/{kind}", async (
+            int id, string kind, HttpContext http, AppDbContext db,
+            DIYHelper2.Api.Services.TechTokenService tokens,
+            DIYHelper2.Api.Services.JobMediaService jobMedia) =>
+        {
+            var who = TechPrincipalOf(http, tokens);
+            if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
+            var r = await db.HelpRequests.FindAsync(id);
+            if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
+            return await jobMedia.ServeAsync(r, kind);
         });
 
         app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
             int id, [FromBody] TechJobUpdateDto dto, HttpContext http, AppDbContext db,
             DIYHelper2.Api.Services.TechTokenService tokens,
-            DIYHelper2.Api.Services.HelpRequestWriteService writer) =>
+            DIYHelper2.Api.Services.HelpRequestWriteService writer,
+            DIYHelper2.Api.Services.JobMediaService jobMedia) =>
         {
             var who = TechPrincipalOf(http, tokens);
             if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
@@ -128,13 +150,36 @@ public static class TechPortalEndpoints
             if (MediaValidation.ValidateBase64Image(dto.AfterPhotoBase64, http, "afterPhotoBase64") is { } afterErr) return afterErr;
             if (MediaValidation.ValidateBase64Image(dto.SignatureBase64, http, "signatureBase64") is { } sigErr) return sigErr;
 
+            // Store an uploaded photo/signature in S3 when configured (key set,
+            // base64 column nulled); unconfigured or a failed Put keeps the
+            // pre-offload behavior of persisting the base64 column. Replacing
+            // an already-offloaded photo best-effort deletes the old object.
+            async Task ApplyMediaAsync(string? uploadedB64, string kind,
+                Func<string?> getKey, Action<string?> setKey, Action<string?> setBase64)
+            {
+                if (uploadedB64 is null) return; // field omitted → untouched
+                var key = string.IsNullOrEmpty(uploadedB64)
+                    ? null
+                    : await jobMedia.StoreAsync(r.Brand, r.Id, kind, uploadedB64);
+                if (key is not null)
+                {
+                    await jobMedia.DeleteKeyAsync(getKey());
+                    setKey(key);
+                    setBase64(null);
+                }
+                else
+                {
+                    setBase64(uploadedB64);
+                }
+            }
+
             writer.ApplyStatus(r, dto.Status);
             if (dto.TechEtaMinutes.HasValue)
                 r.TechEtaMinutes = dto.TechEtaMinutes.Value < 0 ? null : dto.TechEtaMinutes.Value;
             if (dto.CompletionNotes is not null) r.CompletionNotes = dto.CompletionNotes;
-            if (dto.BeforePhotoBase64 is not null) r.BeforePhotoBase64 = dto.BeforePhotoBase64;
-            if (dto.AfterPhotoBase64 is not null) r.AfterPhotoBase64 = dto.AfterPhotoBase64;
-            if (dto.SignatureBase64 is not null) r.SignatureBase64 = dto.SignatureBase64;
+            await ApplyMediaAsync(dto.BeforePhotoBase64, "before", () => r.BeforePhotoKey, k => r.BeforePhotoKey = k, b => r.BeforePhotoBase64 = b);
+            await ApplyMediaAsync(dto.AfterPhotoBase64, "after", () => r.AfterPhotoKey, k => r.AfterPhotoKey = k, b => r.AfterPhotoBase64 = b);
+            await ApplyMediaAsync(dto.SignatureBase64, "signature", () => r.SignatureKey, k => r.SignatureKey = k, b => r.SignatureBase64 = b);
             r.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync();
             // Shared transition side effects: completion pipeline, or the

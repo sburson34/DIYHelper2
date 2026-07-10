@@ -62,7 +62,30 @@ public static class HelpRequestEndpoints
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
             if (CrossTenant(http, request.Brand)) return Results.NotFound();
-            return Results.Ok(request);
+
+            // Full entity (as before) + the media proxy URLs for this surface.
+            // The base64 fields still serialize, but are non-null only while a
+            // legacy pre-offload row carries data (dual-read window).
+            var node = System.Text.Json.JsonSerializer
+                .SerializeToNode(request, System.Text.Json.JsonSerializerOptions.Web)!.AsObject();
+            node["imageUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "image", "/api/help-requests");
+            node["beforePhotoUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "before", "/api/help-requests");
+            node["afterPhotoUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "after", "/api/help-requests");
+            node["signatureUrl"] = DIYHelper2.Api.Services.JobMediaService.MediaUrl(request, "signature", "/api/help-requests");
+            return Results.Json(node);
+        });
+
+        // Media proxy for the console (admin-gated: /api/help-requests non-POST
+        // is caught by AdminAuthMiddleware.RequiresAuth; brand scoping via the
+        // same cross-tenant guard as the detail route).
+        app.MapGet("/api/help-requests/{id:int}/media/{kind}", async (
+            int id, string kind, HttpContext http, AppDbContext db,
+            DIYHelper2.Api.Services.JobMediaService jobMedia) =>
+        {
+            var request = await db.HelpRequests.FindAsync(id);
+            if (request is null) return Results.NotFound();
+            if (CrossTenant(http, request.Brand)) return Results.NotFound();
+            return await jobMedia.ServeAsync(request, kind);
         });
 
         app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRequestDto dto, HttpContext http, AppDbContext db,
@@ -98,11 +121,16 @@ public static class HelpRequestEndpoints
             return Results.Ok(request);
         });
 
-        app.MapDelete("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDbContext db) =>
+        app.MapDelete("/api/help-requests/{id:int}", async (int id, HttpContext http, AppDbContext db,
+            DIYHelper2.Api.Services.JobMediaService jobMedia) =>
         {
             var request = await db.HelpRequests.FindAsync(id);
             if (request is null) return Results.NotFound();
             if (CrossTenant(http, request.Brand)) return Results.NotFound();
+
+            // Clean this job's S3 objects first (per-key fail-soft; the bucket
+            // lifecycle rule reaps anything a hiccup leaves behind).
+            await jobMedia.DeleteForAsync(request);
 
             db.HelpRequests.Remove(request);
             await db.SaveChangesAsync();

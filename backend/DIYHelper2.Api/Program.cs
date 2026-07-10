@@ -24,6 +24,7 @@ using Sburson.Shared.Email;
 using Sburson.Shared.FeatureFlags;
 using Sburson.Shared.Http;
 using Sburson.Shared.Observability;
+using Sburson.Shared.Storage;
 using Sburson.Shared.Web;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
@@ -289,6 +290,12 @@ builder.Services.AddSingleton<DIYHelper2.Api.Services.RuntimeConfigStore>();
 builder.Services.AddSingleton<DIYHelper2.Api.Services.TranslationCache>();
 builder.Services.AddSingleton<DIYHelper2.Api.Data.HazardousChemicalsProvider>();
 builder.Services.AddSburonEmail(builder.Configuration);
+// S3 object storage for job media (booking photo, tech before/after photos,
+// signature). AddSburonObjectStorage is a no-op unless Storage:S3:Bucket is
+// configured, so local/dev keeps writing base64 columns; JobMediaService
+// takes IObjectStorage as an optional dependency and fail-softs throughout.
+builder.Services.AddSburonObjectStorage(builder.Configuration);
+builder.Services.AddSingleton<DIYHelper2.Api.Services.JobMediaService>();
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();

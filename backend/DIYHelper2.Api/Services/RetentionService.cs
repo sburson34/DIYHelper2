@@ -19,16 +19,37 @@ namespace DIYHelper2.Api.Services;
 public class RetentionService : RetentionBackgroundServiceBase<AppDbContext>
 {
     private readonly int _helpRequestRetentionDays;
+    private readonly JobMediaService _jobMedia;
 
-    public RetentionService(IServiceProvider services, ILogger<RetentionService> logger, IConfiguration config)
+    public RetentionService(IServiceProvider services, ILogger<RetentionService> logger, IConfiguration config,
+        JobMediaService jobMedia)
         : base(services, logger, config)
     {
         _helpRequestRetentionDays = config.GetValue<int?>("Retention:HelpRequestDays") ?? 90;
+        _jobMedia = jobMedia;
     }
 
     protected override async Task PurgeAppSpecificAsync(AppDbContext db, CancellationToken ct)
     {
         var helpCutoff = DateTime.UtcNow.AddDays(-_helpRequestRetentionDays);
+
+        // Delete the S3 media of aged-out rows first (per-key fail-soft — a
+        // failed delete leaves an orphan for the bucket lifecycle rule to
+        // reap; the row purge below proceeds regardless).
+        var mediaKeys = await db.HelpRequests
+            .Where(r => r.CreatedAt < helpCutoff
+                && (r.ImageKey != null || r.BeforePhotoKey != null
+                    || r.AfterPhotoKey != null || r.SignatureKey != null))
+            .Select(r => new { r.ImageKey, r.BeforePhotoKey, r.AfterPhotoKey, r.SignatureKey })
+            .ToListAsync(ct);
+        foreach (var m in mediaKeys)
+        {
+            await _jobMedia.DeleteKeyAsync(m.ImageKey, ct);
+            await _jobMedia.DeleteKeyAsync(m.BeforePhotoKey, ct);
+            await _jobMedia.DeleteKeyAsync(m.AfterPhotoKey, ct);
+            await _jobMedia.DeleteKeyAsync(m.SignatureKey, ct);
+        }
+
         var deletedHelp = await db.HelpRequests
             .Where(r => r.CreatedAt < helpCutoff)
             .ExecuteDeleteAsync(ct);
