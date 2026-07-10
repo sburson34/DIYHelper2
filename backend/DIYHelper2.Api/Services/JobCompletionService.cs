@@ -20,16 +20,18 @@ public class JobCompletionService
     private readonly IInvoiceProvider _invoices;
     private readonly IEmailService _mailer;
     private readonly MessagingService _messaging;
+    private readonly JobMediaService _media;
     private readonly ILogger<JobCompletionService> _logger;
 
     public JobCompletionService(
         AppDbContext db, IInvoiceProvider invoices, IEmailService mailer,
-        MessagingService messaging, ILogger<JobCompletionService> logger)
+        MessagingService messaging, JobMediaService media, ILogger<JobCompletionService> logger)
     {
         _db = db;
         _invoices = invoices;
         _mailer = mailer;
         _messaging = messaging;
+        _media = media;
         _logger = logger;
     }
 
@@ -94,7 +96,8 @@ public class JobCompletionService
         try
         {
             if (r.ReportSentAt is not null || string.IsNullOrWhiteSpace(r.CustomerEmail)) return;
-            var (text, html) = BuildReport(r, company);
+            var media = await ResolveReportMediaAsync(r, ct);
+            var (text, html) = BuildReport(r, company, media);
             await _mailer.SendAsync(r.CustomerEmail, $"Your service report from {company}".Trim(), text, html, ct);
             r.ReportSentAt = DateTime.UtcNow;
             r.UpdatedAt = DateTime.UtcNow;
@@ -126,8 +129,30 @@ public class JobCompletionService
         catch (Exception ex) { _logger.LogWarning(ex, "Maintenance scheduling failed for job {Id}.", r.Id); }
     }
 
+    /// <summary>The report's inline images as base64: the legacy column when a
+    /// pre-offload row still has one, else the S3 object fetched and re-encoded
+    /// (so the emailed data URIs are unchanged either way). Per-image fail-soft:
+    /// an S3 miss just skips that image.</summary>
+    private async Task<(string? Before, string? After, string? Signature)> ResolveReportMediaAsync(
+        HelpRequest r, CancellationToken ct)
+    {
+        async Task<string?> Resolve(string? legacyB64, string? key)
+        {
+            if (!string.IsNullOrWhiteSpace(legacyB64)) return legacyB64;
+            if (string.IsNullOrEmpty(key)) return null;
+            var bytes = await _media.GetBytesAsync(key, ct);
+            return bytes is null ? null : Convert.ToBase64String(bytes);
+        }
+
+        return (
+            await Resolve(r.BeforePhotoBase64, r.BeforePhotoKey),
+            await Resolve(r.AfterPhotoBase64, r.AfterPhotoKey),
+            await Resolve(r.SignatureBase64, r.SignatureKey));
+    }
+
     // Compose the plain-text + HTML job report. Photos/signature are inline data URIs.
-    private static (string text, string html) BuildReport(HelpRequest r, string company)
+    private static (string text, string html) BuildReport(
+        HelpRequest r, string company, (string? Before, string? After, string? Signature) media)
     {
         var text = new StringBuilder();
         text.AppendLine($"{company} — Service Report");
@@ -159,12 +184,12 @@ public class JobCompletionService
             html.Append($"<h3>Work performed</h3><p>{enc(r.CompletionNotes)}</p>");
         if (r.QuoteTotal is { } t2)
             html.Append($"<p style=\"font-size:18px\"><b>Total: ${enc(t2.ToString("0.00"))}</b></p>");
-        if (!string.IsNullOrWhiteSpace(r.BeforePhotoBase64) || !string.IsNullOrWhiteSpace(r.AfterPhotoBase64))
+        if (!string.IsNullOrWhiteSpace(media.Before) || !string.IsNullOrWhiteSpace(media.After))
             html.Append("<h3>Photos</h3>");
-        html.Append(Img(r.BeforePhotoBase64, "Before"));
-        html.Append(Img(r.AfterPhotoBase64, "After"));
-        if (!string.IsNullOrWhiteSpace(r.SignatureBase64))
-            html.Append($"<h3>Signature</h3><img src=\"data:image/svg+xml;base64,{SanB64(r.SignatureBase64)}\" style=\"max-width:100%;border:1px solid #eee\"/>");
+        html.Append(Img(media.Before, "Before"));
+        html.Append(Img(media.After, "After"));
+        if (!string.IsNullOrWhiteSpace(media.Signature))
+            html.Append($"<h3>Signature</h3><img src=\"data:image/svg+xml;base64,{SanB64(media.Signature)}\" style=\"max-width:100%;border:1px solid #eee\"/>");
         html.Append($"<p style=\"color:#999;font-size:12px\">Thank you for choosing {enc(company)}.</p></div>");
 
         return (text.ToString(), html.ToString());

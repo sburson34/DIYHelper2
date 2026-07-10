@@ -113,6 +113,33 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  console:
+    name: Owner console (vitest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: backend/console-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/console-tests/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        # Covers the admin ES modules (palette parity vs the app's
+        # brandPalette fixtures, api/ui helpers, quote serialization,
+        # module-graph link check).
+        run: npm test
+
 # Dependency vulnerability scan moved to nightly.yml. Deps rarely change
 # between commits, so per-PR scans mostly burned minutes confirming the
 # same baseline. Nightly cron + workflow_dispatch is the new cadence.

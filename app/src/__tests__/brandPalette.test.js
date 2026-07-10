@@ -129,3 +129,38 @@ describe('generateBrandColors', () => {
     expect(relativeLuminance(g.primarySoft)).toBeGreaterThan(relativeLuminance(g.primary));
   });
 });
+
+/* The owner console carries a hand-ported copy of this module
+   (backend/DIYHelper2.Api/wwwroot/admin/js/palette.js). Both sides assert the
+   SAME fixture file, so drift in either port fails its CI. Regenerate the
+   fixtures by executing this TS module if its math intentionally changes. */
+describe('fixture parity', () => {
+  const fixtures = require('./fixtures/brandPalette.fixtures.json');
+
+  it('normalizeHex reproduces every fixture', () => {
+    for (const { input, expected } of fixtures.normalizeHex) {
+      expect(normalizeHex(input)).toBe(expected);
+    }
+  });
+
+  it('contrastRatio reproduces every fixture', () => {
+    for (const { input, expected } of fixtures.contrastRatio) {
+      expect(contrastRatio(input[0], input[1])).toBeCloseTo(expected, 6);
+    }
+  });
+
+  it('onColor reproduces every fixture', () => {
+    for (const { input, expected } of fixtures.onColor) {
+      const got = input.darkInk
+        ? onColor(input.background, input.darkInk, input.lightInk)
+        : onColor(input.background);
+      expect(got).toBe(expected);
+    }
+  });
+
+  it('generateBrandColors reproduces every fixture', () => {
+    for (const { input, expected } of fixtures.generateBrandColors) {
+      expect(generateBrandColors(input.seed, input.mode, input.base)).toEqual(expected);
+    }
+  });
+});

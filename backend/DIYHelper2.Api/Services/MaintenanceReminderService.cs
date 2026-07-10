@@ -37,6 +37,11 @@ public class MaintenanceReminderService : BackgroundService
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
                 var mailer = scope.ServiceProvider.GetRequiredService<IEmailService>();
                 var messaging = scope.ServiceProvider.GetRequiredService<MessagingService>();
+                // Warranty sweep first, so a reminder that's already due (a
+                // warranty expiring within the 30-day lead) fires on the very
+                // same tick that created it.
+                var created = await CreateWarrantyRemindersAsync(db, _logger, stoppingToken);
+                if (created > 0) _logger.LogInformation("Created {Count} warranty-check reminders.", created);
                 var sent = await ProcessDueAsync(db, mailer, messaging, _logger, stoppingToken);
                 if (sent > 0) _logger.LogInformation("Sent {Count} maintenance reminders.", sent);
             }
@@ -46,6 +51,49 @@ public class MaintenanceReminderService : BackgroundService
             }
             try { await Task.Delay(Interval, stoppingToken); } catch (OperationCanceledException) { break; }
         }
+    }
+
+    /// <summary>
+    /// Warranty sweep (A8): for every active asset whose warranty expires
+    /// within 60 days and that hasn't been swept yet, create a "warranty
+    /// check" reminder due 30 days before expiry (or now, if we're already
+    /// inside that window) and stamp <c>WarrantyReminderCreatedAt</c> so the
+    /// sweep is idempotent across ticks. Assets with no customer email are
+    /// skipped (left unstamped, so attaching an email later still gets the
+    /// nudge). Returns how many reminders were created.
+    /// </summary>
+    public static async Task<int> CreateWarrantyRemindersAsync(
+        AppDbContext db, ILogger logger, CancellationToken ct = default)
+    {
+        var now = DateTime.UtcNow;
+        var horizon = now.AddDays(60);
+        var expiring = await db.Assets
+            .Where(a => a.IsActive
+                && a.WarrantyExpiresAt != null
+                && a.WarrantyReminderCreatedAt == null
+                && a.WarrantyExpiresAt <= horizon
+                && a.CustomerEmail != null)
+            .OrderBy(a => a.WarrantyExpiresAt)
+            .Take(200)
+            .ToListAsync(ct);
+        if (expiring.Count == 0) return 0;
+
+        foreach (var a in expiring)
+        {
+            var dueAt = a.WarrantyExpiresAt!.Value.AddDays(-30);
+            if (dueAt < now) dueAt = now;
+            db.MaintenanceReminders.Add(new MaintenanceReminder
+            {
+                Brand = a.Brand,
+                CustomerEmail = a.CustomerEmail,
+                ServiceType = $"warranty check — {a.Label}",
+                DueAt = dueAt,
+            });
+            a.WarrantyReminderCreatedAt = now;
+        }
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Warranty sweep created {Count} reminders.", expiring.Count);
+        return expiring.Count;
     }
 
     /// <summary>Send every reminder that's due and unsent; returns how many fired.

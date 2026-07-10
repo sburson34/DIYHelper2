@@ -9,26 +9,28 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { diagnoseProblem, AiConsentRequiredError } from '../api/backendClient';
+import { diagnoseProblem, AiConsentRequiredError, DiagnoseResult } from '../api/backendClient';
 import { useTranslation } from '../i18n/I18nContext';
 import { useBrandConfig } from '../config/brandConfig';
-import { pickPhoto } from '../utils/pickPhoto';
+import { pickPhoto, PickedPhoto } from '../utils/pickPhoto';
 import theme from '../theme';
+import type { DrawerScreenProps } from '@react-navigation/drawer';
+import type { RootDrawerParamList } from '../navigation/types';
 
-const urgencyColor = (u) =>
+const urgencyColor = (u?: string) =>
   u === 'emergency' ? '#DC2626' : u === 'high' ? '#F59E0B' : u === 'medium' ? '#0EA5E9' : theme.colors.success;
-const likelihoodColor = (l) =>
+const likelihoodColor = (l?: string) =>
   l === 'high' ? theme.colors.danger : l === 'medium' ? theme.colors.primary : theme.colors.textSecondary;
 
-export default function TriageScreen({ navigation }) {
+export default function TriageScreen({ navigation }: DrawerScreenProps<RootDrawerParamList, 'Triage'>) {
   const { t, language } = useTranslation();
   const config = useBrandConfig();
   const [description, setDescription] = useState('');
-  const [photo, setPhoto] = useState(null);
+  const [photo, setPhoto] = useState<PickedPhoto | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState(null);
+  const [result, setResult] = useState<DiagnoseResult | null>(null);
 
-  const addPhoto = async (source) => {
+  const addPhoto = async (source: 'camera' | 'library') => {
     const p = await pickPhoto(source);
     if (p) setPhoto(p);
   };
@@ -44,7 +46,7 @@ export default function TriageScreen({ navigation }) {
       const media = photo ? [{ base64: photo.base64, mimeType: photo.mimeType }] : [];
       const r = await diagnoseProblem({ description, media, language });
       setResult(r);
-    } catch (e) {
+    } catch (e: any) {
       if (e instanceof AiConsentRequiredError) {
         Alert.alert(t('ai_disabled_title'), e.message);
       } else {

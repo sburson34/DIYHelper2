@@ -86,6 +86,98 @@ public class QuoteTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task TieredQuote_SendsOptions_ApproveMaterializesChoice()
+    {
+        await _factory.SeedBrandAsync("q-tier", "Q Tier", "leads@qt.example");
+        var device = Device("q-tier", "qt-dev");
+        var jobId = await BookAsync(device, "q-tier", "qt-dev");
+
+        // Owner sends Good/Better/Best; totals computed server-side.
+        var admin = _factory.CreateAdminClient();
+        var send = await admin.PutAsJsonAsync($"/api/help-requests/{jobId}/quote", new
+        {
+            options = new object[]
+            {
+                new { name = "Good",   lines = new[] { new { description = "Patch",   amount = 100.00, quantity = 1 } } },
+                new { name = "Better", lines = new[] { new { description = "Replace", amount = 75.00,  quantity = 2 } } },
+                new { name = "Best",   lines = new[] { new { description = "Upgrade", amount = 300.00, quantity = 1 } } },
+            },
+        });
+        Assert.Equal(HttpStatusCode.OK, send.StatusCode);
+
+        // Customer sees three options with server-computed totals; no single total yet.
+        var detail = await device.GetFromJsonAsync<JsonElement>($"/api/my/requests/{jobId}");
+        Assert.Equal("sent", detail.GetProperty("quoteStatus").GetString());
+        var options = detail.GetProperty("quoteOptions").EnumerateArray().ToList();
+        Assert.Equal(3, options.Count);
+        Assert.Equal(150.00m, options[1].GetProperty("total").GetDecimal());
+
+        // Approving without picking an option is a 400.
+        var noPick = await device.PutAsJsonAsync($"/api/my/requests/{jobId}/quote", new { decision = "approved" });
+        Assert.Equal(HttpStatusCode.BadRequest, noPick.StatusCode);
+
+        // Approving a name that isn't on the quote is a 400.
+        var badPick = await device.PutAsJsonAsync($"/api/my/requests/{jobId}/quote",
+            new { decision = "approved", optionName = "Platinum" });
+        Assert.Equal(HttpStatusCode.BadRequest, badPick.StatusCode);
+
+        // Approving "Better" materializes its total + lines into the legacy columns.
+        var approve = await device.PutAsJsonAsync($"/api/my/requests/{jobId}/quote",
+            new { decision = "approved", optionName = "Better" });
+        Assert.Equal(HttpStatusCode.OK, approve.StatusCode);
+
+        var after = await device.GetFromJsonAsync<JsonElement>($"/api/my/requests/{jobId}");
+        Assert.Equal("approved", after.GetProperty("quoteStatus").GetString());
+        Assert.Equal(150.00m, after.GetProperty("quoteTotal").GetDecimal());
+        Assert.Equal("Better", after.GetProperty("quoteSelectedOption").GetString());
+    }
+
+    [Fact]
+    public async Task TieredQuote_ValidationRejectsBadShapes()
+    {
+        await _factory.SeedBrandAsync("q-val", "Q Val", "leads@qv.example");
+        var device = Device("q-val", "qv-dev");
+        var jobId = await BookAsync(device, "q-val", "qv-dev");
+        var admin = _factory.CreateAdminClient();
+
+        var line = new[] { new { description = "X", amount = 10.00, quantity = 1 } };
+
+        // Both lines and options → 400.
+        var both = await admin.PutAsJsonAsync($"/api/help-requests/{jobId}/quote", new
+        {
+            lines = line,
+            options = new object[] { new { name = "Good", lines = line } },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, both.StatusCode);
+
+        // Duplicate option names → 400.
+        var dupes = await admin.PutAsJsonAsync($"/api/help-requests/{jobId}/quote", new
+        {
+            options = new object[]
+            {
+                new { name = "Good", lines = line },
+                new { name = "good", lines = line },
+            },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, dupes.StatusCode);
+
+        // Four options → 400.
+        var four = await admin.PutAsJsonAsync($"/api/help-requests/{jobId}/quote", new
+        {
+            options = new object[]
+            {
+                new { name = "A", lines = line }, new { name = "B", lines = line },
+                new { name = "C", lines = line }, new { name = "D", lines = line },
+            },
+        });
+        Assert.Equal(HttpStatusCode.BadRequest, four.StatusCode);
+
+        // The classic single-lines path still works after all those rejections.
+        var single = await admin.PutAsJsonAsync($"/api/help-requests/{jobId}/quote", new { lines = line });
+        Assert.Equal(HttpStatusCode.OK, single.StatusCode);
+    }
+
+    [Fact]
     public async Task PriceBook_IsBrandScoped()
     {
         await _factory.SeedBrandAsync("pb-a", "PB A", "a@x.example");

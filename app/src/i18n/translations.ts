@@ -352,6 +352,7 @@ export const translations = {
     nav_book: 'Book a Visit',
     nav_my_jobs: 'My Jobs',
     common_ok: 'OK',
+    common_edit: 'Edit',
     ai_disabled_title: 'AI is off',
 
     // Triage screen
@@ -402,6 +403,50 @@ export const translations = {
     booking_sent_msg: 'We’ve received your request and will be in touch to confirm.',
     booking_view_jobs: 'View My Jobs',
     booking_failed_title: 'Couldn’t send request',
+
+    // Job address capture (F1)
+    booking_address_label: 'Service address',
+    booking_address_placeholder: 'Street address for the visit',
+    tech_address: 'Address',
+    tech_navigate: 'Navigate',
+
+    // Online self-scheduling (F2)
+    booking_pick_day: 'Pick a day',
+    booking_pick_slot: 'Pick a time',
+    booking_slots_loading: 'Checking openings…',
+    booking_no_slots: 'No openings that day — pick another day, or send it as a request and we’ll call to schedule.',
+    booking_request_instead: 'Send as a request instead',
+    booking_slot_taken_title: 'That time was just taken',
+    booking_slot_taken_msg: 'Someone grabbed that slot a moment ago. Please pick another time.',
+
+    // Tiered quotes (F3)
+    myjobs_quote_options_title: 'Choose an option',
+    myjobs_quote_choose: 'Choose this option',
+    myjobs_quote_decline_all: 'Decline quote',
+    myjobs_quote_approved_option: 'You approved “{option}” — {amount}',
+
+    // Equipment / service history + properties (F4)
+    nav_equipment: 'My Equipment',
+    equipment_empty: 'No equipment yet. Add your water heater, furnace, or AC so we can track its service history.',
+    equipment_add: 'Add equipment',
+    equipment_history: 'Service history',
+    equipment_history_empty: 'No service on this yet.',
+    asset_label: 'What is it?',
+    asset_label_placeholder: 'e.g. Water heater',
+    asset_make: 'Brand',
+    asset_model: 'Model',
+    asset_serial: 'Serial number',
+    asset_installed_year: 'Year installed',
+    asset_warranty_until: 'Warranty until',
+    asset_save: 'Save equipment',
+    asset_delete: 'Remove',
+    asset_delete_confirm: 'Remove this equipment? Its service history stays on your past jobs.',
+    booking_which_equipment: 'Which equipment is this about? (optional)',
+    booking_which_property: 'Which property?',
+    property_add: 'Add property',
+    property_label: 'Name (e.g. Home, Rental on 5th)',
+    property_address: 'Address',
+    property_save: 'Save property',
 
     // My Jobs screen
     myjobs_status_new: 'Received',
@@ -849,6 +894,7 @@ export const translations = {
     nav_book: 'Reservar Visita',
     nav_my_jobs: 'Mis Trabajos',
     common_ok: 'OK',
+    common_edit: 'Editar',
     ai_disabled_title: 'IA desactivada',
 
     // Pantalla de triaje
@@ -899,6 +945,50 @@ export const translations = {
     booking_sent_msg: 'Recibimos tu solicitud y te contactaremos para confirmar.',
     booking_view_jobs: 'Ver Mis Trabajos',
     booking_failed_title: 'No se pudo enviar la solicitud',
+
+    // Job address capture (F1)
+    booking_address_label: 'Dirección del servicio',
+    booking_address_placeholder: 'Dirección donde haremos la visita',
+    tech_address: 'Dirección',
+    tech_navigate: 'Navegar',
+
+    // Online self-scheduling (F2)
+    booking_pick_day: 'Elige un día',
+    booking_pick_slot: 'Elige una hora',
+    booking_slots_loading: 'Buscando horarios…',
+    booking_no_slots: 'No hay horarios ese día — elige otro día, o envíalo como solicitud y te llamaremos para agendar.',
+    booking_request_instead: 'Enviar como solicitud',
+    booking_slot_taken_title: 'Ese horario ya fue tomado',
+    booking_slot_taken_msg: 'Alguien tomó ese horario hace un momento. Elige otra hora.',
+
+    // Tiered quotes (F3)
+    myjobs_quote_options_title: 'Elige una opción',
+    myjobs_quote_choose: 'Elegir esta opción',
+    myjobs_quote_decline_all: 'Rechazar cotización',
+    myjobs_quote_approved_option: 'Aprobaste “{option}” — {amount}',
+
+    // Equipment / service history + properties (F4)
+    nav_equipment: 'Mi Equipo',
+    equipment_empty: 'Aún no hay equipos. Agrega tu calentador, caldera o aire acondicionado para llevar su historial de servicio.',
+    equipment_add: 'Agregar equipo',
+    equipment_history: 'Historial de servicio',
+    equipment_history_empty: 'Aún no hay servicios en este equipo.',
+    asset_label: '¿Qué es?',
+    asset_label_placeholder: 'p. ej. Calentador de agua',
+    asset_make: 'Marca',
+    asset_model: 'Modelo',
+    asset_serial: 'Número de serie',
+    asset_installed_year: 'Año de instalación',
+    asset_warranty_until: 'Garantía hasta',
+    asset_save: 'Guardar equipo',
+    asset_delete: 'Eliminar',
+    asset_delete_confirm: '¿Eliminar este equipo? Su historial de servicio permanece en tus trabajos anteriores.',
+    booking_which_equipment: '¿Sobre qué equipo es esto? (opcional)',
+    booking_which_property: '¿Qué propiedad?',
+    property_add: 'Agregar propiedad',
+    property_label: 'Nombre (p. ej. Casa, Renta en la 5ª)',
+    property_address: 'Dirección',
+    property_save: 'Guardar propiedad',
 
     // Pantalla Mis Trabajos
     myjobs_status_new: 'Recibido',

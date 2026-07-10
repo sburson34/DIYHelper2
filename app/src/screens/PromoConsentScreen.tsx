@@ -13,7 +13,7 @@ import { registerPushToken } from '../api/backendClient';
 // is marketing consent — the app is never gated on it, so "Not now" simply
 // records a decline and continues. Modeled on AiConsentScreen.
 
-export default function PromoConsentScreen({ onDone }) {
+export default function PromoConsentScreen({ onDone }: { onDone?: () => void }) {
   const [busy, setBusy] = React.useState(false);
 
   const enable = async () => {

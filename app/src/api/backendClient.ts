@@ -21,6 +21,9 @@ const APP_KEY: string | undefined = process.env.EXPO_PUBLIC_APP_KEY;
 // logout so the HTTP layer stays free of storage + auth-state concerns.
 let techToken: string | null = null;
 export const setTechToken = (token: string | null): void => { techToken = token; };
+// Read access for components that fetch protected media outside apiFetch
+// (RN <Image> on /api/tech/*/media/* needs the bearer header on its source).
+export const getTechToken = (): string | null => techToken;
 
 // Thrown when an AI-using code path is invoked but the user declined the
 // AI consent disclosure. Callers should catch and surface a message rather
@@ -157,6 +160,23 @@ export interface BookingInput {
   preferredWindow?: string | null; // "morning" | "afternoon" | "evening" | "anytime"
   projectData?: unknown;           // optional AI guide/triage payload
   imageBase64?: string;
+  address?: string | null;         // service address (F1)
+  slotStart?: string | null;       // claimed availability slot, ISO UTC (F2)
+  assetId?: number | null;         // equipment this job is about (F4)
+  propertyId?: number | null;      // which property (F4)
+}
+
+export interface QuoteLine {
+  description: string;
+  amount: number;
+  quantity: number;
+}
+
+// One tier of a Good/Better/Best quote. Totals are computed server-side.
+export interface QuoteOption {
+  name: string;
+  total: number;
+  lines: QuoteLine[];
 }
 
 export interface MyRequest {
@@ -172,11 +192,71 @@ export interface MyRequest {
   quoteTotal?: number | null;
   quoteLinesJson?: string | null;
   quoteSentAt?: string | null;
+  quoteOptions?: QuoteOption[] | null;
+  quoteSelectedOption?: string | null;
+  address?: string | null;
+  imageUrl?: string | null;        // S3-era media proxy path (dual-read window)
+  assetId?: number | null;
   createdAt?: string;
   updatedAt?: string;
   userDescription?: string;
   projectData?: string;
   [extra: string]: unknown;
+}
+
+// ── Self-scheduling (F2) ───────────────────────────────────────────────
+export interface AvailabilitySlot {
+  start: string; // ISO UTC
+  end: string;
+  remaining: number;
+}
+
+export interface AvailabilityDay {
+  date: string;
+  slotMinutes: number;
+  slots: AvailabilitySlot[];
+}
+
+// ── Equipment / properties (F4) ────────────────────────────────────────
+export interface CustomerAsset {
+  id: number;
+  propertyId?: number | null;
+  label: string;
+  make?: string | null;
+  model?: string | null;
+  serial?: string | null;
+  installedAt?: string | null;
+  warrantyExpiresAt?: string | null;
+  notes?: string | null;
+}
+
+export interface CustomerAssetInput {
+  label: string;
+  propertyId?: number | null;
+  make?: string | null;
+  model?: string | null;
+  serial?: string | null;
+  installedAt?: string | null;
+  warrantyExpiresAt?: string | null;
+  notes?: string | null;
+}
+
+export interface CustomerProperty {
+  id: number;
+  label: string;
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+}
+
+export interface AssetHistoryEntry {
+  id: number;
+  projectTitle?: string;
+  serviceType?: string | null;
+  status: string;
+  completedAt?: string | null;
+  quoteTotal?: number | null;
 }
 
 export interface MembershipCheckoutInput {
@@ -224,6 +304,18 @@ export interface TechJobDetail extends TechJob {
   signatureBase64?: string | null;
   completionNotes?: string | null;
   completedAt?: string | null;
+  // Job address (F1) + maps deep link computed server-side.
+  address?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
+  mapsUrl?: string | null;
+  // S3-era media proxy paths; base64 fields above only carry legacy rows
+  // during the dual-read window.
+  imageUrl?: string | null;
+  beforePhotoUrl?: string | null;
+  afterPhotoUrl?: string | null;
+  signatureUrl?: string | null;
 }
 
 export interface TechJobPatch {
@@ -735,7 +827,17 @@ const submitBooking = async (input: BookingInput): Promise<{ id: number }> => {
     serviceType: input.serviceType,
     preferredDate: input.preferredDate,
     preferredWindow: input.preferredWindow,
+    address: input.address,
+    slotStart: input.slotStart,
+    assetId: input.assetId,
+    propertyId: input.propertyId,
   });
+};
+
+// Open slots for a brand-local calendar day (self-scheduling). Empty slots
+// array when the brand hasn't configured business hours.
+const getAvailability = async (dateIso: string): Promise<AvailabilityDay> => {
+  return jsonGet<AvailabilityDay>(`${BASE_URL}/api/availability?date=${encodeURIComponent(dateIso)}`);
 };
 
 // This device's own jobs, newest first (appointment status + ETA tracking).
@@ -748,12 +850,55 @@ const getMyRequest = async (id: number | string): Promise<MyRequest> => {
 };
 
 // Approve or decline a quote the company sent (device-scoped on the backend).
+// Tiered quotes: approving one of several options requires its optionName;
+// the backend materializes the chosen option into quoteTotal/quoteLines.
 const respondToQuote = async (
   id: number | string,
   decision: 'approved' | 'declined',
+  optionName?: string,
 ): Promise<{ id: number; quoteStatus: string }> => {
-  addBreadcrumb('quote: respond', 'user.action', { id, decision });
-  return jsonPut(`${BASE_URL}/api/my/requests/${id}/quote`, { decision });
+  addBreadcrumb('quote: respond', 'user.action', { id, decision, optionName });
+  return jsonPut(`${BASE_URL}/api/my/requests/${id}/quote`, { decision, optionName });
+};
+
+// ── Equipment / service history + properties (device-scoped) ───────────
+const listMyAssets = async (): Promise<CustomerAsset[]> => {
+  return jsonGet<CustomerAsset[]>(`${BASE_URL}/api/my/assets`);
+};
+
+const createMyAsset = async (input: CustomerAssetInput): Promise<CustomerAsset> => {
+  addBreadcrumb('asset: create', 'user.action', {});
+  return jsonPost<CustomerAsset>(`${BASE_URL}/api/my/assets`, input);
+};
+
+const updateMyAsset = async (id: number | string, input: CustomerAssetInput): Promise<CustomerAsset> => {
+  addBreadcrumb('asset: update', 'user.action', { id });
+  return jsonPut<CustomerAsset>(`${BASE_URL}/api/my/assets/${id}`, input);
+};
+
+const deleteMyAsset = async (id: number | string): Promise<void> => {
+  addBreadcrumb('asset: delete', 'user.action', { id });
+  await apiFetch(`${BASE_URL}/api/my/assets/${id}`, { method: 'DELETE' });
+};
+
+const getAssetHistory = async (id: number | string): Promise<AssetHistoryEntry[]> => {
+  return jsonGet<AssetHistoryEntry[]>(`${BASE_URL}/api/my/assets/${id}/history`);
+};
+
+const listMyProperties = async (): Promise<CustomerProperty[]> => {
+  return jsonGet<CustomerProperty[]>(`${BASE_URL}/api/my/properties`);
+};
+
+const createMyProperty = async (
+  input: { label: string; address?: string | null; city?: string | null; state?: string | null; zip?: string | null },
+): Promise<CustomerProperty> => {
+  addBreadcrumb('property: create', 'user.action', {});
+  return jsonPost<CustomerProperty>(`${BASE_URL}/api/my/properties`, input);
+};
+
+const deleteMyProperty = async (id: number | string): Promise<void> => {
+  addBreadcrumb('property: delete', 'user.action', { id });
+  await apiFetch(`${BASE_URL}/api/my/properties/${id}`, { method: 'DELETE' });
 };
 
 // Start a membership / maintenance-plan checkout. Fail-soft: returns
@@ -830,4 +975,13 @@ export {
   confirmServerSideDeletion,
   registerPushToken,
   unregisterPushToken,
+  getAvailability,
+  listMyAssets,
+  createMyAsset,
+  updateMyAsset,
+  deleteMyAsset,
+  getAssetHistory,
+  listMyProperties,
+  createMyProperty,
+  deleteMyProperty,
 };

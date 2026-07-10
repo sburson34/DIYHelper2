@@ -22,6 +22,72 @@ namespace DIYHelper2.Api.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("DIYHelper2.Api.Models.Asset", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Brand")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("CustomerEmail")
+                        .HasColumnType("text");
+
+                    b.Property<string>("DeviceId")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("InstalledAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("Make")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Model")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Serial")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("WarrantyExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("WarrantyReminderCreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Brand", "CustomerEmail")
+                        .HasDatabaseName("IX_Assets_Brand_CustomerEmail");
+
+                    b.HasIndex("Brand", "DeviceId")
+                        .HasDatabaseName("IX_Assets_Brand_DeviceId");
+
+                    b.ToTable("Assets");
+                });
+
             modelBuilder.Entity("DIYHelper2.Api.Models.BetaFeedback", b =>
                 {
                     b.Property<int>("Id")
@@ -84,6 +150,9 @@ namespace DIYHelper2.Api.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("BusinessHoursJson")
+                        .HasColumnType("text");
+
                     b.Property<string>("CompanyName")
                         .IsRequired()
                         .HasColumnType("text");
@@ -122,11 +191,21 @@ namespace DIYHelper2.Api.Migrations
                     b.Property<string>("ServiceTypesJson")
                         .HasColumnType("text");
 
+                    b.Property<int?>("SlotCapacity")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("SlotMinutes")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Slug")
                         .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<string>("SmsFromNumber")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TimeZoneId")
+                        .IsRequired()
                         .HasColumnType("text");
 
                     b.Property<DateTime>("UpdatedAt")
@@ -284,6 +363,57 @@ namespace DIYHelper2.Api.Migrations
                     b.ToTable("Customers");
                 });
 
+            modelBuilder.Entity("DIYHelper2.Api.Models.CustomerProperty", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Address")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Brand")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("City")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("CustomerId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Label")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<double?>("Lat")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("Lng")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("State")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Zip")
+                        .HasColumnType("text");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Brand", "CustomerId")
+                        .HasDatabaseName("IX_CustomerProperties_Brand_CustomerId");
+
+                    b.ToTable("CustomerProperties");
+                });
+
             modelBuilder.Entity("DIYHelper2.Api.Models.HelpRequest", b =>
                 {
                     b.Property<int>("Id")
@@ -292,12 +422,21 @@ namespace DIYHelper2.Api.Migrations
 
                     NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
 
+                    b.Property<string>("Address")
+                        .HasColumnType("text");
+
                     b.Property<string>("AfterPhotoBase64")
+                        .HasColumnType("text");
+
+                    b.Property<string>("AfterPhotoKey")
                         .HasColumnType("text");
 
                     b.Property<decimal?>("AmountPaid")
                         .HasPrecision(12, 2)
                         .HasColumnType("numeric(12,2)");
+
+                    b.Property<int?>("AssetId")
+                        .HasColumnType("integer");
 
                     b.Property<int?>("AssignedTechId")
                         .HasColumnType("integer");
@@ -305,11 +444,17 @@ namespace DIYHelper2.Api.Migrations
                     b.Property<string>("BeforePhotoBase64")
                         .HasColumnType("text");
 
+                    b.Property<string>("BeforePhotoKey")
+                        .HasColumnType("text");
+
                     b.Property<string>("Brand")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
                         .HasColumnType("text")
                         .HasDefaultValue("diyhelper");
+
+                    b.Property<string>("City")
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone");
@@ -344,12 +489,21 @@ namespace DIYHelper2.Api.Migrations
                     b.Property<string>("ImageBase64")
                         .HasColumnType("text");
 
+                    b.Property<string>("ImageKey")
+                        .HasColumnType("text");
+
                     b.Property<string>("InvoiceRemoteId")
                         .HasColumnType("text");
 
                     b.Property<decimal?>("LaborCost")
                         .HasPrecision(12, 2)
                         .HasColumnType("numeric(12,2)");
+
+                    b.Property<double?>("Lat")
+                        .HasColumnType("double precision");
+
+                    b.Property<double?>("Lng")
+                        .HasColumnType("double precision");
 
                     b.Property<int?>("MaintenanceIntervalMonths")
                         .HasColumnType("integer");
@@ -378,11 +532,20 @@ namespace DIYHelper2.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<int?>("PropertyId")
+                        .HasColumnType("integer");
+
                     b.Property<string>("QuoteLinesJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("QuoteOptionsJson")
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("QuoteRespondedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("QuoteSelectedOption")
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("QuoteSentAt")
                         .HasColumnType("timestamp with time zone");
@@ -406,8 +569,14 @@ namespace DIYHelper2.Api.Migrations
                     b.Property<string>("SignatureBase64")
                         .HasColumnType("text");
 
+                    b.Property<string>("SignatureKey")
+                        .HasColumnType("text");
+
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("State")
+                        .HasColumnType("text");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -423,10 +592,16 @@ namespace DIYHelper2.Api.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("Zip")
+                        .HasColumnType("text");
+
                     b.HasKey("Id");
 
                     b.HasIndex("Brand")
                         .HasDatabaseName("IX_HelpRequests_Brand");
+
+                    b.HasIndex("Brand", "AssetId")
+                        .HasDatabaseName("IX_HelpRequests_Brand_AssetId");
 
                     b.HasIndex("Brand", "AssignedTechId")
                         .HasDatabaseName("IX_HelpRequests_Brand_AssignedTechId");
@@ -680,6 +855,42 @@ namespace DIYHelper2.Api.Migrations
                         .HasDatabaseName("IX_PushTokens_Brand_Active_OptIn");
 
                     b.ToTable("PushTokens");
+                });
+
+            modelBuilder.Entity("DIYHelper2.Api.Models.SlotClaim", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Brand")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<int>("HelpRequestId")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Seq")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("SlotStartUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HelpRequestId")
+                        .HasDatabaseName("IX_SlotClaims_HelpRequestId");
+
+                    b.HasIndex("Brand", "SlotStartUtc", "Seq")
+                        .IsUnique()
+                        .HasDatabaseName("IX_SlotClaims_Brand_SlotStartUtc_Seq");
+
+                    b.ToTable("SlotClaims");
                 });
 
             modelBuilder.Entity("DIYHelper2.Api.Models.SmsMessage", b =>

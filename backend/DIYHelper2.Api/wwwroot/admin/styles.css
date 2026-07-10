@@ -618,3 +618,107 @@ table.data-table { width: 100%; border-collapse: collapse; font-size: 14px; min-
 .inv-nums { display: flex; gap: 12px; }
 .inv-nums label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
 .inv-nums input { width: 80px; background: var(--inset); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; color: var(--text); }
+
+/* ── Login overlay ───────────────────────────────────────────────────── */
+.login-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+}
+.login-card {
+  width: 100%; max-width: 380px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 32px 28px;
+  display: flex; flex-direction: column; gap: 16px;
+}
+.login-brand { display: flex; justify-content: center; }
+.login-card h1 { font-size: 22px; font-weight: 800; color: var(--white); text-align: center; }
+.login-sub { color: var(--muted); font-size: 14px; text-align: center; margin-top: -8px; }
+.login-error { color: #F87171; font-size: 13px; font-weight: 600; }
+.login-btn { width: 100%; }
+
+/* ── Error state retry ───────────────────────────────────────────────── */
+.retry-btn { margin-top: 12px; }
+
+/* ── Quote option tabs (Good / Better / Best) ────────────────────────── */
+.quote-tabs { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+.quote-tab {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--inset); border: 2px solid var(--border); border-radius: 999px;
+  padding: 7px 14px; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer;
+  transition: all 0.15s;
+}
+.quote-tab:hover { border-color: var(--primary); color: var(--primary); }
+.quote-tab.active { border-color: var(--primary); color: var(--text); cursor: default; }
+.quote-tab-name {
+  background: transparent; border: none; color: var(--white);
+  font-weight: 700; font-size: 13px; width: 90px; padding: 0; border-radius: 0;
+}
+.quote-tab-name:focus { outline: none; border: none; }
+.quote-tab-total { color: var(--primary); font-weight: 800; font-size: 12px; }
+.quote-tab-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 12px; padding: 0 2px; }
+.quote-tab-x:hover { color: #F87171; }
+.quote-add-option { padding: 7px 14px; font-size: 13px; border-radius: 999px; }
+.quote-options-view { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.quote-option-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  background: var(--inset); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; font-size: 13px;
+}
+.quote-option-row .quote-option-total { color: var(--primary); font-weight: 800; }
+.quote-approved-tag { color: var(--success); font-weight: 800; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* ── Lead address card ───────────────────────────────────────────────── */
+.addr-maps-link { display: inline-block; margin-top: 8px; font-size: 13px; font-weight: 700; }
+
+/* ── Customer equipment (assets, in the lead detail) ─────────────────── */
+.asset-add { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.asset-add input { flex: 1; min-width: 120px; }
+.asset-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; flex: 1; min-width: 0; }
+.asset-input {
+  background: var(--inset); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; color: var(--text); font-size: 13px; min-width: 0;
+}
+
+/* ── Route view (schedule) ───────────────────────────────────────────── */
+.route-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 14px 16px; margin-bottom: 16px;
+}
+.route-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.route-toolbar label { color: var(--muted); font-size: 13px; font-weight: 600; }
+.route-empty { margin-top: 12px; font-size: 13px; }
+.route-stops { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+.route-stop {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--inset); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px 12px;
+}
+.route-num {
+  background: var(--primary); color: var(--bg);
+  width: 24px; height: 24px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px; flex-shrink: 0;
+}
+.route-time { font-weight: 800; font-size: 13px; color: var(--primary); min-width: 72px; }
+.route-stop-main { flex: 1; min-width: 0; }
+.route-cust { font-weight: 700; font-size: 14px; }
+.route-addr { color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
+.route-miles { color: var(--muted); font-size: 12px; font-weight: 700; white-space: nowrap; }
+.route-summary { margin-top: 12px; font-size: 14px; font-weight: 700; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.route-unroutable { margin-top: 10px; font-size: 13px; color: #FBBF24; }
+
+/* ── Availability settings (schedule) ────────────────────────────────── */
+.availability-card { margin-top: 24px; }
+.availability-card .section-head h3 { margin-top: 0; }
+.av-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.av-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.av-day { display: flex; align-items: center; gap: 8px; width: 130px; font-size: 14px; color: var(--text); font-weight: 600; cursor: pointer; }
+.av-day input { accent-color: var(--primary); width: 16px; height: 16px; }
+.av-dash { color: var(--muted); }
+.av-row input[type="time"] { padding: 8px 10px; }
+.av-row input[type="time"]:disabled { opacity: 0.4; }
+.av-settings { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+.av-settings .form-group { min-width: 170px; }

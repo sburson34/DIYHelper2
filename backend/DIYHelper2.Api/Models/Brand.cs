@@ -77,6 +77,25 @@ public class Brand
     /// from its own line. Null → use the app default.</summary>
     public string? SmsFromNumber { get; set; }
 
+    // ── Online self-scheduling (GET /api/availability + booking slotStart) ──
+
+    /// <summary>Weekly bookable hours as JSON, keys <c>mon</c>..<c>sun</c>:
+    /// <c>{"mon":[{"start":"08:00","end":"17:00"}], ...}</c> in the brand's
+    /// local time (<see cref="TimeZoneId"/>). Null/empty → self-scheduling is
+    /// off and /api/availability returns no slots.</summary>
+    public string? BusinessHoursJson { get; set; }
+
+    /// <summary>Length of one bookable slot, minutes (owner-set, 15–480).</summary>
+    public int SlotMinutes { get; set; } = 120;
+
+    /// <summary>How many jobs can share one slot. Null ⇒ the brand's active
+    /// technician count at query time.</summary>
+    public int? SlotCapacity { get; set; }
+
+    /// <summary>IANA time zone the business hours are expressed in (also the
+    /// route view's day boundary).</summary>
+    public string TimeZoneId { get; set; } = "America/Chicago";
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

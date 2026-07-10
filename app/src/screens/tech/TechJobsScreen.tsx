@@ -6,29 +6,21 @@ import React, { useCallback, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { techListJobs } from '../../api/backendClient';
+import { techListJobs, TechJob } from '../../api/backendClient';
 import { flushQueue, getJobsCache, saveJobsCache, pendingCount } from '../../tech/techQueue';
 import { useTechAuth } from '../../tech/TechAuthContext';
 import { useTranslation } from '../../i18n/I18nContext';
 import theme from '../../theme';
+import { fmtWhen } from '../../utils/datetime';
+import JobStatusPill from '../../components/JobStatusPill';
+import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import type { DrawerNavigationProp } from '@react-navigation/drawer';
+import type { TechStackParamList, RootDrawerParamList } from '../../navigation/types';
 
-const STATUS_COLOR = {
-  new: '#0EA5E9', scheduled: '#8B5CF6', on_the_way: '#F59E0B',
-  in_progress: '#F59E0B', completed: '#10B981', cancelled: '#9CA3AF',
-};
-
-const fmtWhen = (iso, window) => {
-  if (iso) {
-    const d = new Date(iso);
-    if (!isNaN(d.getTime())) return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-  }
-  return window || '';
-};
-
-export default function TechJobsScreen({ navigation }) {
+export default function TechJobsScreen({ navigation }: { navigation: NativeStackNavigationProp<TechStackParamList, 'TechJobs'> }) {
   const { t } = useTranslation();
   const { tech, logout } = useTechAuth();
-  const [jobs, setJobs] = useState([]);
+  const [jobs, setJobs] = useState<TechJob[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [pending, setPending] = useState(0);
@@ -59,8 +51,7 @@ export default function TechJobsScreen({ navigation }) {
 
   const onRefresh = () => { setRefreshing(true); load(); };
 
-  const renderJob = ({ item }) => {
-    const color = STATUS_COLOR[item.status] || '#9CA3AF';
+  const renderJob = ({ item }: { item: TechJob }) => {
     return (
       <TouchableOpacity
         style={styles.card}
@@ -69,9 +60,7 @@ export default function TechJobsScreen({ navigation }) {
       >
         <View style={styles.cardHeader}>
           <Text style={styles.jobTitle} numberOfLines={1}>{item.projectTitle || t('tech_job_default_title')}</Text>
-          <View style={[styles.pill, { backgroundColor: color + '20' }]}>
-            <Text style={[styles.pillText, { color }]}>{t(`myjobs_status_${item.status}`) || item.status}</Text>
-          </View>
+          <JobStatusPill status={item.status} />
         </View>
         {item.serviceType ? <Text style={styles.service}>{item.serviceType}</Text> : null}
         <Text style={styles.customer}>{item.customerName}</Text>
@@ -93,7 +82,7 @@ export default function TechJobsScreen({ navigation }) {
       <View style={styles.topbar}>
         <View style={styles.topbarLeft}>
           <TouchableOpacity
-            onPress={() => navigation.getParent()?.openDrawer?.()}
+            onPress={() => navigation.getParent<DrawerNavigationProp<RootDrawerParamList>>()?.openDrawer?.()}
             accessibilityRole="button"
             accessibilityLabel={t('open_menu')}
             style={styles.menuBtn}
@@ -151,8 +140,6 @@ const styles = StyleSheet.create({
   service: { color: theme.colors.textSecondary, fontSize: 13, marginTop: 4 },
   customer: { color: theme.colors.text, fontSize: 14, marginTop: 6, fontWeight: '600' },
   when: { color: theme.colors.textSecondary, fontSize: 13, marginTop: 2 },
-  pill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
-  pillText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
   empty: { alignItems: 'center', marginTop: 60, padding: 30 },
   emptyText: { textAlign: 'center', color: theme.colors.textSecondary, marginTop: 12, fontSize: 14, lineHeight: 20 },
 });

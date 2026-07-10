@@ -52,13 +52,79 @@ jest.mock('../api/backendClient', () => ({
   browseCommunityProjects: jest.fn(() => Promise.resolve([])),
   getClarifyingQuestions: jest.fn(() => Promise.resolve({ questions: [] })),
   verifyStep: jest.fn(() => Promise.resolve({ rating: 'good', score: 10 })),
+  // Pro-services + tech-mode surface (Wave 1 screens)
+  submitBooking: jest.fn(() => Promise.resolve({ id: 1 })),
+  listMyRequests: jest.fn(() => Promise.resolve([])),
+  startMembershipCheckout: jest.fn(() => Promise.resolve({ url: null })),
+  respondToQuote: jest.fn(() => Promise.resolve({})),
+  registerPushToken: jest.fn(() => Promise.resolve()),
+  techListJobs: jest.fn(() => Promise.resolve([])),
+  techGetJob: jest.fn(() => Promise.resolve({
+    id: 1, projectTitle: 'Stub job', status: 'scheduled',
+    customerName: 'Test Customer', customerPhone: '555-0100', customerEmail: 'c@example.com',
+    userDescription: 'Leaky faucet',
+  })),
+  techRequestPayment: jest.fn(() => Promise.resolve({ url: null })),
+  AiConsentRequiredError: class AiConsentRequiredError extends Error {},
+  // F1-F4 feature surface
+  getAvailability: jest.fn(() => Promise.resolve({ date: '2026-07-10', slotMinutes: 120, slots: [] })),
+  listMyAssets: jest.fn(() => Promise.resolve([])),
+  createMyAsset: jest.fn(() => Promise.resolve({ id: 1, label: 'Stub' })),
+  updateMyAsset: jest.fn(() => Promise.resolve({ id: 1, label: 'Stub' })),
+  deleteMyAsset: jest.fn(() => Promise.resolve()),
+  getAssetHistory: jest.fn(() => Promise.resolve([])),
+  listMyProperties: jest.fn(() => Promise.resolve([])),
+  createMyProperty: jest.fn(() => Promise.resolve({ id: 1, label: 'Home' })),
+  deleteMyProperty: jest.fn(() => Promise.resolve()),
+  getTechToken: jest.fn(() => null),
 }));
+
+jest.mock('../config/brandConfig', () => ({
+  useBrandConfig: () => ({
+    brand: 'diyhelper',
+    companyName: 'DIYHelper',
+    phone: '555-0100',
+    reviewUrl: null,
+    serviceTypes: ['Plumbing', 'Electrical'],
+    features: {
+      booking: true, triage: true, appointmentTracking: true, reviews: true,
+      referrals: true, maintenanceReminders: true, memberships: false,
+    },
+  }),
+  BrandConfigProvider: ({ children }) => children,
+}));
+
+jest.mock('../tech/TechAuthContext', () => ({
+  useTechAuth: () => ({
+    ready: true,
+    tech: { id: 1, name: 'Test Tech' },
+    login: jest.fn(() => Promise.resolve()),
+    logout: jest.fn(() => Promise.resolve()),
+  }),
+  TechAuthProvider: ({ children }) => children,
+}));
+
+jest.mock('../tech/techQueue', () => ({
+  flushQueue: jest.fn(() => Promise.resolve()),
+  getJobsCache: jest.fn(() => Promise.resolve([])),
+  saveJobsCache: jest.fn(() => Promise.resolve()),
+  pendingCount: jest.fn(() => Promise.resolve(0)),
+  enqueuePatch: jest.fn((id, patch) => Promise.resolve(patch)),
+  pendingPatch: jest.fn(() => Promise.resolve(null)),
+}));
+
+jest.mock('../utils/pickPhoto', () => ({
+  pickPhoto: jest.fn(() => Promise.resolve(null)),
+}));
+
+jest.mock('../components/DrawingCanvas', () => () => null);
 
 jest.mock('../utils/notifications', () => ({
   cancelForProject: jest.fn(() => Promise.resolve()),
   requestPermissions: jest.fn(() => Promise.resolve({ status: 'granted' })),
   registerForPushNotificationsAsync: jest.fn(() => Promise.resolve('ExponentPushToken[stub]')),
   devicePlatform: jest.fn(() => 'ios'),
+  scheduleMaintenanceReminder: jest.fn(() => Promise.resolve()),
 }));
 
 jest.mock('../services/feedback', () => ({ submitFeedback: jest.fn(() => Promise.resolve()) }));
@@ -156,6 +222,16 @@ const cases = [
   { name: 'Onboarding',   module: '../screens/OnboardingScreen',  params: {}, extraProps: { onFinish: jest.fn() } },
   { name: 'Safety',       module: '../screens/SafetyScreen',      params: { project: sampleProject } },
   { name: 'Settings',     module: '../screens/Settings',          params: {} },
+  // Pro-services (Wave 1) customer screens
+  { name: 'Triage',       module: '../screens/TriageScreen',      params: {} },
+  { name: 'Booking',      module: '../screens/BookingScreen',     params: {} },
+  { name: 'MyJobs',       module: '../screens/MyJobsScreen',      params: {} },
+  { name: 'PromoConsent', module: '../screens/PromoConsentScreen', params: {}, extraProps: { onDone: jest.fn() } },
+  { name: 'Equipment',    module: '../screens/EquipmentScreen',   params: {} },
+  // Tech field mode
+  { name: 'TechLogin',    module: '../screens/tech/TechLoginScreen',     params: {} },
+  { name: 'TechJobs',     module: '../screens/tech/TechJobsScreen',      params: {} },
+  { name: 'TechJobDetail',module: '../screens/tech/TechJobDetailScreen', params: { id: 1 } },
 ];
 
 describe('screen smoke tests', () => {

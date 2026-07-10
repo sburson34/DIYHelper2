@@ -18,8 +18,26 @@ const SCREENS_DIR = path.join(APP_ROOT, 'src', 'screens');
 
 const PARSE_OPTIONS = {
   sourceType: 'module',
-  plugins: ['jsx', 'classProperties', 'optionalChaining', 'nullishCoalescingOperator'],
+  // 'typescript' lets the same scan parse .ts/.tsx screens; harmless for .js
+  // (the codebase has no Flow syntax, which is the only thing it conflicts with).
+  plugins: ['jsx', 'typescript', 'classProperties', 'optionalChaining', 'nullishCoalescingOperator'],
 };
+
+// Screen modules may be .js, .ts or .tsx — resolve an extensionless import
+// against all three so a TypeScript conversion can't silently drop a screen
+// out of this scan (a vacuously green nav check is worse than none).
+const SCREEN_EXTENSIONS = ['.js', '.tsx', '.ts'];
+function resolveScreenModule(baseDir, importPath) {
+  if (SCREEN_EXTENSIONS.some((ext) => importPath.endsWith(ext))) {
+    return path.resolve(baseDir, importPath);
+  }
+  for (const ext of SCREEN_EXTENSIONS) {
+    const candidate = path.resolve(baseDir, importPath + ext);
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  // Fall back to .js so a missing file still produces a sensible path in errors.
+  return path.resolve(baseDir, importPath + '.js');
+}
 
 function parseFile(file) {
   const src = fs.readFileSync(file, 'utf8');
@@ -191,7 +209,7 @@ function parseAppJs() {
       const src = imports[ident];
       if (!src) continue;
       // Resolve relative to App.js dir
-      const absolute = path.resolve(path.dirname(APP_JS), src.endsWith('.js') ? src : src + '.js');
+      const absolute = resolveScreenModule(path.dirname(APP_JS), src);
       if (absolute.startsWith(SCREENS_DIR)) {
         screenFileToNav[absolute] = navFn;
       }
@@ -266,9 +284,9 @@ function main() {
 
   const failures = [];
 
-  for (const entry of fs.readdirSync(SCREENS_DIR)) {
-    if (!entry.endsWith('.js')) continue;
-    const full = path.join(SCREENS_DIR, entry);
+  for (const entry of fs.readdirSync(SCREENS_DIR, { recursive: true })) {
+    if (!SCREEN_EXTENSIONS.some((ext) => String(entry).endsWith(ext))) continue;
+    const full = path.join(SCREENS_DIR, String(entry));
     const navFn = screenFileToNav[full];
     if (!navFn) continue; // screen file not mounted in any navigator; skip
     const calls = collectNavigateCalls(full);

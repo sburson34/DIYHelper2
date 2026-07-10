@@ -1,4 +1,3 @@
-/* global btoa */
 // Tech-mode job detail — the field workflow: see the customer + problem, mark
 // "on my way" with an ETA, start, capture before/after photos and a signature,
 // add completion notes, and complete. Every change is written to the offline
@@ -6,24 +5,37 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput,
-  ActivityIndicator, Alert, Image, Linking, Dimensions,
+  ActivityIndicator, Alert, Linking, Dimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { techGetJob, techRequestPayment } from '../../api/backendClient';
+import { techGetJob, techRequestPayment, getTechToken, TechJobDetail, TechJobPatch } from '../../api/backendClient';
 import { enqueuePatch, flushQueue, pendingPatch } from '../../tech/techQueue';
 import { pickPhoto } from '../../utils/pickPhoto';
 import { useTranslation } from '../../i18n/I18nContext';
 import DrawingCanvas from '../../components/DrawingCanvas';
+import RemoteImage from '../../components/RemoteImage';
 import theme from '../../theme';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import type { TechStackParamList } from '../../navigation/types';
 
 const SIG_W = Dimensions.get('window').width - 64;
 const SIG_H = 180;
 
+// Hermes exposes btoa as a global, but the RN TS lib (no DOM) doesn't declare
+// it. Type-only declaration — the `typeof btoa` guard below still handles
+// engines where it's genuinely missing.
+declare const btoa: ((data: string) => string) | undefined;
+
+// Signature strokes as produced by DrawingCanvas's onStrokesChange.
+interface SigStroke {
+  points: Array<{ x: number; y: number; t?: number }>;
+}
+
 // Serialize signature strokes to a self-contained SVG, base64-encoded. The owner
 // console renders it via a data:image/svg+xml URI. Returns null if empty or if
 // the runtime lacks btoa (older engines) — signature is best-effort.
-function strokesToSvgBase64(strokes) {
+function strokesToSvgBase64(strokes: SigStroke[]): string | null {
   if (!strokes || !strokes.length) return null;
   const paths = strokes.map((s) => {
     const pts = s.points || [];
@@ -36,15 +48,15 @@ function strokesToSvgBase64(strokes) {
   try { return typeof btoa !== 'undefined' ? btoa(svg) : null; } catch { return null; }
 }
 
-export default function TechJobDetailScreen({ route, navigation }) {
+export default function TechJobDetailScreen({ route, navigation }: NativeStackScreenProps<TechStackParamList, 'TechJobDetail'>) {
   const { t } = useTranslation();
   const jobId = route?.params?.id;
-  const [job, setJob] = useState(null);
+  const [job, setJob] = useState<TechJobDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [eta, setEta] = useState('20');
   const [notes, setNotes] = useState('');
-  const [sigStrokes, setSigStrokes] = useState([]);
+  const [sigStrokes, setSigStrokes] = useState<SigStroke[]>([]);
   const [sigKey, setSigKey] = useState(0);
 
   const load = useCallback(async () => {
@@ -65,24 +77,24 @@ export default function TechJobDetailScreen({ route, navigation }) {
   useEffect(() => { load(); }, [load]);
 
   // Apply an update optimistically, queue it, and try to flush immediately.
-  const save = async (patch, okMsg) => {
+  const save = async (patch: TechJobPatch, okMsg?: string) => {
     setSaving(true);
     try {
       await enqueuePatch(jobId, patch);
-      setJob((j) => ({ ...j, ...patch }));
+      setJob((j) => ({ ...j, ...patch } as TechJobDetail));
       const flushed = await flushQueue();
       Alert.alert(
         okMsg || t('tech_saved'),
         flushed > 0 ? t('tech_saved_synced') : t('tech_saved_offline'),
       );
-    } catch (e) {
+    } catch (e: any) {
       Alert.alert(t('tech_save_failed'), e.message || '');
     } finally {
       setSaving(false);
     }
   };
 
-  const capture = async (which, source) => {
+  const capture = async (which: 'beforePhotoBase64' | 'afterPhotoBase64', source: 'camera' | 'library') => {
     const p = await pickPhoto(source);
     if (!p) return;
     save({ [which]: p.base64 }, t('tech_photo_saved'));
@@ -104,7 +116,7 @@ export default function TechJobDetailScreen({ route, navigation }) {
       } else {
         Alert.alert(t('tech_pay_unavailable_title'), res.reason || t('tech_pay_unavailable_msg'));
       }
-    } catch (e) {
+    } catch (e: any) {
       Alert.alert(t('tech_pay_unavailable_title'), e.message || '');
     }
   };
@@ -116,9 +128,11 @@ export default function TechJobDetailScreen({ route, navigation }) {
   const startJob = () => save({ status: 'in_progress', techEtaMinutes: -1 }, t('tech_status_updated'));
 
   const completeJob = () => {
-    if (!job.beforePhotoBase64) { Alert.alert(t('tech_complete_need_before_title'), t('tech_complete_need_before_msg')); return; }
-    if (!job.afterPhotoBase64) { Alert.alert(t('tech_complete_need_photo_title'), t('tech_complete_need_photo_msg')); return; }
-    if (!job.signatureBase64) { Alert.alert(t('tech_complete_need_sig_title'), t('tech_complete_need_sig_msg')); return; }
+    // job is always loaded by the time this button is rendered (see the
+    // loading/!job guard below), hence the non-null assertions.
+    if (!job!.beforePhotoBase64 && !job!.beforePhotoUrl) { Alert.alert(t('tech_complete_need_before_title'), t('tech_complete_need_before_msg')); return; }
+    if (!job!.afterPhotoBase64 && !job!.afterPhotoUrl) { Alert.alert(t('tech_complete_need_photo_title'), t('tech_complete_need_photo_msg')); return; }
+    if (!job!.signatureBase64) { Alert.alert(t('tech_complete_need_sig_title'), t('tech_complete_need_sig_msg')); return; }
     Alert.alert(t('tech_complete_confirm_title'), t('tech_complete_confirm_msg'), [
       { text: t('common_cancel'), style: 'cancel' },
       {
@@ -154,6 +168,29 @@ export default function TechJobDetailScreen({ route, navigation }) {
               <Text style={styles.callText}>{job.customerPhone}</Text>
             </TouchableOpacity>
           ) : null}
+          {job.address ? (
+            <View style={styles.addressRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.addressLabel}>{t('tech_address')}</Text>
+                <Text style={styles.addressText}>
+                  {[job.address, job.city, job.state, job.zip].filter(Boolean).join(', ')}
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.navigateBtn}
+                onPress={() => {
+                  const url = job.mapsUrl
+                    || `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent([job.address, job.city, job.zip].filter(Boolean).join(', '))}`;
+                  Linking.openURL(url).catch(() => {});
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={t('tech_navigate')}
+              >
+                <Icon name="navigate-circle" size={18} color="#fff" />
+                <Text style={styles.navigateText}>{t('tech_navigate')}</Text>
+              </TouchableOpacity>
+            </View>
+          ) : null}
         </View>
 
         {job.userDescription ? (
@@ -163,10 +200,15 @@ export default function TechJobDetailScreen({ route, navigation }) {
           </View>
         ) : null}
 
-        {job.imageBase64 ? (
+        {job.imageBase64 || job.imageUrl ? (
           <View style={styles.block}>
             <Text style={styles.blockLabel}>{t('tech_customer_photo')}</Text>
-            <Image source={{ uri: `data:image/jpeg;base64,${job.imageBase64}` }} style={styles.photo} />
+            <RemoteImage
+              base64={job.imageBase64}
+              uri={job.imageUrl}
+              headers={getTechToken() ? { Authorization: `Bearer ${getTechToken()}` } : undefined}
+              style={styles.photo}
+            />
           </View>
         ) : null}
 
@@ -193,10 +235,15 @@ export default function TechJobDetailScreen({ route, navigation }) {
         <View style={styles.block}>
           <Text style={styles.blockLabel}>{t('tech_photos')}</Text>
           <View style={styles.photoGrid}>
-            {[['beforePhotoBase64', 'tech_before'], ['afterPhotoBase64', 'tech_after']].map(([field, label]) => (
+            {([['beforePhotoBase64', 'tech_before'], ['afterPhotoBase64', 'tech_after']] as const).map(([field, label]) => (
               <View key={field} style={styles.photoCell}>
-                {job[field] ? (
-                  <Image source={{ uri: `data:image/jpeg;base64,${job[field]}` }} style={styles.photoThumb} />
+                {job[field] || job[field === 'beforePhotoBase64' ? 'beforePhotoUrl' : 'afterPhotoUrl'] ? (
+                  <RemoteImage
+                    base64={job[field]}
+                    uri={job[field === 'beforePhotoBase64' ? 'beforePhotoUrl' : 'afterPhotoUrl']}
+                    headers={getTechToken() ? { Authorization: `Bearer ${getTechToken()}` } : undefined}
+                    style={styles.photoThumb}
+                  />
                 ) : (
                   <View style={[styles.photoThumb, styles.photoEmpty]}><Icon name="camera-outline" size={26} color={theme.colors.textSecondary} /></View>
                 )}
@@ -265,6 +312,11 @@ const styles = StyleSheet.create({
   block: { marginTop: 22 },
   blockLabel: { fontSize: 12, fontWeight: '800', color: theme.colors.textSecondary, textTransform: 'uppercase', marginBottom: 8 },
   customerName: { fontSize: 17, fontWeight: '700', color: theme.colors.text },
+  addressRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12 },
+  addressLabel: { color: theme.colors.textSecondary, fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
+  addressText: { color: theme.colors.text, fontSize: 14, marginTop: 2 },
+  navigateBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: theme.colors.secondary, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10 },
+  navigateText: { color: '#fff', fontWeight: '800', fontSize: 13 },
   callBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', backgroundColor: theme.colors.success, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 100, marginTop: 8 },
   callText: { color: '#fff', fontWeight: '700' },
   desc: { color: theme.colors.text, fontSize: 15, lineHeight: 21 },

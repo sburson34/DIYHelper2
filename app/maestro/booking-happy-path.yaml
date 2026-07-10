@@ -1,0 +1,53 @@
+# Booking golden path: first-launch gates → drawer → Book a Visit → fill the
+# contact + description form → submit → "Request sent!" confirmation.
+#
+# Requires a reachable backend (adb reverse tcp:5206 to a local API, or prod),
+# same as describe-analyze-save. POST /api/help-requests needs no AI key, so a
+# bare `dotnet run` backend is enough. Network-dependent — nightly/manual tier,
+# not per-PR.
+appId: com.diyhelper2
+---
+- launchApp:
+    clearState: true
+- assertVisible: "Capture the Issue"
+
+# First-launch gates. Each is optional so the flow also passes when a prior
+# run already recorded the choices (e.g. without clearState on a dev box).
+- tapOn:
+    text: "Skip"
+    optional: true
+- tapOn:
+    text: "Continue without AI"
+    optional: true
+- tapOn:
+    text: "Not now"
+    optional: true
+
+# Drawer → Book a Visit.
+- swipe:
+    from: { x: 2%, y: 50% }
+    to: { x: 80%, y: 50% }
+- tapOn: "Book a Visit"
+
+# Contact block sits below the description — scroll it into view as we go.
+- tapOn:
+    id: "booking-description-input"
+- inputText: "Water heater is making a rumbling noise and the water smells metallic."
+- hideKeyboard
+- scroll
+- tapOn:
+    id: "booking-name-input"
+- inputText: "Maestro Test"
+- hideKeyboard
+- tapOn:
+    id: "booking-phone-input"
+- inputText: "5555550100"
+- hideKeyboard
+- scroll
+- tapOn:
+    id: "booking-submit-button"
+
+# Success alert from the backend round-trip.
+- extendedWaitUntil:
+    visible: "Request sent!"
+    timeout: 30000

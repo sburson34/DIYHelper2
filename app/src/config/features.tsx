@@ -2,6 +2,9 @@ import { createFeatureFlags } from '@sburson34/mobile-shared/feature-flags';
 import { getFeatures } from '../api/backendClient';
 
 export interface Features {
+  // createFeatureFlags<T> constrains T to Record<string, unknown>; the index
+  // signature satisfies it while keeping the named flags strongly typed.
+  [flag: string]: unknown;
   amazonPa: boolean;
   attom: boolean;
   paintColors: boolean;

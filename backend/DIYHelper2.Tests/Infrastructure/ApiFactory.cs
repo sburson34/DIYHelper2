@@ -68,6 +68,17 @@ public class ApiFactory : BaseApiFactory<Program>
         // it OFF here so a leftover "true" from KillSwitchApiFactory doesn't
         // poison a sibling test class.
         Environment.SetEnvironmentVariable("AI_KILL_SWITCH", null);
+
+        // Same defense for APP_KEY: AppKeyApiFactory sets it before its host
+        // builds; make sure a plain ApiFactory never inherits it.
+        Environment.SetEnvironmentVariable("APP_KEY", null);
+
+        // And for Twilio: SmsConfiguredApiFactory (TechModeTests) sets these
+        // before its host builds; a plain ApiFactory must stay unconfigured so
+        // the fail-soft "SMS off" contract tests keep meaning something.
+        Environment.SetEnvironmentVariable("TWILIO_ACCOUNT_SID", null);
+        Environment.SetEnvironmentVariable("TWILIO_AUTH_TOKEN", null);
+        Environment.SetEnvironmentVariable("TWILIO_FROM_NUMBER", null);
     }
 
     /// <summary>
@@ -89,6 +100,9 @@ public class ApiFactory : BaseApiFactory<Program>
     public FakeHttpMessageHandler FakeAttomHandler { get; } = new();
     public FakeHttpMessageHandler FakeReceiptOcrHandler { get; } = new();
     public FakeHttpMessageHandler FakeYouTubeHandler { get; } = new();
+    /// <summary>Stubs the Google Geocoding API (job service addresses). Tests
+    /// also set <see cref="SetGoogleApiKey"/> so the client is "configured".</summary>
+    public FakeHttpMessageHandler FakeGeocodeHandler { get; } = new();
     public FakeHttpMessageHandler FakeModerationHandler { get; } = new();
     public FakeHttpMessageHandler FakePlayIntegrityHandler { get; } = new();
     public FakeHttpMessageHandler FakeExpoHandler { get; } = new();
@@ -104,10 +118,19 @@ public class ApiFactory : BaseApiFactory<Program>
     public FakeHttpMessageHandler FakeHousecallTokenHandler { get; } = new();
     /// <summary>Stubs Housecall Pro's REST API (POST /customers, /leads).</summary>
     public FakeHttpMessageHandler FakeHousecallApiHandler { get; } = new();
+    /// <summary>Stubs Twilio's REST API so tests that configure SMS (via
+    /// <c>SmsConfiguredApiFactory</c>) never hit the network.</summary>
+    public FakeHttpMessageHandler FakeTwilioHandler { get; } = new();
 
     /// <summary>Captures lead-routing emails instead of hitting SES. Tests read
     /// <c>FakeEmail.SentMessages</c> and can set <c>FakeEmail.OnSend</c> to throw.</summary>
     public FakeEmailService FakeEmail { get; } = new();
+
+    /// <summary>In-memory S3 stand-in for the job-media offload. Registered as
+    /// the app's IObjectStorage so booking/tech photo writes store here; tests
+    /// read <c>Storage.Objects</c> and can set <c>ThrowOnEverything</c> to
+    /// exercise the fail-soft base64 fallback.</summary>
+    public FakeObjectStorage Storage { get; } = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -116,6 +139,11 @@ public class ApiFactory : BaseApiFactory<Program>
         base.ConfigureWebHost(builder);
 
         builder.UseEnvironment("Development");
+
+        // Makes AddSburonObjectStorage register a (real) IObjectStorage, which
+        // we then replace with the in-memory fake below — so JobMediaService
+        // sees storage as configured and the offload write paths run in tests.
+        builder.UseSetting("Storage:S3:Bucket", "fake-test-bucket");
 
         builder.ConfigureServices(services =>
         {
@@ -152,6 +180,11 @@ public class ApiFactory : BaseApiFactory<Program>
             services.RemoveAll<Sburson.Shared.Email.IEmailService>();
             services.AddSingleton<Sburson.Shared.Email.IEmailService>(FakeEmail);
 
+            // Replace the S3 client AddSburonObjectStorage registered (because
+            // Storage:S3:Bucket is set above) with the in-memory fake.
+            services.RemoveAll<Sburson.Shared.Storage.IObjectStorage>();
+            services.AddSingleton<Sburson.Shared.Storage.IObjectStorage>(Storage);
+
             // AiKeyStore stays empty by default — keeps the "not configured"
             // 503 tests working. Tests that want to reach the AI path call
             // SetOpenAiKey() after Services is built.
@@ -167,6 +200,7 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<AttomClient>().ConfigurePrimaryHttpMessageHandler(() => FakeAttomHandler);
             services.AddHttpClient<ReceiptOcrClient>().ConfigurePrimaryHttpMessageHandler(() => FakeReceiptOcrHandler);
             services.AddHttpClient<YouTubeClient>().ConfigurePrimaryHttpMessageHandler(() => FakeYouTubeHandler);
+            services.AddHttpClient<GeocodingClient>().ConfigurePrimaryHttpMessageHandler(() => FakeGeocodeHandler);
             services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().ConfigurePrimaryHttpMessageHandler(() => FakeModerationHandler);
             services.AddHttpClient<PlayIntegrityVerifier>().ConfigurePrimaryHttpMessageHandler(() => FakePlayIntegrityHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
@@ -176,6 +210,9 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeJobberGraphQlHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallTokenService>().ConfigurePrimaryHttpMessageHandler(() => FakeHousecallTokenHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.HousecallCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeHousecallApiHandler);
+            services.AddHttpClient<DIYHelper2.Api.Integrations.Messaging.ISmsSender,
+                DIYHelper2.Api.Integrations.Messaging.TwilioSmsSender>()
+                .ConfigurePrimaryHttpMessageHandler(() => FakeTwilioHandler);
         });
     }
 
@@ -205,7 +242,11 @@ public class ApiFactory : BaseApiFactory<Program>
         string? username = null, string? password = null, bool isActive = true,
         string? leadWebhookUrl = null,
         string? serviceTypesJson = null, string? featuresJson = null,
-        bool membershipEnabled = false, string? phone = null, string? reviewUrl = null)
+        bool membershipEnabled = false, string? phone = null, string? reviewUrl = null,
+        // Self-scheduling knobs (A6). Null → leave the model defaults / the
+        // existing row's values untouched.
+        string? businessHoursJson = null, int? slotMinutes = null,
+        int? slotCapacity = null, string? timeZoneId = null)
     {
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
@@ -213,36 +254,24 @@ public class ApiFactory : BaseApiFactory<Program>
         var existing = await db.Brands.FirstOrDefaultAsync(b => b.Slug == slug);
         if (existing is null)
         {
-            db.Brands.Add(new DIYHelper2.Api.Models.Brand
-            {
-                Slug = slug,
-                CompanyName = companyName,
-                LeadEmail = leadEmail,
-                DashboardUsername = username,
-                DashboardPasswordHash = hash,
-                IsActive = isActive,
-                LeadWebhookUrl = leadWebhookUrl,
-                ServiceTypesJson = serviceTypesJson,
-                FeaturesJson = featuresJson,
-                MembershipEnabled = membershipEnabled,
-                Phone = phone,
-                ReviewUrl = reviewUrl,
-            });
+            existing = new DIYHelper2.Api.Models.Brand { Slug = slug };
+            db.Brands.Add(existing);
         }
-        else
-        {
-            existing.CompanyName = companyName;
-            existing.LeadEmail = leadEmail;
-            existing.DashboardUsername = username;
-            existing.DashboardPasswordHash = hash;
-            existing.IsActive = isActive;
-            existing.LeadWebhookUrl = leadWebhookUrl;
-            existing.ServiceTypesJson = serviceTypesJson;
-            existing.FeaturesJson = featuresJson;
-            existing.MembershipEnabled = membershipEnabled;
-            existing.Phone = phone;
-            existing.ReviewUrl = reviewUrl;
-        }
+        existing.CompanyName = companyName;
+        existing.LeadEmail = leadEmail;
+        existing.DashboardUsername = username;
+        existing.DashboardPasswordHash = hash;
+        existing.IsActive = isActive;
+        existing.LeadWebhookUrl = leadWebhookUrl;
+        existing.ServiceTypesJson = serviceTypesJson;
+        existing.FeaturesJson = featuresJson;
+        existing.MembershipEnabled = membershipEnabled;
+        existing.Phone = phone;
+        existing.ReviewUrl = reviewUrl;
+        if (businessHoursJson is not null) existing.BusinessHoursJson = businessHoursJson;
+        if (slotMinutes is not null) existing.SlotMinutes = slotMinutes.Value;
+        if (slotCapacity is not null) existing.SlotCapacity = slotCapacity;
+        if (timeZoneId is not null) existing.TimeZoneId = timeZoneId;
         await db.SaveChangesAsync();
     }
 
@@ -336,6 +365,16 @@ public class ApiFactory : BaseApiFactory<Program>
         using var scope = Services.CreateScope();
         var store = scope.ServiceProvider.GetRequiredService<AiKeyStore>();
         store.OpenAiKey = key;
+    }
+
+    /// <summary>
+    /// Populate RuntimeConfigStore.GoogleApiKey so GeocodingClient (and the
+    /// translate endpoint) consider themselves configured. Pair with
+    /// <see cref="FakeGeocodeHandler"/> to shape the geocode response.
+    /// </summary>
+    public void SetGoogleApiKey(string key)
+    {
+        Services.GetRequiredService<DIYHelper2.Api.Services.RuntimeConfigStore>().GoogleApiKey = key;
     }
 
     public new Task InitializeAsync()

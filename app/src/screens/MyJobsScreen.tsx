@@ -10,34 +10,23 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons as Icon } from '@expo/vector-icons';
-import { listMyRequests, startMembershipCheckout, respondToQuote } from '../api/backendClient';
+import { listMyRequests, startMembershipCheckout, respondToQuote, MyRequest } from '../api/backendClient';
 import { getUserProfile } from '../utils/storage';
 import { scheduleMaintenanceReminder } from '../utils/notifications';
 import { useTranslation } from '../i18n/I18nContext';
 import { useBrandConfig } from '../config/brandConfig';
 import theme from '../theme';
+import { JOB_STEPS as STEPS, JOB_STATUS_COLOR as STEP_COLOR } from '../constants/jobStatus';
+import { fmtDateTime as fmtDate } from '../utils/datetime';
+import JobStatusPill from '../components/JobStatusPill';
+import QuoteOptionCard from '../components/QuoteOptionCard';
+import type { DrawerScreenProps } from '@react-navigation/drawer';
+import type { RootDrawerParamList } from '../navigation/types';
 
-const STEPS = ['new', 'scheduled', 'on_the_way', 'in_progress', 'completed'];
-const STEP_COLOR = {
-  new: '#0EA5E9',
-  scheduled: '#8B5CF6',
-  on_the_way: '#F59E0B',
-  in_progress: '#F59E0B',
-  completed: '#10B981',
-  cancelled: '#9CA3AF',
-};
-
-const fmtDate = (iso) => {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return null;
-  return d.toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-};
-
-export default function MyJobsScreen({ navigation }) {
+export default function MyJobsScreen({ navigation }: DrawerScreenProps<RootDrawerParamList, 'MyJobs'>) {
   const { t } = useTranslation();
   const config = useBrandConfig();
-  const [items, setItems] = useState([]);
+  const [items, setItems] = useState<MyRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [checkingOut, setCheckingOut] = useState(false);
@@ -64,8 +53,6 @@ export default function MyJobsScreen({ navigation }) {
     load();
   };
 
-  const stepLabel = (s) => t(`myjobs_status_${s}`);
-
   const leaveReview = () => {
     if (config.reviewUrl) Linking.openURL(config.reviewUrl).catch(() => {});
   };
@@ -79,7 +66,7 @@ export default function MyJobsScreen({ navigation }) {
     }
   };
 
-  const remindMaintenance = async (job) => {
+  const remindMaintenance = async (job: MyRequest) => {
     const company = config.companyName || t('myjobs_this_company');
     const id = await scheduleMaintenanceReminder(
       t('myjobs_reminder_title').replace('{company}', company),
@@ -110,26 +97,26 @@ export default function MyJobsScreen({ navigation }) {
       } else {
         Alert.alert(t('myjobs_membership_unavailable_title'), res.reason || t('myjobs_membership_unavailable_msg'));
       }
-    } catch (e) {
+    } catch (e: any) {
       Alert.alert(t('myjobs_membership_unavailable_title'), e.message);
     } finally {
       setCheckingOut(false);
     }
   };
 
-  const respondQuote = async (job, decision) => {
+  const respondQuote = async (job: MyRequest, decision: 'approved' | 'declined', optionName?: string) => {
     try {
-      await respondToQuote(job.id, decision);
+      await respondToQuote(job.id, decision, optionName);
       load();
-    } catch (e) {
+    } catch (e: any) {
       Alert.alert(t('myjobs_quote_failed'), e.message || '');
     }
   };
 
-  const renderJob = ({ item }) => {
+  const renderJob = ({ item }: { item: MyRequest }) => {
     const status = item.status || 'new';
     const cancelled = status === 'cancelled';
-    const reachedIdx = STEPS.indexOf(status);
+    const reachedIdx = (STEPS as readonly string[]).indexOf(status);
     const scheduled = fmtDate(item.scheduledFor);
     const done = status === 'completed';
 
@@ -137,11 +124,14 @@ export default function MyJobsScreen({ navigation }) {
       <View style={styles.card}>
         <View style={styles.cardHeader}>
           <Text style={styles.jobTitle} numberOfLines={1}>{item.projectTitle || t('booking_default_title')}</Text>
-          <View style={[styles.statusPill, { backgroundColor: (STEP_COLOR[status] || '#9CA3AF') + '20' }]}>
-            <Text style={[styles.statusPillText, { color: STEP_COLOR[status] || '#9CA3AF' }]}>{stepLabel(status)}</Text>
-          </View>
+          <JobStatusPill status={status} />
         </View>
         {item.serviceType ? <Text style={styles.serviceType}>{item.serviceType}</Text> : null}
+        {item.address ? (
+          <Text style={styles.addressLine} numberOfLines={1}>
+            <Icon name="location-outline" size={12} color={theme.colors.textSecondary} /> {item.address}
+          </Text>
+        ) : null}
 
         {!cancelled && (
           <View style={styles.timeline}>
@@ -169,8 +159,27 @@ export default function MyJobsScreen({ navigation }) {
           </View>
         ) : null}
 
-        {/* Quote the company sent — approve or decline right here. */}
-        {item.quoteStatus === 'sent' ? (
+        {/* Quote the company sent — approve or decline right here. Tiered
+            (Good/Better/Best) quotes render as a horizontal option rail;
+            single quotes keep the classic box. */}
+        {item.quoteStatus === 'sent' && (item.quoteOptions?.length ?? 0) > 1 ? (
+          <View style={styles.quoteBox}>
+            <Text style={styles.quoteLabel}>{t('myjobs_quote_options_title')}</Text>
+            <FlatList
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              data={item.quoteOptions!}
+              keyExtractor={(o) => o.name}
+              style={styles.optionsRail}
+              renderItem={({ item: opt }) => (
+                <QuoteOptionCard option={opt} onChoose={(o) => respondQuote(item, 'approved', o.name)} />
+              )}
+            />
+            <TouchableOpacity onPress={() => respondQuote(item, 'declined')} accessibilityRole="button">
+              <Text style={styles.declineAllText}>{t('myjobs_quote_decline_all')}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : item.quoteStatus === 'sent' ? (
           <View style={styles.quoteBox}>
             <Text style={styles.quoteLabel}>{t('myjobs_quote_received')}</Text>
             <Text style={styles.quoteAmount}>${Number(item.quoteTotal || 0).toFixed(2)}</Text>
@@ -186,7 +195,13 @@ export default function MyJobsScreen({ navigation }) {
         ) : item.quoteStatus === 'approved' ? (
           <View style={styles.quoteResolved}>
             <Icon name="checkmark-circle" size={16} color={theme.colors.success} />
-            <Text style={styles.quoteResolvedText}>{t('myjobs_quote_approved').replace('{amount}', `$${Number(item.quoteTotal || 0).toFixed(2)}`)}</Text>
+            <Text style={styles.quoteResolvedText}>
+              {item.quoteSelectedOption
+                ? t('myjobs_quote_approved_option')
+                    .replace('{option}', item.quoteSelectedOption)
+                    .replace('{amount}', `$${Number(item.quoteTotal || 0).toFixed(2)}`)
+                : t('myjobs_quote_approved').replace('{amount}', `$${Number(item.quoteTotal || 0).toFixed(2)}`)}
+            </Text>
           </View>
         ) : item.quoteStatus === 'declined' ? (
           <View style={styles.quoteResolved}>
@@ -278,8 +293,9 @@ const styles = StyleSheet.create({
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 },
   jobTitle: { flex: 1, fontWeight: '800', fontSize: 16, color: theme.colors.text },
   serviceType: { color: theme.colors.textSecondary, fontSize: 13, marginTop: 4 },
-  statusPill: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 100 },
-  statusPillText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase' },
+  addressLine: { color: theme.colors.textSecondary, fontSize: 12, marginTop: 2 },
+  optionsRail: { marginTop: 10 },
+  declineAllText: { color: theme.colors.textSecondary, fontWeight: '700', fontSize: 13, marginTop: 12, textAlign: 'center' },
   timeline: { flexDirection: 'row', alignItems: 'center', marginTop: 14, marginBottom: 4 },
   tlDot: { width: 12, height: 12, borderRadius: 6, backgroundColor: theme.colors.border },
   tlLine: { flex: 1, height: 3, backgroundColor: theme.colors.border, marginHorizontal: 2 },
