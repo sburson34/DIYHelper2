@@ -151,3 +151,13 @@ try {
 setUserContext({ id: profile.id }); // do NOT pass email unless user opted in
 setAppContext('prefs', { skillLevel, language });
 ```
+
+## Gradle 9 note (2026-07-09)
+
+The repo now builds with Gradle 9, and @sentry/react-native 6.x's
+`sentry.gradle` source-map upload task still calls the removed `Task.exec()`
+API — any `assembleRelease`/`bundleRelease` with auto-upload enabled fails at
+`createBundleReleaseJsAndAssets_SentryUpload_*`. Until the Sentry RN gradle
+plugin ships Gradle 9 support, `SENTRY_DISABLE_AUTO_UPLOAD=true` is baked into
+the `build:beta` / `build:beta:bundle` npm scripts. Re-enable uploads (remove
+the env var) only after upgrading @sentry/react-native past the fix.
