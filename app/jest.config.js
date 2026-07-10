@@ -18,7 +18,7 @@ module.exports = {
   // expect.extend()) runs. Plain `setupFiles` runs before the framework and
   // would explode with `ReferenceError: expect is not defined`.
   setupFilesAfterEnv: ['./jest.setup.js'],
-  testMatch: ['**/src/__tests__/**/*.test.js'],
+  testMatch: ['**/src/__tests__/**/*.test.{js,ts,tsx}'],
   moduleNameMapper: {
     '\\.(png|jpg|jpeg|gif|svg)$': '<rootDir>/jest.setup.js',
   },
