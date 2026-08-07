@@ -713,6 +713,24 @@ app.UseMiddleware<RequestLoggingMiddleware>();
 app.MapGet("/", () => "DIYHelper2 API is running on " + DateTime.Now);
 app.MapGet("/api/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
 
+// NOTE: portfolio app distribution (apps.diyhelper.org — OTA bundles + APKs for every
+// sburson34 app) was going to live here, since this container already serves
+// api.diyhelper.org and was the closest of any repo to the current shared package.
+// It is hosted by the famenza container instead, for one blocking reason:
+//
+// This project is pinned to Sburson.Shared.Backend 0.19.0, and the endpoints need 0.22.0.
+// Bumping it does not compile — published 0.19.0's telemetry bases exposed brand-aware
+// APIs (`IngestAsync(body, brand, ct)`, `UsageDigestServiceBase.BuildBrandMauAsync`) that
+// the current shared source no longer has, and the local services here are thin bindings
+// that add nothing, so the two call sites below have nowhere to get them. That drift is
+// pre-existing and will block ANY future bump of this package, not just this feature.
+//
+// Resolving it is a real decision, not a mechanical fix: brand separation in the usage
+// digest is deliberate and billing-relevant ("instead of silently padding DIYHelper's
+// count"), so the choice is either to restore brand support to the shared telemetry
+// bases or to accept merged counts here. Whoever picks up that bump should decide it
+// on purpose.
+
 // Simple liveness probe for Docker / Caddy upstream healthcheck. Distinct
 // from /readyz so a transient DB blip never causes the orchestrator to kill an
 // otherwise-healthy container (that would turn a brief DB hiccup into a

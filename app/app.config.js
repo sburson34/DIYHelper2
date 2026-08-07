@@ -48,6 +48,34 @@ module.exports = ({ config }) => ({
   name: brand.name,
   slug: brand.slug,
   scheme: brand.scheme,
+
+  // Over-the-air JS updates, served by the portfolio distribution host
+  // (apps.diyhelper.org — Sburson.Shared.Backend's MapExpoUpdates).
+  //
+  // PER BRAND, not per repo, and that is load-bearing rather than tidy. Each brand is a
+  // separately installed app with its own package id, and brand identity travels in
+  // extra.brand below — which an update RESTORES into Constants.expoConfig, because on an
+  // updated device that object comes from the manifest rather than from the binary. One
+  // shared bundle would therefore not merely reach the wrong app, it would repaint every
+  // other brand with whichever brand happened to publish: Acme Home users would open their
+  // app to DIYHelper's name and colors. Keyed on brand.slug so a new brands/<id>/ folder
+  // gets its own update channel with no further wiring.
+  //
+  // A new brand must ALSO be added to AppDistribution__Apps in
+  // infrastructure-shared/config/diyhelper.env, or its bundles are served to nobody.
+  //
+  // THIS URL IS COMPILED INTO THE BINARY and read at launch, so it cannot be changed for
+  // an installed app without a rebuild and reinstall.
+  updates: {
+    url: `https://apps.diyhelper.org/apps/${brand.slug}/manifest`,
+    enabled: true,
+    checkAutomatically: 'ON_LOAD',
+    fallbackToCacheTimeout: 0,
+  },
+  // The interlock: a bundle only reaches a device whose NATIVE version string matches, so
+  // JS built against new native code can never land on a binary lacking it. Bump `version`
+  // in app.json ONLY for native changes — it strands every install until they reinstall.
+  runtimeVersion: { policy: 'appVersion' },
   icon: asset('icon.png'),
   splash: {
     image: asset('splash.png'),

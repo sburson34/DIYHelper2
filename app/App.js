@@ -62,6 +62,16 @@ import { fontKeysFor } from './src/fontNames';
 import { BRAND_FONT } from './src/config/appInfo';
 import { applyGlobalFont } from './src/applyGlobalFont';
 import ScreenErrorBoundary from './src/components/ScreenErrorBoundary';
+import ExpoConstants from 'expo-constants';
+import { UpdateBanner } from '@sburson34/mobile-shared/updates';
+
+// Where the update banner asks "is there a newer native build". DERIVED from this
+// build's own updates.url rather than written out, because this repo is white-label:
+// app.config.js gives every brand its own update channel keyed on brand.slug, and a
+// hardcoded URL here would point every brand at whichever one was typed. Reading the
+// value the binary was actually built with makes the two impossible to disagree.
+const UPDATE_INFO_URL =
+  (ExpoConstants.expoConfig?.updates?.url || '').replace('/manifest', '/info') || null;
 
 // Helper used by both the logo header and the "New Project" drawer item.
 // Asks the Capture screen to reset (it decides whether to prompt) and pops
@@ -777,6 +787,11 @@ export default function App() {
           </FeaturesProvider>
         </I18nProvider>
       </ThemeProvider>
+      {/* Tells this device when a newer build exists — a downloaded OTA bundle waiting on
+          a restart, or a native build only a reinstall can deliver. Renders nothing until
+          one of those is true. Outside ThemeProvider so it still shows if theme loading is
+          what broke; the build you most need to replace is the one too broken to navigate. */}
+      <UpdateBanner infoUrl={UPDATE_INFO_URL} />
     </GestureHandlerRootView>
   );
 }
