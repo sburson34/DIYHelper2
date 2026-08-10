@@ -15,6 +15,7 @@ web-build/
 
 # Env
 .env*.local
+.env*.local.pre-restore
 
 # Sentry — never commit auth tokens or generated source maps
 sentry.properties
