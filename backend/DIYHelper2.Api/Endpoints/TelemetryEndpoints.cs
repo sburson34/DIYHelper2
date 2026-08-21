@@ -2,7 +2,8 @@ namespace DIYHelper2.Api.Endpoints;
 
 /// <summary>
 /// Anonymous product-usage telemetry: the mobile ingest endpoint plus the
-/// operator-only usage-digest and per-brand MAU rollups.
+/// operator-only per-brand MAU rollup. The usage digest itself moved to the
+/// shared v2 endpoint — see MapSburonAnalyticsDigest in Program.cs.
 /// </summary>
 public static class TelemetryEndpoints
 {
@@ -10,9 +11,9 @@ public static class TelemetryEndpoints
     {
         // ── Anonymous product telemetry ───────────────────────────────────────────
         // Ingest is anonymous (events keyed on a per-install AnonId, never a user).
-        // The digest is an operator tool gated by Sburson.Shared.Telemetry.UsageDigestGate
-        // (open in Dev/Testing; in prod needs Telemetry:AllowDigestInProd + a matching
-        // X-Admin-Token header).
+        // The brand-mau rollup is an operator tool gated by
+        // Sburson.Shared.Telemetry.UsageDigestGate (open in Dev/Testing; in prod
+        // needs Telemetry:AllowDigestInProd + a matching X-Admin-Token header).
         app.MapPost("/api/telemetry/events", async (
             HttpContext http,
             Sburson.Shared.Telemetry.TelemetryBatchDto? body,
@@ -29,21 +30,6 @@ public static class TelemetryEndpoints
 
             var result = await ingest.IngestAsync(body, brand, ct);
             return Results.Accepted(value: new { ingested = result.Ingested, dropped = result.Dropped });
-        });
-
-        app.MapGet("/api/admin/usage-digest", async (
-            HttpContext http,
-            DIYHelper2.Api.Services.Telemetry.UsageDigestService digest,
-            IWebHostEnvironment env,
-            IConfiguration cfg,
-            CancellationToken ct,
-            int days = 30,
-            int topN = 25) =>
-        {
-            var token = http.Request.Headers[Sburson.Shared.Telemetry.UsageDigestGate.AdminTokenHeader].ToString();
-            if (!Sburson.Shared.Telemetry.UsageDigestGate.IsAllowed(env, cfg, token))
-                return Results.NotFound();
-            return Results.Ok(await digest.BuildAsync(days, topN, ct));
         });
 
         // Per-brand monthly-active-install rollup — the billing number for white-label

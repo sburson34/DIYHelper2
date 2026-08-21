@@ -25,6 +25,7 @@ using Sburson.Shared.FeatureFlags;
 using Sburson.Shared.Http;
 using Sburson.Shared.Observability;
 using Sburson.Shared.Storage;
+using Sburson.Shared.Telemetry;
 using Sburson.Shared.Web;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
@@ -125,6 +126,19 @@ builder.Services.AddDbContext<AppDbContext>(DatabaseConfig.Configure);
 
 builder.Services.AddScoped<DIYHelper2.Api.Services.Telemetry.TelemetryIngestService>();
 builder.Services.AddScoped<DIYHelper2.Api.Services.Telemetry.UsageDigestService>();
+
+// v2 cross-app analytics digest (Sburson.Shared.Telemetry, 0.27.0): the shared
+// hook-less provider behind GET /api/admin/usage-digest (mapped near the end of
+// this file via MapSburonAnalyticsDigest, replacing the old local mapping in
+// TelemetryEndpoints). The UsageDigestService registration above remains for
+// the app-specific /api/admin/brand-mau white-label billing rollup.
+// The client tracks exactly two event names today (index.js: app_opened,
+// App.js: screen_viewed), so the funnel is open → engaged-with-a-screen.
+builder.Services.AddSburonAnalyticsDigest<AppDbContext>(new AnalyticsDigestOptions
+{
+    App = "diyhelper",
+    FunnelEventNames = new[] { "app_opened", "screen_viewed" },
+});
 
 // CORS — the mobile app does NOT need CORS (it isn't a browser). CORS only
 // matters when a web origin calls the API. Default to an empty allow-list so
@@ -753,6 +767,13 @@ app.MapCompliance();
 app.MapContent();
 
 app.MapTelemetry();
+
+// Shared v2 analytics digest: GET /api/admin/usage-digest, anonymous +
+// UsageDigestGate (X-Admin-Token; open in Dev/Testing, prod-closed until
+// Telemetry:AllowDigestInProd + Telemetry:AdminToken are configured). The
+// "submit" limiter (tight per-IP fixed window) keeps the token check from
+// being a free guessing oracle.
+app.MapSburonAnalyticsDigest(rateLimitPolicy: "submit");
 
 
 app.Run();
