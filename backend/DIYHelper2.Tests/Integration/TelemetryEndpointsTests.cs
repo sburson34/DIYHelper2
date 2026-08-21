@@ -44,7 +44,7 @@ public class TelemetryEndpointsTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
-    public async Task Digest_ReturnsAggregatedRollup()
+    public async Task Digest_ReturnsVersionedAnalyticsEnvelope_WithUsageRollup()
     {
         var client = _factory.CreateClient();
         var anon = Guid.NewGuid();
@@ -58,10 +58,22 @@ public class TelemetryEndpointsTests : IClassFixture<ApiFactory>
 
         var digest = await client.GetFromJsonAsync<JsonElement>("/api/admin/usage-digest?days=30");
 
-        Assert.True(digest.GetProperty("totalEvents").GetInt64() >= 2);
-        var screens = digest.GetProperty("screens").EnumerateArray()
+        // v2 contract (Sburson.Shared.Telemetry AnalyticsDigest): versioned
+        // envelope with the old flat UsageDigest nested under `usage`.
+        Assert.Equal(2, digest.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("diyhelper", digest.GetProperty("app").GetString());
+
+        var usage = digest.GetProperty("usage");
+        Assert.True(usage.GetProperty("totalEvents").GetInt64() >= 2);
+        var screens = usage.GetProperty("screens").EnumerateArray()
             .Select(s => s.GetProperty("screen").GetString()).ToList();
         Assert.Contains("DigestHome", screens);
+
+        // The configured funnel (app_opened → screen_viewed) is present, in
+        // order, with every step counted.
+        var steps = digest.GetProperty("funnel").GetProperty("steps").EnumerateArray()
+            .Select(s => s.GetProperty("name").GetString()).ToList();
+        Assert.Equal(new[] { "app_opened", "screen_viewed" }, steps);
     }
 
     [Fact]
