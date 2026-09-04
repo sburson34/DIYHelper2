@@ -53,12 +53,52 @@ public static class MediaValidation
             if (string.IsNullOrEmpty(item.Base64))
                 continue;
 
-            if (item.Base64.Length > MaxBase64LengthPerItem)
-                return ApiError.BadRequest(context, "An image exceeds the maximum size of 10 MB.");
-
-            if (!string.IsNullOrEmpty(item.MimeType) && !AllowedMimeTypes.Contains(item.MimeType))
-                return ApiError.BadRequest(context, $"Unsupported image type: {item.MimeType}. Use JPEG, PNG, WebP, or HEIC.");
+            var imageError = ValidateImage(item.Base64, item.MimeType, context);
+            if (imageError != null) return imageError;
         }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Validates one base64 image: size, declared MIME type, that it actually
+    /// decodes, and that its bytes are a supported image container.
+    ///
+    /// <para>The last two checks matter because everything downstream is billed
+    /// per call: without them a caller could ship 10 MB of arbitrary
+    /// (or unparseable) data with <c>mimeType: "image/jpeg"</c> and we would pay a
+    /// vision provider to reject it. Shared by /api/analyze, /api/verify-step,
+    /// /api/diagnose and /api/live-diy/analyze so every entry point applies the
+    /// same rules.</para>
+    /// </summary>
+    public static IResult? ValidateImage(string? base64, string? mimeType, HttpContext context)
+    {
+        if (string.IsNullOrEmpty(base64)) return null;
+
+        if (base64.Length > MaxBase64LengthPerItem)
+            return ApiError.BadRequest(context, "An image exceeds the maximum size of 10 MB.");
+
+        if (!string.IsNullOrEmpty(mimeType) && !AllowedMimeTypes.Contains(mimeType))
+            return ApiError.BadRequest(context, $"Unsupported image type: {mimeType}. Use JPEG, PNG, WebP, or HEIC.");
+
+        byte[] decoded;
+        try
+        {
+            decoded = Convert.FromBase64String(base64);
+        }
+        catch (FormatException)
+        {
+            return ApiError.BadRequest(context, "An image is not valid base64 data.");
+        }
+
+        var detected = ImageSniffer.Detect(decoded);
+        if (detected is null)
+            return ApiError.BadRequest(context,
+                "An attachment is not a readable image. Use a JPEG, PNG, WebP, or HEIC photo.");
+
+        if (!ImageSniffer.Matches(detected, mimeType))
+            return ApiError.BadRequest(context,
+                $"An image's contents ({detected}) don't match its declared type ({mimeType}).");
 
         return null;
     }

@@ -23,6 +23,7 @@ public class AppDbContext : DbContext
     public DbSet<SmsMessage> SmsMessages => Set<SmsMessage>();
     public DbSet<MaintenanceReminder> MaintenanceReminders => Set<MaintenanceReminder>();
     public DbSet<InventoryItem> InventoryItems => Set<InventoryItem>();
+    public DbSet<AiSpendCounter> AiSpendCounters => Set<AiSpendCounter>();
 
     // Anonymous product-usage events (shared schema). See Sburson.Shared.Telemetry.
     public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
@@ -178,5 +179,11 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<InventoryItem>()
             .HasIndex(i => i.Brand)
             .HasDatabaseName("IX_InventoryItems_Brand");
+
+        // One counter row per UTC day; the guard reads and upserts it by that key.
+        modelBuilder.Entity<AiSpendCounter>()
+            .HasIndex(c => c.Day)
+            .IsUnique()
+            .HasDatabaseName("IX_AiSpendCounters_Day");
     }
 }

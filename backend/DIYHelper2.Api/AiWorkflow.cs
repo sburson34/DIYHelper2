@@ -105,15 +105,16 @@ public static class AiWorkflow
     /// <summary>
     /// Extract JSON from a raw AI response (handles markdown code fences).
     /// Logs a warning on parse failure with safe metadata only.
+    ///
+    /// <para>Delegates the slicing to <see cref="JsonExtractor.ExtractObject"/>
+    /// rather than repeating it — this used to carry its own first-<c>{</c> to
+    /// last-<c>}</c> copy, so the two could (and did) disagree about where the
+    /// object ended for the same response.</para>
     /// </summary>
     public static Dictionary<string, JsonElement>? ParseJsonResponse(
         string raw, AiCallContext ctx, ILogger logger)
     {
-        var json = raw;
-        int a = raw.IndexOf('{');
-        int b = raw.LastIndexOf('}');
-        if (a >= 0 && b > a)
-            json = raw.Substring(a, b - a + 1);
+        var json = JsonExtractor.ExtractObject(raw);
 
         try
         {

@@ -557,9 +557,16 @@ const browseCommunityProjects = async (query = ''): Promise<CommunityProject[]> 
 // and breadcrumbs cover the new endpoints too. Failures return sane defaults
 // where that keeps the UI from breaking on a partial outage.
 
+// Mirrors every key GET /api/features returns (FeatureFlags.ToPublicJson on the
+// backend). Keep the two in step: a key missing here reads as undefined on a
+// features-endpoint outage, which is falsy — safe, but it makes the fallback
+// quietly disagree with the server contract instead of failing visibly.
 const FEATURES_FALLBACK = {
   amazonPa: false, attom: false, paintColors: false, claudeFallback: false,
   youtube: false, weather: false, reddit: true, pubchem: true, receiptOcr: false,
+  videoAnalysis: false, aiKillSwitch: false,
+  barcodeScanner: false, imageLabeling: false, onDeviceTranslation: false,
+  digitalInk: false, entityExtraction: false, poseDetection: false,
 };
 
 const getFeatures = async (): Promise<Record<string, boolean>> => {

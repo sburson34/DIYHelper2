@@ -271,12 +271,20 @@ builder.Services.AddSingleton(_ => new Sburson.Shared.Mobile.DeviceQuotaOptions
 });
 builder.Services.AddSingleton<Sburson.Shared.Mobile.DeviceQuotaService>();
 // Process-wide daily backstop on aggregate AI call volume (runaway-spend guard).
+// The counter is mirrored to the DB by AiSpendPersistenceService so a redeploy
+// resumes the day's tally instead of granting a fresh full budget.
 builder.Services.AddSingleton<DIYHelper2.Api.Services.AiSpendGuard>();
+builder.Services.AddHostedService<DIYHelper2.Api.Services.AiSpendPersistenceService>();
 builder.Services.AddSburonEmail(builder.Configuration);
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.RetentionService>();
+// Executes verified deletion requests. Without this, /api/confirm-deletion only
+// marked a row "verified" and no data was ever actually removed — see the
+// service's remarks. Also what finally stamps CompletedAt, which is the field
+// RetentionService uses to age out the deletion receipts themselves.
+builder.Services.AddHostedService<DIYHelper2.Api.Services.DataDeletionExecutionService>();
 // Job-completion side effects (invoice, report email, maintenance, review SMS)
 // + the daily maintenance-reminder sweep.
 builder.Services.AddScoped<DIYHelper2.Api.Services.JobCompletionService>();
@@ -351,10 +359,10 @@ builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
 
-    static string IpKey(HttpContext ctx) =>
-        ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
-        ?? ctx.Connection.RemoteIpAddress?.ToString()
-        ?? "unknown";
+    // Partition on the trusted peer address, NOT the raw X-Forwarded-For header
+    // (which the client controls and could rotate to get a fresh bucket per
+    // request). See Security/ClientIp.cs.
+    static string IpKey(HttpContext ctx) => DIYHelper2.Api.Security.ClientIp.Of(ctx);
 
     options.AddPolicy("ai", httpContext =>
         RateLimitPartition.GetFixedWindowLimiter(IpKey(httpContext), _ => new FixedWindowRateLimiterOptions
@@ -385,6 +393,62 @@ builder.Services.AddRateLimiter(options =>
             QueueLimit = 0,
             AutoReplenishment = true,
         }));
+
+    // "public" covers the read endpoints that fan out to a metered third-party
+    // API (weather, Reddit, PubChem, ATTOM) or do real per-call work. They carry
+    // no user identity, so without a bucket of their own a single client could
+    // burn a partner quota — or our bill — at whatever rate it can open sockets.
+    options.AddPolicy("public", httpContext =>
+        RateLimitPartition.GetFixedWindowLimiter(IpKey(httpContext), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true,
+        }));
+
+    // Backstop ceiling applied to EVERY request, on top of whatever named policy
+    // the endpoint opted into. Named policies are opt-in per route, so any route
+    // that forgets one (or gets added later) would otherwise be completely
+    // unbounded; this makes "no attribute" mean "generous" instead of "infinite".
+    // Deliberately far above real client behaviour — the app's own boot sequence
+    // fires ~10 calls — so it only trips on machine-speed traffic.
+    options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(httpContext =>
+    {
+        // Liveness/readiness probes must never be throttled: a rate-limited
+        // /healthz would make an orchestrator kill a healthy container.
+        var path = httpContext.Request.Path.Value ?? "";
+        if (path is "/healthz" or "/readyz")
+            return RateLimitPartition.GetNoLimiter("probe");
+
+        // No resolvable caller means no meaningful partition — lumping everyone
+        // into one bucket would turn this backstop into a self-inflicted outage.
+        // Kestrel over TCP always has a peer, so this only applies to the
+        // in-memory test host. The named policies still partition "unknown".
+        var key = IpKey(httpContext);
+        if (key == DIYHelper2.Api.Security.ClientIp.Unknown)
+            return RateLimitPartition.GetNoLimiter(key);
+
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = int.TryParse(Environment.GetEnvironmentVariable("GLOBAL_RATE_LIMIT_PER_MINUTE"), out var gl) && gl > 0 ? gl : 300,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+            AutoReplenishment = true,
+        });
+    });
+});
+
+// HSTS policy for the header emitted by app.UseHsts() below. One year is the
+// threshold browsers require for preload eligibility. Subdomains are included
+// because every host under diyhelper.org is HTTPS-only; preload itself is left
+// off, since submitting the domain to the browser preload list is an
+// operator decision that can't easily be undone.
+builder.Services.AddHsts(options =>
+{
+    options.MaxAge = TimeSpan.FromDays(365);
+    options.IncludeSubDomains = true;
+    options.Preload = false;
 });
 
 // Give in-flight requests time to drain on shutdown/redeploy instead of the
@@ -490,6 +554,14 @@ string? appKey = SecretOrEnv("APP_KEY");
 // exposes the admin endpoints.
 string? adminUsername = SecretOrEnv("ADMIN_USERNAME");
 string? adminPassword = SecretOrEnv("ADMIN_PASSWORD");
+
+// Single consolidated check that the protections which depend on a secret being
+// present actually have one. Throws (aborting startup) on anything unsafe or
+// silently broken; logs warnings for degraded-but-safe. No-op in Development.
+DIYHelper2.Api.Security.SecurityPreflight.Run(
+    app.Environment,
+    app.Services.GetRequiredService<ILogger<Program>>(),
+    name => SecretOrEnv(name));
 
 // Postgres connection string. Promoted into the process env var so
 // DatabaseConfig.Configure — which runs lazily on first DbContext resolution —
@@ -647,13 +719,29 @@ if (!app.Environment.IsDevelopment())
     var fhOptions = new ForwardedHeadersOptions
     {
         ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
-        ForwardLimit = 2,
+        // MUST equal the number of reverse proxies actually in front of us — one
+        // (Caddy on the shared EC2 host). The middleware walks X-Forwarded-For
+        // from the right, once per hop; a limit larger than the real hop count
+        // lets a client prepend its own entry and have that become
+        // RemoteIpAddress. Since every per-IP control keys off RemoteIpAddress
+        // (Security/ClientIp.cs), an over-large limit is a rate-limit and
+        // admin-lockout bypass. Raise via env only when a hop is genuinely added
+        // (e.g. putting CloudFront in front of Caddy → 2).
+        ForwardLimit = int.TryParse(Environment.GetEnvironmentVariable("FORWARDED_HEADERS_FORWARD_LIMIT"), out var fl) && fl > 0 ? fl : 1,
     };
     // Clear defaults so we don't restrict to loopback only. EB's nginx proxy
     // forwards from the instance, and the ALB forwards from its private subnet.
     fhOptions.KnownIPNetworks.Clear();
     fhOptions.KnownProxies.Clear();
     app.UseForwardedHeaders(fhOptions);
+
+    // Strict-Transport-Security. The API is HTTPS-only at the edge, but nothing
+    // told a browser that — so the admin dashboard (served from this same origin)
+    // was one plaintext navigation away from a downgrade or cookie/credential
+    // interception. Must come after UseForwardedHeaders: HstsMiddleware only emits
+    // the header on requests it considers secure, which for us depends on
+    // X-Forwarded-Proto having been applied first.
+    app.UseHsts();
 }
 
 // Correlation ID must run before anything that wants to log with it.
@@ -1212,14 +1300,12 @@ app.MapPost("/api/help-requests", [EnableRateLimiting("submit")] async (
     ILogger<Program> logger) =>
 {
     // Reject oversize / malformed image payloads before persisting. Mobile app
-    // compresses to well under 10 MB — anything larger is an abuse signal.
-    if (!string.IsNullOrEmpty(dto.ImageBase64))
-    {
-        if (dto.ImageBase64.Length > MediaValidation.MaxBase64LengthPerItem)
-            return ApiError.BadRequest(context, "Image exceeds maximum size of 10 MB.");
-        try { _ = Convert.FromBase64String(dto.ImageBase64); }
-        catch { return ApiError.BadRequest(context, "imageBase64 is not valid base64."); }
-    }
+    // compresses to well under 10 MB — anything larger is an abuse signal. The
+    // stored blob is later rendered into the owner dashboard as a data: URI, so
+    // also confirm the bytes really are an image (see ImageSniffer).
+    // No declared MIME on this DTO — accept any supported container.
+    var leadImageError = MediaValidation.ValidateImage(dto.ImageBase64, null, context);
+    if (leadImageError != null) return leadImageError;
     if (!string.IsNullOrEmpty(dto.UserDescription) && dto.UserDescription.Length > MediaValidation.MaxDescriptionLength)
         return ApiError.BadRequest(context, $"Description exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
 
@@ -1285,19 +1371,54 @@ static string? BrandScopeOf(HttpContext http)
 // White-label attribution for public customer endpoints: always from the
 // X-Brand header (never the body), lowercased, defaulting to the flagship brand
 // for un-branded builds. Mirrors the inline logic in the booking handler.
-// Guard for the public Twilio webhooks: if TWILIO_WEBHOOK_TOKEN is set, require a
-// matching ?token= (which the operator bakes into the Twilio webhook URL). Unset
-// → allow, so local dev works without configuration.
-static bool WebhookTokenOk(HttpContext http)
+// Guard for the public Twilio webhooks, strongest-first:
+//   1. X-Twilio-Signature verified against TWILIO_AUTH_TOKEN — cryptographic
+//      proof of origin, and what a real Twilio request always carries.
+//   2. Otherwise a shared ?token= (TWILIO_WEBHOOK_TOKEN) the operator bakes into
+//      the webhook URL, compared in constant time. Weaker (it sits in the URL, so
+//      it leaks into proxy logs) but kept for deployments not yet on signatures.
+//   3. Neither configured → allowed in Development only. Production fails closed:
+//      these handlers write DB rows and send SMS on the operator's account, so an
+//      unguarded one is an open relay for toll fraud.
+// Takes the already-read form so the handler and the validator agree on the body
+// (the request stream can only be consumed once).
+static bool TwilioWebhookOk(HttpContext http, IFormCollection form, bool isDevelopment, ILogger logger)
 {
+    var authToken = Environment.GetEnvironmentVariable("TWILIO_AUTH_TOKEN");
+    var signature = http.Request.Headers[DIYHelper2.Api.Integrations.Messaging.TwilioSignature.HeaderName].FirstOrDefault();
+    if (!string.IsNullOrEmpty(authToken) && !string.IsNullOrEmpty(signature))
+    {
+        if (DIYHelper2.Api.Integrations.Messaging.TwilioSignature.IsValid(http.Request, form, signature, authToken))
+            return true;
+        logger.LogWarning("Twilio webhook rejected: {Header} did not verify for {Path}.",
+            DIYHelper2.Api.Integrations.Messaging.TwilioSignature.HeaderName, http.Request.Path);
+        return false;
+    }
+
     var expected = Environment.GetEnvironmentVariable("TWILIO_WEBHOOK_TOKEN");
-    if (string.IsNullOrEmpty(expected)) return true;
-    var provided = http.Request.Query["token"].FirstOrDefault();
-    return !string.IsNullOrEmpty(provided) && provided == expected;
+    if (!string.IsNullOrEmpty(expected))
+    {
+        var provided = http.Request.Query["token"].FirstOrDefault() ?? "";
+        var ok = System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(provided),
+            System.Text.Encoding.UTF8.GetBytes(expected));
+        if (!ok) logger.LogWarning("Twilio webhook rejected: shared token mismatch for {Path}.", http.Request.Path);
+        return ok;
+    }
+
+    if (isDevelopment) return true;
+    logger.LogError(
+        "Twilio webhook rejected: neither TWILIO_AUTH_TOKEN (for signature validation) nor TWILIO_WEBHOOK_TOKEN is configured.");
+    return false;
 }
 
 // Validate a Stripe webhook signature ("Stripe-Signature: t=...,v1=...") by
 // recomputing HMAC-SHA256 over "{t}.{payload}" with the signing secret.
+//
+// The timestamp is part of the signed material, so it can't be edited — but it
+// must also be *checked*, otherwise one legitimately-signed event stays valid
+// forever and can be replayed by anyone who observed it (Stripe's own guidance).
+// Tolerance matches Stripe's default of five minutes.
 static bool StripeSignatureValid(string payload, string? sigHeader, string secret)
 {
     if (string.IsNullOrEmpty(sigHeader)) return false;
@@ -1311,6 +1432,12 @@ static bool StripeSignatureValid(string payload, string? sigHeader, string secre
         else if (kv[0] == "v1") v1s.Add(kv[1]);
     }
     if (t is null || v1s.Count == 0) return false;
+
+    // Replay window. Rejects both stale (observed-and-resent) and implausibly
+    // future-dated timestamps.
+    if (!long.TryParse(t, out var unixSeconds)) return false;
+    var skew = DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+    if (skew > TimeSpan.FromMinutes(5) || skew < TimeSpan.FromMinutes(-5)) return false;
 
     using var h = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(secret));
     var computed = Convert.ToHexString(h.ComputeHash(System.Text.Encoding.UTF8.GetBytes($"{t}.{payload}")))
@@ -1382,8 +1509,15 @@ static string GenerateTechCode()
 
 // Resolve the technician from a request's bearer token (Authorization: Bearer
 // <token>, or X-Tech-Token). Null when absent/invalid/expired → the endpoint 401s.
-static DIYHelper2.Api.Services.TechPrincipal? TechPrincipalOf(
-    HttpContext http, DIYHelper2.Api.Services.TechTokenService tokens)
+//
+// The signature check alone only proves the token was minted by us at some point.
+// It says nothing about whether that technician is still employed — so we also
+// confirm against the live row that they exist, are active, still belong to the
+// brand in the token, and carry the current credential generation. Without this a
+// tech deactivated or deleted in the owner console kept full access to customer
+// names, phones, emails and job photos until their 30-day token lapsed.
+static async Task<DIYHelper2.Api.Services.TechPrincipal?> TechPrincipalOfAsync(
+    HttpContext http, DIYHelper2.Api.Services.TechTokenService tokens, AppDbContext db)
 {
     string? token = null;
     var auth = http.Request.Headers["Authorization"].FirstOrDefault();
@@ -1391,7 +1525,20 @@ static DIYHelper2.Api.Services.TechPrincipal? TechPrincipalOf(
         token = auth.Substring("Bearer ".Length).Trim();
     if (string.IsNullOrEmpty(token))
         token = http.Request.Headers["X-Tech-Token"].FirstOrDefault();
-    return tokens.Validate(token);
+
+    var who = tokens.Validate(token);
+    if (who is null) return null;
+
+    var tech = await db.Technicians
+        .Where(t => t.Id == who.TechId)
+        .Select(t => new { t.Brand, t.IsActive, t.LoginCodeHash })
+        .FirstOrDefaultAsync();
+    if (tech is null || !tech.IsActive) return null;                 // deleted or deactivated
+    if (tech.Brand != who.Brand) return null;                        // moved between brands
+    if (DIYHelper2.Api.Services.TechTokenService.VersionOf(tech.LoginCodeHash) != who.Version)
+        return null;                                                 // login code rotated / cleared
+
+    return who;
 }
 
 // (Job-completion side effects — invoice, report, maintenance, review — now live
@@ -1518,6 +1665,11 @@ app.MapPut("/api/help-requests/{id:int}", async (int id, [FromBody] UpdateHelpRe
     var scope = BrandScopeOf(http);
     if (scope is not null && request.Brand != scope) return Results.NotFound();
 
+    // Reaching "completed" triggers invoicing + customer email/SMS, so the value
+    // that gets there has to be one we recognise (see Validation/JobStatus).
+    if (dto.Status is not null && !JobStatus.IsValid(dto.Status))
+        return ApiError.BadRequest(http, $"Unknown status '{dto.Status}'. Expected one of: {JobStatus.AllowedList}.");
+
     var prevStatus = request.Status;
     if (dto.Status is not null) request.Status = dto.Status;
     if (request.Status == "in_progress" && request.StartedAt is null) request.StartedAt = DateTime.UtcNow;
@@ -1574,31 +1726,52 @@ app.MapDelete("/api/help-requests/{id:int}", async (int id, HttpContext http, Ap
 // which customer features are on, service categories, review link, and whether
 // the paid membership flow is actually available (brand opt-in AND a live
 // payment provider). Lets one binary behave differently per tenant, no rebuild.
-app.MapGet("/api/config", async (
+app.MapGet("/api/config", [EnableRateLimiting("public")] async (
     HttpContext http,
     AppDbContext db,
     DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
 {
     var brandSlug = BrandFromHeader(http);
-    var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug);
+    var brand = await db.Brands.FirstOrDefaultAsync(b => b.Slug == brandSlug && b.IsActive);
 
-    var membershipEffective = (brand?.MembershipEnabled ?? false) && payments.IsConfigured;
+    // Unknown (or inactive) slug → the generic default config, NOT a 404 and not
+    // an empty-but-distinguishable shape. This endpoint takes an arbitrary
+    // X-Brand from any caller, so answering differently for a real slug turns it
+    // into a tenant-enumeration oracle: someone could walk a wordlist and learn
+    // which companies are customers, plus their phone number and review link.
+    // Echoing back the requested slug with stock defaults makes a hit and a miss
+    // indistinguishable while still letting a legitimately-branded build work.
+    if (brand is null)
+    {
+        return Results.Ok(new
+        {
+            brand = brandSlug,
+            companyName = "",
+            phone = (string?)null,
+            reviewUrl = (string?)null,
+            serviceTypes = ParseServiceTypes(null),
+            membershipEnabled = false,
+            features = BuildBrandFeatures(null, false),
+        });
+    }
+
+    var membershipEffective = brand.MembershipEnabled && payments.IsConfigured;
     return Results.Ok(new
     {
         brand = brandSlug,
-        companyName = brand?.CompanyName ?? "",
-        phone = brand?.Phone,
-        reviewUrl = brand?.ReviewUrl,
-        serviceTypes = ParseServiceTypes(brand?.ServiceTypesJson),
+        companyName = brand.CompanyName,
+        phone = brand.Phone,
+        reviewUrl = brand.ReviewUrl,
+        serviceTypes = ParseServiceTypes(brand.ServiceTypesJson),
         membershipEnabled = membershipEffective,
-        features = BuildBrandFeatures(brand?.FeaturesJson, membershipEffective),
+        features = BuildBrandFeatures(brand.FeaturesJson, membershipEffective),
     });
 });
 
 // The customer's own jobs, scoped to their device. No auth/account — the app's
 // per-install X-Device-Id is the key. Projection is deliberately customer-safe
 // (no ImageBase64, no operator Notes, no other customers' rows).
-app.MapGet("/api/my/requests", async (HttpContext http, AppDbContext db) =>
+app.MapGet("/api/my/requests", [EnableRateLimiting("public")] async (HttpContext http, AppDbContext db) =>
 {
     var brandSlug = BrandFromHeader(http);
     var deviceId = http.Request.Headers["X-Device-Id"].FirstOrDefault()?.Trim();
@@ -1820,25 +1993,28 @@ app.MapPost("/api/tech/login", [EnableRateLimiting("submit")] async (
 
     int matchedId = 0;
     string matchedName = "";
+    string? matchedHash = null;
     foreach (var t in techs)
     {
         if (Sburson.Shared.Auth.PasswordHasher.Verify(code, t.LoginCodeHash!) && matchedId == 0)
         {
             matchedId = t.Id;
             matchedName = t.Name;
+            matchedHash = t.LoginCodeHash;
         }
     }
     if (matchedId == 0)
         return Results.Json(new { error = "That code isn't valid.", code = "tech_unauthorized" }, statusCode: 401);
 
-    var token = tokens.Issue(matchedId, brand);
+    // Bind the token to this login code so re-issuing the code revokes it.
+    var token = tokens.Issue(matchedId, brand, matchedHash);
     return Results.Ok(new { token, technicianId = matchedId, name = matchedName });
 });
 
 app.MapGet("/api/tech/jobs", async (
     HttpContext http, AppDbContext db, DIYHelper2.Api.Services.TechTokenService tokens) =>
 {
-    var who = TechPrincipalOf(http, tokens);
+    var who = await TechPrincipalOfAsync(http, tokens, db);
     if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
 
     var jobs = await db.HelpRequests
@@ -1865,7 +2041,7 @@ app.MapGet("/api/tech/jobs", async (
 app.MapGet("/api/tech/jobs/{id:int}", async (
     int id, HttpContext http, AppDbContext db, DIYHelper2.Api.Services.TechTokenService tokens) =>
 {
-    var who = TechPrincipalOf(http, tokens);
+    var who = await TechPrincipalOfAsync(http, tokens, db);
     if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
     var r = await db.HelpRequests.FindAsync(id);
     if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
@@ -1899,7 +2075,7 @@ app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
     DIYHelper2.Api.Services.TechTokenService tokens,
     DIYHelper2.Api.Services.JobCompletionService completion) =>
 {
-    var who = TechPrincipalOf(http, tokens);
+    var who = await TechPrincipalOfAsync(http, tokens, db);
     if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
     var r = await db.HelpRequests.FindAsync(id);
     if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
@@ -1911,6 +2087,12 @@ app.MapPut("/api/tech/jobs/{id:int}", [EnableRateLimiting("submit")] async (
         if (!string.IsNullOrEmpty(img) && img.Length > MediaValidation.MaxBase64LengthPerItem)
             return ApiError.BadRequest(http, "An attached image exceeds the maximum size.");
     }
+
+    // A tech reports progress on their own job; dispatch decisions (schedule,
+    // cancel, reopen) stay with the office. "completed" additionally sets the
+    // invoice/report/review chain running, so it must be a value we recognise.
+    if (dto.Status is not null && !JobStatus.IsValidForTech(dto.Status))
+        return ApiError.BadRequest(http, $"Unknown status '{dto.Status}'. Expected one of: {JobStatus.TechAllowedList}.");
 
     if (dto.Status is not null) r.Status = dto.Status;
     if (r.Status == "in_progress" && r.StartedAt is null) r.StartedAt = DateTime.UtcNow;
@@ -1935,7 +2117,7 @@ app.MapPost("/api/tech/jobs/{id:int}/payment-link", [EnableRateLimiting("submit"
     DIYHelper2.Api.Services.TechTokenService tokens,
     DIYHelper2.Api.Integrations.Billing.IPaymentProvider payments) =>
 {
-    var who = TechPrincipalOf(http, tokens);
+    var who = await TechPrincipalOfAsync(http, tokens, db);
     if (who is null) return Results.Json(new { error = "Sign in required.", code = "tech_unauthorized" }, statusCode: 401);
     var r = await db.HelpRequests.FindAsync(id);
     if (r is null || r.Brand != who.Brand || r.AssignedTechId != who.TechId) return Results.NotFound();
@@ -2161,14 +2343,16 @@ app.MapGet("/api/help-requests/{id:int}/messages", async (int id, HttpContext ht
 });
 
 // ── Twilio webhooks (PUBLIC — /api/sms/ is AppKey-exempt) ─────────────────
-// Guarded by an optional shared token (TWILIO_WEBHOOK_TOKEN) since Twilio can't
-// send X-App-Key. Twilio POSTs form-encoded; the brand is resolved from the
-// receiving number (each brand has its own SmsFromNumber).
+// Twilio can't send X-App-Key, so origin is proven by its own request signature
+// (see TwilioWebhookOk / TwilioSignature). Twilio POSTs form-encoded; the brand
+// is resolved from the receiving number (each brand has its own SmsFromNumber).
 app.MapPost("/api/sms/incoming", async (HttpContext http, AppDbContext db,
-    DIYHelper2.Api.Services.MessagingService messaging) =>
+    DIYHelper2.Api.Services.MessagingService messaging, ILogger<Program> logger) =>
 {
-    if (!WebhookTokenOk(http)) return Results.Unauthorized();
+    // Body first — signature validation covers the POST parameters, and the
+    // request stream can only be read once.
     var form = await http.Request.ReadFormAsync();
+    if (!TwilioWebhookOk(http, form, app.Environment.IsDevelopment(), logger)) return Results.Unauthorized();
     var from = form["From"].FirstOrDefault() ?? "";
     var to = form["To"].FirstOrDefault() ?? "";
     var body = form["Body"].FirstOrDefault() ?? "";
@@ -2179,10 +2363,10 @@ app.MapPost("/api/sms/incoming", async (HttpContext http, AppDbContext db,
 });
 
 app.MapPost("/api/sms/voice", async (HttpContext http, AppDbContext db,
-    DIYHelper2.Api.Services.MessagingService messaging) =>
+    DIYHelper2.Api.Services.MessagingService messaging, ILogger<Program> logger) =>
 {
-    if (!WebhookTokenOk(http)) return Results.Unauthorized();
     var form = await http.Request.ReadFormAsync();
+    if (!TwilioWebhookOk(http, form, app.Environment.IsDevelopment(), logger)) return Results.Unauthorized();
     var from = form["From"].FirstOrDefault() ?? "";
     var to = form["To"].FirstOrDefault() ?? "";
     var brand = await db.Brands.FirstOrDefaultAsync(b => b.SmsFromNumber == to);
@@ -2256,15 +2440,29 @@ app.MapPut("/api/help-requests/{id:int}/payment-link", async (
     return Results.Ok(new { available = true, url = result.CheckoutUrl });
 });
 
-// Stripe payment webhook (PUBLIC — /api/stripe/ is AppKey-exempt). Signature-
-// validated when STRIPE_WEBHOOK_SECRET is set; marks the job paid on success.
+// Stripe payment webhook (PUBLIC — /api/stripe/ is AppKey-exempt). Marks the job
+// paid on a completed checkout, so an unauthenticated caller who could forge one
+// would get free work: signature validation is mandatory outside Development.
 app.MapPost("/api/stripe/webhook", async (HttpContext http, AppDbContext db, ILogger<Program> logger) =>
 {
     using var reader = new StreamReader(http.Request.Body);
     var payload = await reader.ReadToEndAsync();
 
     var secret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET");
-    if (!string.IsNullOrEmpty(secret))
+    if (string.IsNullOrEmpty(secret))
+    {
+        // Fail CLOSED. Previously a missing secret skipped verification entirely,
+        // which meant a single unset env var silently turned "mark this job paid"
+        // into an open endpoint. Dev keeps the old behaviour so local testing with
+        // the Stripe CLI (or a hand-rolled curl) still works.
+        if (!app.Environment.IsDevelopment())
+        {
+            logger.LogError("Stripe webhook rejected: STRIPE_WEBHOOK_SECRET is not configured, so events cannot be verified.");
+            return Results.Json(new { error = "Webhook verification is not configured.", code = "webhook_unverifiable" }, statusCode: 503);
+        }
+        logger.LogWarning("Stripe webhook accepted UNVERIFIED (Development only — STRIPE_WEBHOOK_SECRET unset).");
+    }
+    else
     {
         var sig = http.Request.Headers["Stripe-Signature"].FirstOrDefault();
         if (!StripeSignatureValid(payload, sig, secret)) return Results.Unauthorized();
@@ -3029,8 +3227,10 @@ app.MapPost("/api/delete-user-data", async (
 
     var correlationId = context.Items["CorrelationId"] as string;
     var appVersion = context.Request.Headers["X-App-Version"].ToString();
-    var clientIp = context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
-                   ?? context.Connection.RemoteIpAddress?.ToString();
+    // Trusted peer address — the per-IP deletion throttle below is only
+    // meaningful if the key can't be rotated by the caller (Security/ClientIp.cs).
+    var clientIp = DIYHelper2.Api.Security.ClientIp.Of(context);
+    if (clientIp == DIYHelper2.Api.Security.ClientIp.Unknown) clientIp = null;
 
     const int PerEmailPerDay = 3;
     const int PerIpPerDay = 20;
@@ -3198,6 +3398,10 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
 
     if (!quota.TryConsume(DeviceQuotaService.DeviceKey(context), out _))
         return ApiError.Response(context, 429, "Daily AI usage limit reached. Try again tomorrow.", "daily_quota_exceeded");
+
+    // Size + real-container check before anything is billed (see ImageSniffer).
+    var stepImageError = MediaValidation.ValidateImage(req.Base64Image, req.MimeType, context);
+    if (stepImageError != null) return stepImageError;
 
     var modResult = await moderation.CheckAsync(req.StepText);
     if (!modResult.IsAllowed)
@@ -3464,8 +3668,9 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
         return ApiError.BadRequest(context, $"Task description exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
     if (!string.IsNullOrEmpty(request.UserQuestion) && request.UserQuestion.Length > MediaValidation.MaxDescriptionLength)
         return ApiError.BadRequest(context, $"Question exceeds maximum length of {MediaValidation.MaxDescriptionLength} characters.");
-    if (!string.IsNullOrEmpty(request.ImageBase64) && request.ImageBase64.Length > MediaValidation.MaxBase64LengthPerItem)
-        return ApiError.BadRequest(context, "Image exceeds maximum size of 10 MB.");
+    // Size + real-container check before anything is billed (see ImageSniffer).
+    var frameError = MediaValidation.ValidateImage(request.ImageBase64, request.MimeType, context);
+    if (frameError != null) return frameError;
 
     // Moderate the description AND the question — both can carry hostile content.
     var modText = string.Join("\n", new[] { request.TaskDescription, request.UserQuestion }
@@ -3543,15 +3748,20 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
 });
 
 // ── #18 community projects (in-memory; replace with DB if persistent) ──
-app.MapPost("/api/community-projects", [EnableRateLimiting("submit")] ([FromBody] CommunityProjectDto dto) =>
+app.MapPost("/api/community-projects", [EnableRateLimiting("submit")] ([FromBody] CommunityProjectDto dto, HttpContext context) =>
 {
+    // The feed lives in process memory, so an unbounded post is a memory-
+    // exhaustion path (see UgcValidation).
+    var ugcError = UgcValidation.ValidateCommunityProject(dto, context);
+    if (ugcError != null) return ugcError;
+
     var entry = dto with { Id = Guid.NewGuid().ToString(), CreatedAt = DateTime.UtcNow };
     communityProjects.Enqueue(entry);
     while (communityProjects.Count > CommunityProjectsMax && communityProjects.TryDequeue(out _)) { }
     return Results.Created($"/api/community-projects/{entry.Id}", entry);
 });
 
-app.MapGet("/api/community-projects", ([FromQuery] string? q) =>
+app.MapGet("/api/community-projects", [EnableRateLimiting("public")] ([FromQuery] string? q) =>
 {
     // Snapshot newest-first.
     IEnumerable<CommunityProjectDto> results = communityProjects.Reverse();
@@ -3566,22 +3776,28 @@ app.MapGet("/api/community-projects", ([FromQuery] string? q) =>
 });
 
 // ── Beta feedback ─────────────────────────────────────────────────
-app.MapPost("/api/feedback", [EnableRateLimiting("submit")] async ([FromBody] CreateFeedbackDto dto, AppDbContext db) =>
+app.MapPost("/api/feedback", [EnableRateLimiting("submit")] async ([FromBody] CreateFeedbackDto dto, HttpContext context, AppDbContext db) =>
 {
+    // Anonymous writes straight to Postgres — bound them (see UgcValidation).
+    var feedbackError = UgcValidation.ValidateFeedback(dto, context);
+    if (feedbackError != null) return feedbackError;
+
     var feedback = new BetaFeedback
     {
         ClientId = dto.Id ?? "",
         Description = dto.Description ?? "",
         WhatYouWereDoing = dto.WhatYouWereDoing,
         ReproSteps = dto.ReproSteps,
-        AppVersion = dto.Metadata?.AppVersion,
-        BuildNumber = dto.Metadata?.BuildNumber,
-        Platform = dto.Metadata?.Platform,
-        OsVersion = dto.Metadata?.OsVersion,
-        Environment = dto.Metadata?.Environment,
-        GitCommit = dto.Metadata?.GitCommit,
-        CurrentScreen = dto.Metadata?.CurrentScreen,
-        CorrelationId = dto.Metadata?.LastCorrelationId,
+        // Machine-generated diagnostics: clamp rather than reject, so a client
+        // sending a bloated field never costs the user their bug report.
+        AppVersion = UgcValidation.ClampMetadata(dto.Metadata?.AppVersion),
+        BuildNumber = UgcValidation.ClampMetadata(dto.Metadata?.BuildNumber),
+        Platform = UgcValidation.ClampMetadata(dto.Metadata?.Platform),
+        OsVersion = UgcValidation.ClampMetadata(dto.Metadata?.OsVersion),
+        Environment = UgcValidation.ClampMetadata(dto.Metadata?.Environment),
+        GitCommit = UgcValidation.ClampMetadata(dto.Metadata?.GitCommit),
+        CurrentScreen = UgcValidation.ClampMetadata(dto.Metadata?.CurrentScreen),
+        CorrelationId = UgcValidation.ClampMetadata(dto.Metadata?.LastCorrelationId),
         CreatedAt = DateTime.UtcNow,
     };
     db.BetaFeedback.Add(feedback);
@@ -3627,7 +3843,7 @@ app.MapGet("/api/emergency", () =>
 app.MapGet("/api/features", (FeatureFlags flags) => Results.Ok(flags.ToPublicJson()));
 
 // ── Weather forecast for an outdoor project ────────────────────────
-app.MapGet("/api/weather", async ([FromQuery] string zip, [FromQuery] int? days, WeatherClient weather) =>
+app.MapGet("/api/weather", [EnableRateLimiting("public")] async ([FromQuery] string zip, [FromQuery] int? days, WeatherClient weather) =>
 {
     if (string.IsNullOrWhiteSpace(zip))
         return Results.Json(new { error = "zip query parameter is required." }, statusCode: 400);
@@ -3640,7 +3856,7 @@ app.MapGet("/api/weather", async ([FromQuery] string zip, [FromQuery] int? days,
 });
 
 // ── Reddit community discussions ───────────────────────────────────
-app.MapGet("/api/reddit-discussions", async ([FromQuery] string query, RedditClient reddit) =>
+app.MapGet("/api/reddit-discussions", [EnableRateLimiting("public")] async ([FromQuery] string query, RedditClient reddit) =>
 {
     if (string.IsNullOrWhiteSpace(query))
         return Results.Json(new { error = "query parameter is required." }, statusCode: 400);
@@ -3649,7 +3865,7 @@ app.MapGet("/api/reddit-discussions", async ([FromQuery] string query, RedditCli
 });
 
 // ── PubChem safety data for a single chemical ──────────────────────
-app.MapGet("/api/safety-data", async ([FromQuery] string chemical, PubChemClient pubChem) =>
+app.MapGet("/api/safety-data", [EnableRateLimiting("public")] async ([FromQuery] string chemical, PubChemClient pubChem) =>
 {
     if (string.IsNullOrWhiteSpace(chemical))
         return Results.Json(new { error = "chemical parameter is required." }, statusCode: 400);
@@ -3668,7 +3884,7 @@ app.MapGet("/api/safety-data", async ([FromQuery] string chemical, PubChemClient
 });
 
 // ── Property-value impact (ATTOM or static fallback) ───────────────
-app.MapGet("/api/property-value-impact", async (
+app.MapGet("/api/property-value-impact", [EnableRateLimiting("public")] async (
     [FromQuery] string? zip,
     [FromQuery] string repairType,
     [FromQuery] double estimatedCost,
@@ -3690,17 +3906,17 @@ app.MapGet("/api/property-value-impact", async (
 });
 
 // ── Receipt OCR (Mindee) ───────────────────────────────────────────
-app.MapPost("/api/receipt-ocr", [EnableRateLimiting("ai")] async ([FromBody] ReceiptOcrRequest req, ReceiptOcrClient ocr) =>
+app.MapPost("/api/receipt-ocr", [EnableRateLimiting("ai")] async ([FromBody] ReceiptOcrRequest req, HttpContext http, ReceiptOcrClient ocr) =>
 {
     if (!ocr.IsConfigured)
         return Results.Json(new { error = "Receipt OCR not configured." }, statusCode: 503);
     if (string.IsNullOrWhiteSpace(req.Base64Image))
         return Results.Json(new { error = "base64Image is required." }, statusCode: 400);
-    if (req.Base64Image.Length > MediaValidation.MaxBase64LengthPerItem)
-        return Results.Json(new { error = "Image exceeds maximum size of 10 MB." }, statusCode: 400);
-    byte[] data;
-    try { data = Convert.FromBase64String(req.Base64Image); }
-    catch { return Results.Json(new { error = "base64Image is not valid base64." }, statusCode: 400); }
+    // Mindee bills per page, so reject non-images here rather than paying to have
+    // them rejected upstream (see ImageSniffer).
+    var receiptError = MediaValidation.ValidateImage(req.Base64Image, req.MimeType, http);
+    if (receiptError != null) return receiptError;
+    var data = Convert.FromBase64String(req.Base64Image);
 
     var parsed = await ocr.ParseAsync(data, req.MimeType ?? "image/jpeg");
     if (parsed is null)
@@ -3715,15 +3931,13 @@ app.MapPost("/api/receipt-ocr", [EnableRateLimiting("ai")] async ([FromBody] Rec
 });
 
 // ── Paint color match ──────────────────────────────────────────────
-app.MapPost("/api/paint-color-match", ([FromBody] PaintColorRequest req, PaintColorClient paint, FeatureFlags features) =>
+app.MapPost("/api/paint-color-match", [EnableRateLimiting("public")] ([FromBody] PaintColorRequest req, HttpContext http, PaintColorClient paint, FeatureFlags features) =>
 {
     if (string.IsNullOrWhiteSpace(req.Base64Image))
         return Results.Json(new { error = "base64Image is required." }, statusCode: 400);
-    if (req.Base64Image.Length > MediaValidation.MaxBase64LengthPerItem)
-        return Results.Json(new { error = "Image exceeds maximum size of 10 MB." }, statusCode: 400);
-    byte[] data;
-    try { data = Convert.FromBase64String(req.Base64Image); }
-    catch { return Results.Json(new { error = "base64Image is not valid base64." }, statusCode: 400); }
+    var paintError = MediaValidation.ValidateImage(req.Base64Image, req.MimeType, http);
+    if (paintError != null) return paintError;
+    var data = Convert.FromBase64String(req.Base64Image);
 
     var result = paint.Match(data);
     return Results.Ok(new
@@ -3833,7 +4047,7 @@ app.MapPost("/api/translate", [EnableRateLimiting("translate")] async ([FromBody
 // The digest is an operator tool gated by Sburson.Shared.Telemetry.UsageDigestGate
 // (open in Dev/Testing; in prod needs Telemetry:AllowDigestInProd + a matching
 // X-Admin-Token header).
-app.MapPost("/api/telemetry/events", async (
+app.MapPost("/api/telemetry/events", [EnableRateLimiting("public")] async (
     HttpContext http,
     Sburson.Shared.Telemetry.TelemetryBatchDto? body,
     DIYHelper2.Api.Services.Telemetry.TelemetryIngestService ingest,

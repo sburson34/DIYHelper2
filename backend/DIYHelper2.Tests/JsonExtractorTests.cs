@@ -72,4 +72,57 @@ public class JsonExtractorTests
         Assert.NotNull(result);
         Assert.Equal(42, result.Value.GetProperty("key").GetInt32());
     }
+
+    // ── Brace-depth scanning (replaced the old first-{ to last-} slice) ────
+
+    [Fact]
+    public void ExtractObject_StopsAtTheObjectEnd_NotAtTrailingProse()
+    {
+        // The old slice ran to the LAST '}' in the whole response, so any
+        // commentary after the object that contained a brace got glued on and the
+        // parse failed.
+        var raw = "{\"title\":\"Fix sink\"}\n\nLet me know if that works :}";
+        Assert.Equal("{\"title\":\"Fix sink\"}", JsonExtractor.ExtractObject(raw));
+        Assert.NotNull(JsonExtractor.TryParseObject(raw));
+    }
+
+    [Fact]
+    public void ExtractObject_IgnoresBracesInsideStringValues()
+    {
+        // A DIY guide legitimately says things like "use a 1/2\" fitting }".
+        var raw = "prose {\"summary\":\"tighten the } fitting\",\"n\":1} more prose";
+        var extracted = JsonExtractor.ExtractObject(raw);
+        Assert.Equal("{\"summary\":\"tighten the } fitting\",\"n\":1}", extracted);
+
+        var parsed = JsonExtractor.TryParseObject(raw);
+        Assert.NotNull(parsed);
+        Assert.Equal("tighten the } fitting", parsed.Value.GetProperty("summary").GetString());
+    }
+
+    [Fact]
+    public void ExtractObject_HandlesEscapedQuotesBeforeABrace()
+    {
+        // The escaped quote must not be read as closing the string, or the brace
+        // that follows would be counted as structure.
+        var raw = "{\"note\":\"a 1/2\\\" gap }\",\"ok\":true}";
+        var parsed = JsonExtractor.TryParseObject(raw);
+        Assert.NotNull(parsed);
+        Assert.True(parsed.Value.GetProperty("ok").GetBoolean());
+    }
+
+    [Fact]
+    public void ExtractObject_TakesTheFirstCompleteObject_WhenTwoAreReturned()
+    {
+        var raw = "{\"a\":1}\n{\"b\":2}";
+        Assert.Equal("{\"a\":1}", JsonExtractor.ExtractObject(raw));
+    }
+
+    [Fact]
+    public void ExtractObject_FallsBackToWidestSlice_WhenBracesNeverBalance()
+    {
+        // Truncated completion: no closing brace for the outer object. Returning
+        // the best-effort slice keeps the old behaviour for a salvageable case.
+        var raw = "{\"a\": {\"b\": 1}";
+        Assert.Equal("{\"a\": {\"b\": 1}", JsonExtractor.ExtractObject(raw));
+    }
 }

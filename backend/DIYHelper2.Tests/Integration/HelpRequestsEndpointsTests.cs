@@ -56,16 +56,20 @@ public class HelpRequestsEndpointsTests : IClassFixture<ApiFactory>
         var list = await listResp.Content.ReadAsStringAsync();
         Assert.Contains("alice@example.com", list);
 
-        // UPDATE — move to 'contacted' with a note
-        var updatePayload = new { status = "contacted", notes = "Called back." };
+        // UPDATE — move to 'scheduled' with a note.
+        // Was 'contacted', a status left over from an older lead flow: the
+        // dashboard's picker (JOB_STATUSES in wwwroot/admin/app.js) can't produce
+        // it and nothing reads it, so it is no longer an accepted value — see
+        // Validation/JobStatus, which now closes this column to a known set.
+        var updatePayload = new { status = "scheduled", notes = "Called back." };
         var updateResp = await client.PutAsJsonAsync($"/api/help-requests/{id}", updatePayload);
         Assert.Equal(HttpStatusCode.OK, updateResp.StatusCode);
         var updated = await updateResp.Content.ReadAsStringAsync();
-        Assert.Contains("\"status\":\"contacted\"", updated);
+        Assert.Contains("\"status\":\"scheduled\"", updated);
         Assert.Contains("\"notes\":\"Called back.\"", updated);
 
         // FILTER
-        var filteredResp = await client.GetAsync("/api/help-requests?status=contacted");
+        var filteredResp = await client.GetAsync("/api/help-requests?status=scheduled");
         Assert.Equal(HttpStatusCode.OK, filteredResp.StatusCode);
         var filtered = await filteredResp.Content.ReadAsStringAsync();
         Assert.Contains("alice@example.com", filtered);
