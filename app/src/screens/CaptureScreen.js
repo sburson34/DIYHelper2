@@ -21,10 +21,17 @@ import ExtractedEntitiesBar from '../components/ExtractedEntitiesBar';
 import { getUserProfile, saveLocalHelpRequest, getMostRecentProject } from '../utils/storage';
 import { subscribeReset } from '../utils/captureBus';
 import { useTranslation } from '../i18n/I18nContext';
+import { useFeatures } from '../config/features';
 import theme from '../theme';
+
+// Mirrors MediaValidation.MaxMediaItems on the backend, which rejects the whole
+// analyze call with a 400 past this count. Enforcing it here turns "your 4th
+// photo silently cost you the request" into a button that simply stops.
+const MAX_MEDIA_ITEMS = 3;
 
 export default function CaptureScreen({ navigation, route }) {
   const { t, language } = useTranslation();
+  const features = useFeatures();
   const [description, setDescription] = useState('');
   const [media, setMedia] = useState([]);
   const [isRecording, setIsRecording] = useState(false);
@@ -126,7 +133,13 @@ export default function CaptureScreen({ navigation, route }) {
     }
   }, [route.params?.existingProject]);
 
+  const mediaFull = media.length >= MAX_MEDIA_ITEMS;
+
   const takePhoto = async () => {
+    if (mediaFull) {
+      Alert.alert(t('media_limit_title'), t('media_limit_msg'));
+      return;
+    }
     if (!cameraPermission?.granted) {
       const { granted } = await requestCameraPermission();
       if (!granted) {
@@ -148,8 +161,18 @@ export default function CaptureScreen({ navigation, route }) {
         mimeType: 'image/jpeg',
         labels: [],
       };
-      setMedia((prev) => [...prev, mediaItem]);
+      // Re-check inside the setter: the camera stays open between shots, so this
+      // is the point where a rapid double-tap could push us over the limit.
+      let accepted = true;
+      setMedia((prev) => {
+        if (prev.length >= MAX_MEDIA_ITEMS) { accepted = false; return prev; }
+        return [...prev, mediaItem];
+      });
       setShowCamera(false);
+      if (!accepted) {
+        Alert.alert(t('media_limit_title'), t('media_limit_msg'));
+        return;
+      }
       // Run ML Kit image labeling in background (non-blocking)
       labelImage(photo.base64).then((labels) => {
         if (labels.length > 0) {
@@ -164,6 +187,10 @@ export default function CaptureScreen({ navigation, route }) {
   };
 
   const recordVideo = async () => {
+    if (mediaFull) {
+      Alert.alert(t('media_limit_title'), t('media_limit_msg'));
+      return;
+    }
     if (!cameraPermission?.granted) {
       const { granted } = await requestCameraPermission();
       if (!granted) {
@@ -376,20 +403,42 @@ export default function CaptureScreen({ navigation, route }) {
           </View>
 
           <View style={styles.mediaGrid}>
-            <TouchableOpacity style={styles.mediaCard} onPress={takePhoto} accessibilityLabel="Take a photo of your repair issue" accessibilityRole="button">
+            <TouchableOpacity
+              style={[styles.mediaCard, mediaFull && styles.disabledButton]}
+              onPress={takePhoto}
+              disabled={mediaFull}
+              accessibilityLabel="Take a photo of your repair issue"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: mediaFull }}
+            >
               <View style={[styles.iconCircle, { backgroundColor: '#FEF3C7' }]}>
                 <Icon name="camera" size={28} color="#D97706" />
               </View>
               <Text style={styles.mediaLabel}>{t('take_photo')}</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.mediaCard} onPress={recordVideo} accessibilityLabel="Record a video of your repair issue" accessibilityRole="button">
-              <View style={[styles.iconCircle, { backgroundColor: '#FEF3C7' }]}>
-                <Icon name="videocam" size={28} color="#D97706" />
-              </View>
-              <Text style={styles.mediaLabel}>{t('record_video')}</Text>
-            </TouchableOpacity>
+            {/* Video only when the backend can actually do something with it —
+                otherwise every analyze with a clip comes back 400. */}
+            {features.videoAnalysis && (
+              <TouchableOpacity
+                style={[styles.mediaCard, mediaFull && styles.disabledButton]}
+                onPress={recordVideo}
+                disabled={mediaFull}
+                accessibilityLabel="Record a video of your repair issue"
+                accessibilityRole="button"
+                accessibilityState={{ disabled: mediaFull }}
+              >
+                <View style={[styles.iconCircle, { backgroundColor: '#FEF3C7' }]}>
+                  <Icon name="videocam" size={28} color="#D97706" />
+                </View>
+                <Text style={styles.mediaLabel}>{t('record_video')}</Text>
+              </TouchableOpacity>
+            )}
           </View>
+
+          {mediaFull && (
+            <Text style={styles.mediaLimitHint}>{t('media_limit_msg')}</Text>
+          )}
 
           {media.length > 0 && (
             <View style={styles.previewSection}>
@@ -668,6 +717,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: '#334155', // slate-700
+  },
+  mediaLimitHint: {
+    fontSize: 12,
+    color: '#64748B', // slate-500
+    textAlign: 'center',
+    marginTop: 8,
   },
   previewSection: {
     marginTop: 8,

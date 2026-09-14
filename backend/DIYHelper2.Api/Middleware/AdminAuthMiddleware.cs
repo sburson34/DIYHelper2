@@ -171,13 +171,13 @@ public class AdminAuthMiddleware
         });
     }
 
-    private static string ClientIp(HttpContext context) =>
-        context.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',').FirstOrDefault()?.Trim()
-        ?? context.Connection.RemoteIpAddress?.ToString()
-        ?? "unknown";
+    // Trusted peer address (see Security/ClientIp.cs). Reading the raw
+    // X-Forwarded-For here would let an attacker defeat the lockout entirely by
+    // sending a different fake IP on every guess.
+    private static string ClientIp(HttpContext context) => Security.ClientIp.Of(context);
 
     private static bool IsLockedOut(string ip) =>
-        ip != "unknown"
+        ip != Security.ClientIp.Unknown
         && _attempts.TryGetValue(ip, out var rec)
         && rec.LockedUntil is { } until
         && until > DateTime.UtcNow;
@@ -185,8 +185,8 @@ public class AdminAuthMiddleware
     private static void RegisterFailure(string ip)
     {
         // No resolvable client IP (in-memory test host) → nothing to throttle by.
-        // In production the ALB always sets X-Forwarded-For / RemoteIpAddress.
-        if (ip == "unknown") return;
+        // In production Kestrel always has a socket peer.
+        if (ip == Security.ClientIp.Unknown) return;
         var rec = _attempts.GetOrAdd(ip, _ => new AttemptRecord { WindowStart = DateTime.UtcNow });
         lock (rec)
         {
@@ -210,6 +210,16 @@ public class AdminAuthMiddleware
         var path = req.Path.Value ?? "";
 
         if (path.StartsWith("/admin", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        // Operator telemetry surfaces (/api/admin/usage-digest, /api/admin/brand-mau).
+        // These carry their own check (Sburson.Shared.Telemetry.UsageDigestGate, an
+        // X-Admin-Token compared against config) but were not behind this gate at
+        // all — the "/admin" prefix above does not match "/api/admin". They expose
+        // whole-fleet usage and per-brand billing counts, so put them behind the
+        // same Basic Auth as every other operator surface and let the token gate be
+        // the second layer rather than the only one.
+        if (path.StartsWith("/api/admin", StringComparison.OrdinalIgnoreCase))
             return true;
 
         // Admin-only /api/help-requests operations: list (GET), detail (GET),

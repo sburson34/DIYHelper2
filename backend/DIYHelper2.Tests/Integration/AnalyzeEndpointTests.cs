@@ -67,9 +67,10 @@ public class AnalyzeEndpointTests : IClassFixture<ApiFactory>, IAsyncLifetime
     {
         var client = _factory.CreateClient();
 
-        // A tiny base64 image is enough — we don't actually decode it meaningfully,
-        // the handler just forwards bytes to the (fake) AI client.
-        var imageBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 }; // JPEG magic
+        // A tiny base64 image is enough — the handler validates the container then
+        // forwards the bytes to the (fake) AI client. It must be a real JPEG header:
+        // ImageSniffer rejects anything it can't identify.
+        var imageBytes = TestImages.Jpeg();
         var payload = new
         {
             description = "kitchen faucet drips from spout base",

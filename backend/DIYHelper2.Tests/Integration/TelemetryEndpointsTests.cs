@@ -56,7 +56,10 @@ public class TelemetryEndpointsTests : IClassFixture<ApiFactory>
         });
         await client.PostAsJsonAsync("/api/telemetry/events", batch);
 
-        var digest = await client.GetFromJsonAsync<JsonElement>("/api/admin/usage-digest?days=30");
+        // /api/admin/* is Basic-Auth gated (AdminAuthMiddleware) on top of the
+        // telemetry token gate, so the operator client is required to read it.
+        var digest = await _factory.CreateAdminClient()
+            .GetFromJsonAsync<JsonElement>("/api/admin/usage-digest?days=30");
 
         Assert.True(digest.GetProperty("totalEvents").GetInt64() >= 2);
         var screens = digest.GetProperty("screens").EnumerateArray()
@@ -131,7 +134,8 @@ public class TelemetryEndpointsTests : IClassFixture<ApiFactory>
         await Post(anonA, "screen_viewed");
         await Post(anonB, "app_opened");
 
-        var rows = await client.GetFromJsonAsync<JsonElement>("/api/admin/brand-mau?days=30");
+        var rows = await _factory.CreateAdminClient()
+            .GetFromJsonAsync<JsonElement>("/api/admin/brand-mau?days=30");
         var mine = rows.EnumerateArray().Single(r => r.GetProperty("brand").GetString() == brand);
 
         Assert.Equal(2, mine.GetProperty("activeInstalls").GetInt32()); // distinct installs

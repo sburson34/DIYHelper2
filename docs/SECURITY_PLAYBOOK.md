@@ -11,7 +11,16 @@ Operational runbook for security incidents, cost runaway events, and the rotatio
 
 | Layer | Location | Toggle |
 | --- | --- | --- |
-| Per-IP rate limiter (fixed window) | `Program.cs` — `AddRateLimiter` | hardcoded |
+| Per-IP rate limiter (fixed window) | `Program.cs` — `AddRateLimiter`. Buckets: `ai` 20/min, `translate` 120/min, `submit` 10/min, `public` 60/min, plus a `GlobalLimiter` backstop on every route so an endpoint without an explicit policy is still bounded. | `GLOBAL_RATE_LIMIT_PER_MINUTE` (default 300) |
+| Trusted client-IP resolution | `Security/ClientIp.cs` + `ForwardLimit` on `UseForwardedHeaders`. Every per-IP control (rate limiter, admin lockout, deletion throttle) keys off the connection peer resolved by `ForwardedHeadersMiddleware`, never the raw `X-Forwarded-For` header — which the caller controls. | `FORWARDED_HEADERS_FORWARD_LIMIT` (default 1 = one proxy, Caddy). **Raise only when a hop is genuinely added; too high re-opens header spoofing.** |
+| Image content sniffing | `Validation/ImageSniffer.cs`, applied via `MediaValidation.ValidateImage` on every image entry point | always on — rejects payloads whose bytes aren't a JPEG/PNG/WebP/HEIC before any metered AI/OCR call |
+| Bounded anonymous writes | `Validation/UgcValidation.cs` (`/api/community-projects`, `/api/feedback`) | always on |
+| Tech-token revocation | `Services/TechTokenService.VersionOf` + `TechPrincipalOfAsync` in `Program.cs` | always on — deactivating/deleting a technician or re-issuing their login code invalidates outstanding bearer tokens immediately |
+| Stripe webhook verification | `/api/stripe/webhook` — HMAC-SHA256 with a 5-minute timestamp tolerance (replay protection) | `STRIPE_WEBHOOK_SECRET`. **Fails closed outside Development**: unset ⇒ 503, and the boot preflight refuses to start if Stripe is otherwise live. |
+| Twilio webhook verification | `Integrations/Messaging/TwilioSignature.cs` — HMAC-SHA1 over URL + sorted POST params | `TWILIO_AUTH_TOKEN` (preferred) or `TWILIO_WEBHOOK_TOKEN` (shared `?token=`, weaker). Fails closed outside Development. Set `TWILIO_WEBHOOK_BASE_URL` if a proxy rewrites the host. |
+| Boot-time security preflight | `Security/SecurityPreflight.cs` | always on outside Development — one consolidated report; fatal entries abort startup |
+| HSTS | `app.UseHsts()` (non-Development only), 1 year, `includeSubDomains`, no preload | always on in deployed environments |
+| Dependency vulnerability gate | `backend/Directory.Build.props` — `NuGetAudit` with `NU1903`/`NU1904` as errors | always on; high/critical advisories fail the build |
 | Per-device daily AI quota | `Services/DeviceQuotaService.cs` | `DAILY_DEVICE_AI_LIMIT` env (default 60) |
 | Per-user AI cost quota (USD) | `Services/DeviceQuotaService.cs` | `DAILY_DEVICE_AI_LIMIT` env; thread-safe counter |
 | OpenAI moderation pre-check | `AI/ModerationService.cs` | on when `OPENAI_API_KEY` set |
@@ -19,6 +28,7 @@ Operational runbook for security incidents, cost runaway events, and the rotatio
 | Prompt-injection guard (user input wrapping) | `Validation/PromptSanitizer.cs` — `PromptSanitizer.Wrap` | always on; every AI endpoint wraps free-text fields in `<user_input>` tags and strips the tag from the payload |
 | Case-insensitive email normalization | `/api/delete-user-data` | normalize to lowercase before rate-limit lookup so an attacker cannot bypass `PerEmailPerDay` by toggling case |
 | Shared-secret app key | `Middleware/AppKeyMiddleware.cs` | `APP_KEY` / Secrets Manager |
+| Admin Basic Auth + per-IP lockout | `Middleware/AdminAuthMiddleware.cs`. Covers `/admin/*`, `/api/admin/*`, and the owner-only API surfaces. | `ADMIN_USERNAME` / `ADMIN_PASSWORD`; fails closed |
 | Play Integrity | `AI/PlayIntegrityVerifier.cs` | `PLAY_INTEGRITY_PROJECT_NUMBER` env |
 | SSRF guard (outbound) | `Integrations/SsrfGuardHandler.cs` | always on — blocks loopback (full `127/8` not just `127.0.0.1`), link-local incl. AWS IMDS `169.254.169.254`, RFC1918, CGNAT `100.64/10`, IPv6 unspecified `::`, unique-local `fc00::/7`, link-local, site-local, and IPv4-mapped equivalents |
 | AI kill-switch | `FeatureFlags.AiKillSwitch` | `AI_KILL_SWITCH=true` env |
@@ -96,13 +106,36 @@ If ACM has already rotated and you see TLS handshake failures in Sentry, the fix
 - [ ] `docs/PLAY_DATA_SAFETY.md` still reflects the current data flows.
 - [ ] `/.well-known/security.txt` `Expires:` is >60 days in the future (current value: `2026-11-17`; renew by ~2026-09-17).
 - [ ] Sentry receiving events from both mobile + backend in prod (`Sentry__Dsn` env set on EB; `EXPO_PUBLIC_SENTRY_DSN` or `app.json` fallback set on mobile).
-- [ ] Dependency scan (`npm audit`, `dotnet list package --vulnerable`) is clean.
+- [ ] Dependency scan (`npm audit`, `dotnet list package --vulnerable`) is clean. The backend build now enforces this for high/critical advisories — if it fails on `NU1903`/`NU1904`, pin the fixed version in `backend/Directory.Build.props` rather than lowering the gate.
+
+## Boot-time security preflight
+
+`Security/SecurityPreflight.cs` runs once at startup in every non-Development environment and reports on the configuration each protection depends on.
+
+- **Critical:** `STRIPE_SECRET_KEY` set without `STRIPE_WEBHOOK_SECRET`. Payment webhooks now refuse unsigned events, so this isn't a hole — it silently means no job is ever marked paid.
+- **Warnings:** `APP_KEY`, `ADMIN_USERNAME`/`ADMIN_PASSWORD`, `TECH_TOKEN_KEY`, `CRM_TOKEN_ENC_KEY` unset; Twilio configured with no webhook guard. Each is degraded-but-safe — the affected gate fails closed, or state simply doesn't survive a redeploy.
+
+By default a critical finding is logged at `Critical` and startup continues: nothing in this list risks data loss (unlike the `DATABASE_URL` check, which does abort), and taking the whole API down over a recoverable payments gap is the worse failure. Set **`SECURITY_PREFLIGHT_STRICT=true`** to turn critical findings into a refusal to start — do that once a deployment's configuration is verified good, so any later regression is caught at deploy time rather than by a customer.
+
+Grep startup logs for `Security preflight` after any deploy that touches configuration.
 
 ## When Play Integrity blocks legitimate users
 
 Common causes: rooted personal device, LineageOS, MicroG, work-profile oddities. The backend currently fails **open** on integrity errors (logs a warning). `PLAY_INTEGRITY_REQUIRE_MEETS_DEVICE_INTEGRITY=true` makes it fail closed. Only turn that on after you've tailed `integrity_failed` logs for a week and confirmed the population is <0.5% and trending toward known-bad signals. Otherwise you're locking out hobbyist users.
 
-## Auditing deletion receipts
+## Data deletion: how a request is actually fulfilled
+
+Three stages, and it matters that all three exist — for a long time only the first two did, so a "verified" request sat forever and no data was ever removed.
+
+1. `POST /api/delete-user-data` — creates a `pending_verification` row and emails a 6-digit code. The response is identical whether or not the address is known, so the endpoint can't be used to test whether someone is a customer.
+2. `POST /api/confirm-deletion` — constant-time compares the code, flips the row to `verified`.
+3. `Services/DataDeletionExecutionService` — a background sweep (every 15 min) that finds `verified` rows, wipes the data, and stamps `Status = 'completed'` + `CompletedAt`. That timestamp is also what `RetentionService` later uses to age out the receipt itself.
+
+**Scope is the verified email only.** The code is delivered to the email, so email ownership is the only thing the flow proves. The phone on a request is unverified and is deliberately *not* used as a match key — otherwise anyone could pair their own address with a stranger's phone number, verify themselves, and destroy that stranger's records. The sweep matches rows by email (case-insensitively), then follows those rows to the phone numbers and device ids they contain to clean up `SmsMessages`, `MaintenanceReminders` and `PushTokens`.
+
+Tables cleared: `HelpRequests`, `Customers`, `SmsMessages`, `MaintenanceReminders`, `PushTokens`. `BetaFeedback` and `AnalyticsEvents` are left alone — both are anonymous (no email/phone column) and carry no link back to a person.
+
+A wipe that throws part-way leaves the row in `verified` and is retried on the next sweep; the deletes are idempotent, so a retry over already-removed rows is a no-op.
 
 ```sql
 -- Pending verifications >30 min old (cruft to clean up)
@@ -111,10 +144,19 @@ FROM "DataDeletionRequests"
 WHERE "Status" = 'pending_verification'
   AND "VerificationCodeExpiresAt" < now();
 
--- Verified but not completed (your SLA clock is ticking)
+-- Verified but not yet executed. A handful is normal (the sweep runs every
+-- 15 min); anything older than an hour means the worker is wedged or throwing —
+-- check logs for "Data deletion failed for requestId".
 SELECT "Id", "RequestId", "VerifiedAt"
 FROM "DataDeletionRequests"
 WHERE "Status" = 'verified';
+
+-- Completed, with the receipt of what was removed.
+SELECT "RequestId", "VerifiedAt", "CompletedAt", "Notes"
+FROM "DataDeletionRequests"
+WHERE "Status" = 'completed'
+ORDER BY "CompletedAt" DESC
+LIMIT 50;
 ```
 
 30-day SLA starts at `VerifiedAt`, per the privacy policy.

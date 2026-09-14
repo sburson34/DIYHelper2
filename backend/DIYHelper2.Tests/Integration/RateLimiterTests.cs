@@ -51,4 +51,59 @@ public class RateLimiterTests : IClassFixture<ApiFactory>
             Environment.SetEnvironmentVariable("OPENAI_API_KEY", prev);
         }
     }
+
+    /// <summary>
+    /// The "public" policy (60/min) covers the unauthenticated reads that fan out
+    /// to a metered third-party API or do real per-call work. They previously had
+    /// no bucket at all, so one client could drain a partner quota as fast as it
+    /// could open sockets.
+    /// </summary>
+    [Fact]
+    public async Task PublicPolicy_Returns429_AfterLimitExceeded()
+    {
+        var client = _factory.CreateClient();
+        // Own partition per test — the limiter keys off the resolved client IP,
+        // which for the in-memory host comes from this header.
+        client.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.61");
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i < 70; i++)
+            statuses.Add((await client.GetAsync("/api/config")).StatusCode);
+
+        Assert.Contains(HttpStatusCode.TooManyRequests, statuses);
+        // ...and the early ones went through, so the limit isn't simply "closed".
+        Assert.Equal(HttpStatusCode.OK, statuses[0]);
+    }
+
+    /// <summary>
+    /// Backstop: a route that opted into no named policy is still bounded, so
+    /// adding an endpoint and forgetting the attribute can't leave it unlimited.
+    /// </summary>
+    [Fact]
+    public async Task GlobalLimiter_Bounds_AnEndpointWithNoNamedPolicy()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.62");
+
+        var statuses = new List<HttpStatusCode>();
+        for (var i = 0; i < 320; i++)
+            statuses.Add((await client.GetAsync("/api/features")).StatusCode);
+
+        Assert.Contains(HttpStatusCode.TooManyRequests, statuses);
+        Assert.Equal(HttpStatusCode.OK, statuses[0]);
+    }
+
+    /// <summary>
+    /// Health probes stay exempt — a throttled /healthz would make the
+    /// orchestrator kill a container that is perfectly fine.
+    /// </summary>
+    [Fact]
+    public async Task HealthProbes_AreNeverRateLimited()
+    {
+        var client = _factory.CreateClient();
+        client.DefaultRequestHeaders.Add("X-Forwarded-For", "203.0.113.63");
+
+        for (var i = 0; i < 320; i++)
+            Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/healthz")).StatusCode);
+    }
 }

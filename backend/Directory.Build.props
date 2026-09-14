@@ -1,0 +1,47 @@
+<Project>
+
+  <!--
+    Repo-wide build settings for every backend project (Api, Tests, Tests.Live).
+
+    ── Dependency vulnerability gate ──────────────────────────────────────────
+    NuGet audit already ran on restore, but only as a warning — so two packages
+    with published high-severity advisories were being shipped, and the notice
+    scrolled past in build output on every single build. Promoting high and
+    critical advisories (NU1903/NU1904) to errors makes an unpatched transitive
+    dependency a build failure instead of a line of grey text.
+
+    Low and moderate advisories (NU1901/NU1902) stay warnings: they surface in
+    output for triage without blocking a deploy on something that may have no
+    fixed version yet.
+
+    NuGetAuditMode=all audits transitive dependencies too, which is where both
+    of the flagged packages actually came from.
+  -->
+  <PropertyGroup>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
+    <NuGetAuditLevel>low</NuGetAuditLevel>
+    <WarningsAsErrors>$(WarningsAsErrors);NU1903;NU1904</WarningsAsErrors>
+  </PropertyGroup>
+
+  <!--
+    ── Transitive security pins ───────────────────────────────────────────────
+    Neither package is referenced directly: Microsoft.OpenApi arrives via
+    Microsoft.AspNetCore.OpenApi, and SQLitePCLRaw via the EF Core SQLite
+    provider. Both resolved to versions carrying a high-severity advisory, and a
+    transitive dependency can only be lifted by naming it explicitly.
+
+    Keep these until the parent packages ship a version whose own floor is at or
+    above them, then delete the pin rather than raising it — an unnecessary pin
+    silently holds a package back later.
+  -->
+  <ItemGroup>
+    <!-- GHSA-v5pm-xwqc-g5wc (high) affects Microsoft.OpenApi 2.0.0-preview.11
+         through 2.7.4; 2.7.5 is the first patched release on the 2.x line, so
+         this stays within the major version Microsoft.AspNetCore.OpenApi expects. -->
+    <PackageReference Include="Microsoft.OpenApi" Version="2.7.5" />
+    <!-- GHSA-2m69-gcr7-jv3q (high) affects the SQLite native library in 2.1.11. -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />
+  </ItemGroup>
+
+</Project>
