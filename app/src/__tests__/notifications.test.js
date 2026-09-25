@@ -3,7 +3,8 @@
 
 let Notifications;
 let requestPermissions, scheduleProjectCheckin, scheduleWeatherAlert, cancelForProject;
-let registerForPushNotificationsAsync;
+let registerForPromoPush, promoPushAccepted, unregisterPromoPush, PUSH_COPY;
+let registerPushToken, unregisterPushToken;
 let updateHoneyDoList, updateContractorList;
 
 beforeEach(() => {
@@ -41,7 +42,17 @@ beforeEach(() => {
     updateContractorList: jest.fn(() => Promise.resolve(true)),
   }));
 
+  jest.mock('../api/backendClient', () => ({
+    registerPushToken: jest.fn(() => Promise.resolve({ ok: true })),
+    unregisterPushToken: jest.fn(() => Promise.resolve({ ok: true })),
+  }));
+
+  jest.mock('../config/appInfo', () => ({ BRAND_NAME: 'Test Brand' }));
+
   Notifications = require('expo-notifications');
+  const api = require('../api/backendClient');
+  registerPushToken = api.registerPushToken;
+  unregisterPushToken = api.unregisterPushToken;
   const storage = require('../utils/storage');
   updateHoneyDoList = storage.updateHoneyDoList;
   updateContractorList = storage.updateContractorList;
@@ -51,7 +62,10 @@ beforeEach(() => {
   scheduleProjectCheckin = notifModule.scheduleProjectCheckin;
   scheduleWeatherAlert = notifModule.scheduleWeatherAlert;
   cancelForProject = notifModule.cancelForProject;
-  registerForPushNotificationsAsync = notifModule.registerForPushNotificationsAsync;
+  registerForPromoPush = notifModule.registerForPromoPush;
+  promoPushAccepted = notifModule.promoPushAccepted;
+  unregisterPromoPush = notifModule.unregisterPromoPush;
+  PUSH_COPY = notifModule.PUSH_COPY;
 });
 
 describe('requestPermissions', () => {
@@ -157,37 +171,86 @@ describe('cancelForProject', () => {
   });
 });
 
-describe('registerForPushNotificationsAsync', () => {
-  it('returns an Expo token when permission granted on a device', async () => {
+describe('registerForPromoPush (shared @sburson34/mobile-shared/push)', () => {
+  it('registers the Expo token with the backend as a promo opt-in', async () => {
     Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
-    const token = await registerForPushNotificationsAsync();
-    expect(token).toBe('ExponentPushToken[abc]');
+    const status = await registerForPromoPush();
+    expect(status.state).toBe('registered');
+    expect(promoPushAccepted(status)).toBe(true);
     expect(Notifications.getExpoPushTokenAsync).toHaveBeenCalledWith({ projectId: 'test-project-id' });
+    expect(registerPushToken).toHaveBeenCalledWith('ExponentPushToken[abc]', 'android', true);
   });
 
-  it('creates the high-importance promotions channel on Android', async () => {
+  it('creates the default and high-importance promotions channels on Android', async () => {
     Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
-    await registerForPushNotificationsAsync();
+    await registerForPromoPush();
     expect(Notifications.setNotificationChannelAsync).toHaveBeenCalledWith('promotions', expect.objectContaining({
       name: 'Offers & promotions',
+      importance: 4,
+    }));
+    expect(Notifications.setNotificationChannelAsync).toHaveBeenCalledWith('default', expect.objectContaining({
+      name: 'DIYHelper reminders',
     }));
   });
 
-  it('returns null when permission denied', async () => {
+  it('reports denied (not accepted) when permission is refused', async () => {
     Notifications.getPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
     Notifications.requestPermissionsAsync.mockResolvedValue({ status: 'denied' });
-    const token = await registerForPushNotificationsAsync();
-    expect(token).toBeNull();
+    const status = await registerForPromoPush();
+    expect(status.state).toBe('denied');
+    expect(status.reason).toContain('Test Brand');
+    expect(promoPushAccepted(status)).toBe(false);
     expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
+    expect(registerPushToken).not.toHaveBeenCalled();
   });
 
-  it('returns null on a non-physical device (simulator)', async () => {
+  it('reports unsupported on a non-physical device (simulator)', async () => {
     global.__EXPO_IS_DEVICE = false;
     Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
-    const token = await registerForPushNotificationsAsync();
-    expect(token).toBeNull();
+    const status = await registerForPromoPush();
+    expect(status.state).toBe('unsupported');
+    expect(promoPushAccepted(status)).toBe(false);
     expect(Notifications.getExpoPushTokenAsync).not.toHaveBeenCalled();
     global.__EXPO_IS_DEVICE = true;
+  });
+
+  it('says a build is misconfigured when the push credential is missing', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    Notifications.getExpoPushTokenAsync.mockRejectedValue(new Error('Default FirebaseApp is not initialized'));
+    const status = await registerForPromoPush();
+    expect(status.state).toBe('misconfigured');
+    expect(promoPushAccepted(status)).toBe(false);
+  });
+
+  it('still records the opt-in when only the backend failed to store the token', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    registerPushToken.mockRejectedValueOnce(new Error('HTTP 500'));
+    const status = await registerForPromoPush();
+    expect(status.state).toBe('failed');
+    expect(status.reason).toBe(PUSH_COPY.backendRejected);
+    expect(promoPushAccepted(status)).toBe(true);
+  });
+});
+
+describe('unregisterPromoPush', () => {
+  it('unregisters the current token without prompting', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    await unregisterPromoPush();
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(unregisterPushToken).toHaveBeenCalledWith('ExponentPushToken[abc]');
+  });
+
+  it('does nothing (and never prompts) when permission was never granted', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'undetermined' });
+    await unregisterPromoPush();
+    expect(Notifications.requestPermissionsAsync).not.toHaveBeenCalled();
+    expect(unregisterPushToken).not.toHaveBeenCalled();
+  });
+
+  it('never throws when the server call fails', async () => {
+    Notifications.getPermissionsAsync.mockResolvedValue({ status: 'granted' });
+    unregisterPushToken.mockRejectedValueOnce(new Error('offline'));
+    await expect(unregisterPromoPush()).resolves.toBeUndefined();
   });
 });
 

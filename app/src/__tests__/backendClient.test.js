@@ -183,6 +183,19 @@ describe('analyzeLive', () => {
     });
     await expect(analyzeLive({ taskDescription: 'x' })).rejects.toThrow('AI features are temporarily unavailable.');
   });
+
+  it('shows the shared kill-switch sentence, not its machine error token', async () => {
+    const sentence = "The AI features are paused right now. Everything you've already added is safe.";
+    global.fetch.mockResolvedValueOnce({
+      ok: false,
+      status: 503,
+      json: () => Promise.resolve({ error: 'ai_disabled', code: 'ai_kill_switch', message: sentence }),
+    });
+    const err = await analyzeLive({ taskDescription: 'x' }).catch((e) => e);
+    expect(err.message).toBe(sentence);
+    expect(err.status).toBe(503);
+    expect(err.code).toBe('ai_kill_switch');
+  });
 });
 
 // ── askHelper ───────────────────────────────────────────────────

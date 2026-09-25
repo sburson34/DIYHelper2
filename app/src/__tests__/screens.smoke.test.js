@@ -57,8 +57,9 @@ jest.mock('../api/backendClient', () => ({
 jest.mock('../utils/notifications', () => ({
   cancelForProject: jest.fn(() => Promise.resolve()),
   requestPermissions: jest.fn(() => Promise.resolve({ status: 'granted' })),
-  registerForPushNotificationsAsync: jest.fn(() => Promise.resolve('ExponentPushToken[stub]')),
-  devicePlatform: jest.fn(() => 'ios'),
+  registerForPromoPush: jest.fn(() => Promise.resolve({ state: 'registered', reason: 'ok', checkedAt: '2026-01-01T00:00:00.000Z' })),
+  promoPushAccepted: jest.fn((s) => s.state === 'registered'),
+  unregisterPromoPush: jest.fn(() => Promise.resolve()),
 }));
 
 jest.mock('../services/feedback', () => ({ submitFeedback: jest.fn(() => Promise.resolve()) }));

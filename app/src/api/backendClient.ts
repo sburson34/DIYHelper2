@@ -41,6 +41,8 @@ const ensureAiConsent = async (): Promise<void> => {
 
 export interface ApiError extends Error {
   status?: number;
+  /** The backend's machine-readable `code` (e.g. "ai_kill_switch"), when it sent one. */
+  code?: string;
   correlationId?: string;
   durationMs?: number;
 }
@@ -252,6 +254,20 @@ const generateCorrelationId = (): string => {
 // Backend's 2-minute OpenAI timeout bounds happy-path latency, so we match it.
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+// App endpoints answer {error: "<sentence>", code}. The shared backend gates
+// (AI kill switch, feature gate) answer {error: "<machine_token>", code,
+// message: "<sentence>"} — e.g. {error:"ai_disabled", code:"ai_kill_switch"}.
+// Show the sentence either way: a snake_case `error` next to a `message` is a
+// token, never copy for the user.
+const MACHINE_TOKEN = /^[a-z0-9]+(_[a-z0-9]+)+$/;
+export const pickErrorMessage = (body: { error?: unknown; message?: unknown } | null | undefined): string | undefined => {
+  if (!body) return undefined;
+  const error = typeof body.error === 'string' ? body.error : undefined;
+  const message = typeof body.message === 'string' ? body.message : undefined;
+  if (error && message && MACHINE_TOKEN.test(error)) return message;
+  return error || message;
+};
+
 const apiFetch = async (url: string, options: RequestInit = {}): Promise<Response> => {
   const correlationId = generateCorrelationId();
   const method = options.method || 'GET';
@@ -294,10 +310,11 @@ const apiFetch = async (url: string, options: RequestInit = {}): Promise<Respons
 
     if (!response.ok) {
       let errorMessage: string | undefined;
+      let errorCode: string | undefined;
       try {
-        const body = await response.json();
-        errorMessage = (body as { error?: string; message?: string }).error
-          || (body as { error?: string; message?: string }).message;
+        const body = (await response.json()) as { error?: string; message?: string; code?: string };
+        errorMessage = pickErrorMessage(body);
+        errorCode = typeof body.code === 'string' ? body.code : undefined;
       } catch {}
 
       const summary = errorMessage || `HTTP ${status}`;
@@ -306,6 +323,7 @@ const apiFetch = async (url: string, options: RequestInit = {}): Promise<Respons
       });
       const err = new Error(summary) as ApiError;
       err.status = status;
+      if (errorCode) err.code = errorCode;
       err.correlationId = correlationId;
       err.durationMs = durationMs;
       throw err;

@@ -5,8 +5,7 @@ import { Ionicons as Icon } from '@expo/vector-icons';
 import theme from '../theme';
 import { BRAND_NAME } from '../config/appInfo';
 import { setPromoConsent, setAppPrefs } from '../utils/storage';
-import { registerForPushNotificationsAsync, devicePlatform } from '../utils/notifications';
-import { registerPushToken } from '../api/backendClient';
+import { registerForPromoPush, promoPushAccepted } from '../utils/notifications';
 
 // Optional, skippable first-run priming screen for PROMOTIONAL push (offers,
 // seasonal tips) from the branding company. Shown once, after AI consent. This
@@ -19,9 +18,10 @@ export default function PromoConsentScreen({ onDone }) {
   const enable = async () => {
     setBusy(true);
     try {
-      const token = await registerForPushNotificationsAsync();
-      if (token) {
-        try { await registerPushToken(token, devicePlatform(), true); } catch {}
+      // Shared registration: permission + token + POST to /api/push/register,
+      // reported as a status rather than a token (never throws).
+      const status = await registerForPromoPush();
+      if (promoPushAccepted(status)) {
         await setAppPrefs({ pushEnabled: true });
         await setPromoConsent(true);
       } else {

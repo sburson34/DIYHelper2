@@ -9,7 +9,7 @@ import {
   getCommunityOptIn, setCommunityOptIn,
   clearAllUserData,
 } from '../utils/storage';
-import { requestPermissions as requestNotificationPermissions, registerForPushNotificationsAsync, devicePlatform } from '../utils/notifications';
+import { requestPermissions as requestNotificationPermissions, registerForPromoPush, promoPushAccepted, unregisterPromoPush } from '../utils/notifications';
 import { getPromoConsent, setPromoConsent } from '../utils/storage';
 import { useTranslation } from '../i18n/I18nContext';
 import { useAppTheme } from '../ThemeContext';
@@ -18,7 +18,7 @@ import { reportError, reportHandledError, reportWarning, addBreadcrumb } from '.
 import { Sentry } from '../services/sentry';
 import { useMLTranslation } from '../mlkit/TranslationProvider';
 import { PRIVACY_POLICY_URL, TERMS_OF_SERVICE_URL, BRAND_NAME } from '../config/appInfo';
-import { requestServerSideDeletion, registerPushToken, unregisterPushToken } from '../api/backendClient';
+import { requestServerSideDeletion } from '../api/backendClient';
 
 // Privacy-policy SLA: server-side deletion within 30 days of a verified request.
 // Falls back to a pre-filled mailto: when the backend is unreachable so the user
@@ -86,28 +86,33 @@ export default function Settings() {
   };
 
   // Promotional-push opt-in. Independent of the "Reminders" (local) toggle and
-  // fully revocable. Enabling gets an Expo token + registers it (marketingOptIn
-  // true); disabling unregisters it server-side so no further promos are sent.
+  // fully revocable. Enabling registers this device's Expo token (marketingOptIn
+  // true) through the shared push registration; disabling unregisters it
+  // server-side so no further promos are sent.
   const handlePromosToggle = async (val) => {
     setPromoBusy(true);
     try {
       if (val) {
-        const token = await registerForPushNotificationsAsync();
-        if (!token) {
-          Alert.alert('Permission needed', 'Enable notifications in system settings to receive offers.');
+        const status = await registerForPromoPush();
+        if (!promoPushAccepted(status)) {
+          // Denied keeps its familiar prompt; anything else (simulator, a build
+          // missing its push credential, the push service unreachable) says so
+          // in the shared status's own sentence instead of blaming settings.
+          if (status.state === 'denied') {
+            Alert.alert('Permission needed', 'Enable notifications in system settings to receive offers.');
+          } else {
+            Alert.alert('Notifications unavailable', status.reason);
+          }
           setPromos(false);
           await setPromoConsent(false);
           return;
         }
-        try { await registerPushToken(token, devicePlatform(), true); } catch {}
         await setAppPrefs({ pushEnabled: true });
         await setPromoConsent(true);
         setPromos(true);
       } else {
-        // Best-effort: fetch the current token (no new prompt if already granted)
-        // and tell the server to stop sending to it.
-        const token = await registerForPushNotificationsAsync();
-        if (token) { try { await unregisterPushToken(token); } catch {} }
+        // Best-effort, and never prompts: tell the server to stop sending.
+        await unregisterPromoPush();
         await setAppPrefs({ pushEnabled: false });
         await setPromoConsent(false);
         setPromos(false);
