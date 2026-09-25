@@ -62,8 +62,31 @@ public class SecurityRegressionTests
                 taskDescription = "x",
             });
             Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
-            var body = await resp.Content.ReadAsStringAsync();
-            Assert.Contains("ai_kill_switch", body);
+            // The shared Sburson.Shared.Gates body: a machine `error`, the
+            // ai_kill_switch `code`, and a human `message` the app renders.
+            var body = await resp.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            Assert.Equal("ai_disabled", body.GetProperty("error").GetString());
+            Assert.Equal("ai_kill_switch", body.GetProperty("code").GetString());
+            Assert.False(string.IsNullOrWhiteSpace(body.GetProperty("message").GetString()));
+        }
+
+        [Fact]
+        public async Task KillSwitch_RefusesBeforeTheModelIsCalled()
+        {
+            _factory.FakeAi.Requests.Clear();
+            var client = _factory.CreateClient();
+            var resp = await client.PostAsJsonAsync("/api/ask-helper", new { question = "any", projectContext = new { } });
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
+            Assert.Empty(_factory.FakeAi.Requests);
+        }
+
+        [Fact]
+        public async Task OwnerAiTool_Returns503_WhenKillSwitchOn()
+        {
+            var client = _factory.CreateAdminClient();
+            var resp = await client.PostAsJsonAsync("/api/ai/review-response", new { review = "Great job", rating = 5 });
+            Assert.Equal(HttpStatusCode.ServiceUnavailable, resp.StatusCode);
+            Assert.Contains("ai_kill_switch", await resp.Content.ReadAsStringAsync());
         }
     }
 

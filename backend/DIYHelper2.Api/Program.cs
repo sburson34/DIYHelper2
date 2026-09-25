@@ -25,6 +25,8 @@ using Sburson.Shared.FeatureFlags;
 using Sburson.Shared.Http;
 using Sburson.Shared.Observability;
 using Sburson.Shared.Web;
+using Sburson.Shared.Gates;
+using Sburson.Shared.Push;
 using Microsoft.AspNetCore.RateLimiting;
 using System.Threading.RateLimiting;
 using OpenTelemetry;
@@ -156,7 +158,19 @@ builder.Services.AddHttpClient<AttomClient>().AddHttpMessageHandler<SsrfGuardHan
 builder.Services.AddHttpClient<ReceiptOcrClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 builder.Services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().AddHttpMessageHandler<SsrfGuardHandler>();
 // Expo push service — fans promotional broadcasts out to registered devices.
-builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().AddHttpMessageHandler<SsrfGuardHandler>();
+// The client is the shared Sburson.Shared.Push.ExpoPushClient on its named
+// "expo-push" HttpClient. 30s (not the shared 10s default) keeps the timeout
+// this app always had for a 100-message broadcast chunk. The shared client
+// sends Accept-Encoding: gzip, so the primary handler must decompress — the
+// default handler doesn't, and a gzipped body would parse as garbage and turn
+// every ticket into an error. SsrfGuard as on every other outbound client.
+builder.Services.AddSburonExpoPush(TimeSpan.FromSeconds(30));
+builder.Services.AddHttpClient(Sburson.Shared.Push.ExpoPushClient.HttpClientName)
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+    {
+        AutomaticDecompression = System.Net.DecompressionMethods.All,
+    })
+    .AddHttpMessageHandler<SsrfGuardHandler>();
 // Brand Studio: scrapes a customer's website to seed a white-label brand.
 builder.Services.AddHttpClient<DIYHelper2.Api.Integrations.BrandExtractionClient>().AddHttpMessageHandler<SsrfGuardHandler>();
 // CRM lead delivery — a second, best-effort channel alongside the brand email.
@@ -276,6 +290,10 @@ builder.Services.AddSburonEmail(builder.Configuration);
 builder.Services.AddSingleton<AmazonPaClient>();
 builder.Services.AddSingleton<PaintColorClient>();
 builder.Services.AddSingleton<FeatureFlags>();
+// FeatureFlags IS the AI kill switch (FeatureFlagsBase implements IAiKillSwitch;
+// FeatureFlags.IsAiKillSwitchEngaged returns its AI_KILL_SWITCH property), so
+// every endpoint tagged .RequireAi() answers the shared 503 ai_kill_switch body.
+builder.Services.AddSburonAiKillSwitch<FeatureFlags>();
 builder.Services.AddHostedService<DIYHelper2.Api.Services.RetentionService>();
 // Job-completion side effects (invoice, report email, maintenance, review SMS)
 // + the daily maintenance-reminder sweep.
@@ -802,9 +820,6 @@ app.MapPost("/api/analyze", [EnableRateLimiting("ai")] async (
     DeviceQuotaService quota,
     FeatureFlags features) =>
 {
-    if (features.AiKillSwitch)
-        return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
-
     // Fleet-wide daily spend backstop (last line of defence against runaway
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
@@ -1153,7 +1168,7 @@ IMPORTANT for outdoor / weather_sensitive / repair_type:
         // Shopping link / enrichment post-processing failed — return the AI result as-is.
         return Results.Ok(resultDict);
     }
-});
+}).RequireAi();
 
 app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     [FromBody] AskHelperRequest request,
@@ -1162,12 +1177,8 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
     PlayIntegrityVerifier integrity,
-    DeviceQuotaService quota,
-    FeatureFlags features) =>
+    DeviceQuotaService quota) =>
 {
-    if (features.AiKillSwitch)
-        return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
-
     // Fleet-wide daily spend backstop (last line of defence against runaway
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
@@ -1217,7 +1228,7 @@ app.MapPost("/api/ask-helper", [EnableRateLimiting("ai")] async (
     string answer = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
 
     return Results.Ok(new { answer });
-});
+}).RequireAi();
 
 // ── Help Request endpoints ──────────────────────────────────────────
 
@@ -2479,14 +2490,13 @@ app.MapDelete("/api/inventory/{id:int}", async (int id, HttpContext http, AppDbC
 // brand price book. Returns lines the console loads into the quote builder.
 app.MapPut("/api/help-requests/{id:int}/suggest-quote", [EnableRateLimiting("ai")] async (
     int id, HttpContext http, AppDbContext db,
-    IAIVisionClient aiClient, AiKeyStore aiKeys, DIYHelper2.Api.Integrations.FeatureFlags features,
+    IAIVisionClient aiClient, AiKeyStore aiKeys,
     DIYHelper2.Api.Services.AiSpendGuard aiSpend, ILogger<Program> logger) =>
 {
     var r = await db.HelpRequests.FindAsync(id);
     if (r is null) return Results.NotFound();
     var scope = BrandScopeOf(http);
     if (scope is not null && r.Brand != scope) return Results.NotFound();
-    if (features.AiKillSwitch) return ApiError.Response(http, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
     if (!aiSpend.TryConsume(out _)) return ApiError.Response(http, 503, "AI features are temporarily unavailable.", "ai_capacity_reached");
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey)) return ApiError.NotConfigured(http, "OpenAI API key");
 
@@ -2528,15 +2538,14 @@ app.MapPut("/api/help-requests/{id:int}/suggest-quote", [EnableRateLimiting("ai"
         return Results.Ok(new { lines });
     }
     catch { return ApiError.Response(http, 502, "AI returned an unparseable response.", "ai_parse_error"); }
-});
+}).RequireAi();
 
 // AI review responder: draft a warm, professional reply to a customer review.
 app.MapPost("/api/ai/review-response", [EnableRateLimiting("ai")] async (
     [FromBody] ReviewResponseDto dto, HttpContext http, AppDbContext db,
-    IAIVisionClient aiClient, AiKeyStore aiKeys, DIYHelper2.Api.Integrations.FeatureFlags features,
+    IAIVisionClient aiClient, AiKeyStore aiKeys,
     DIYHelper2.Api.Services.AiSpendGuard aiSpend, ILogger<Program> logger) =>
 {
-    if (features.AiKillSwitch) return ApiError.Response(http, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
     if (!aiSpend.TryConsume(out _)) return ApiError.Response(http, 503, "AI features are temporarily unavailable.", "ai_capacity_reached");
     if (string.IsNullOrEmpty(aiKeys.OpenAiKey)) return ApiError.NotConfigured(http, "OpenAI API key");
     if (string.IsNullOrWhiteSpace(dto.Review)) return ApiError.BadRequest(http, "review text is required.");
@@ -2551,7 +2560,7 @@ app.MapPost("/api/ai/review-response", [EnableRateLimiting("ai")] async (
     var aiCtx = new AiCallContext("review-response", aiClient.ProviderName, dto.Review!.Length, 0, null, http.Items["CorrelationId"] as string);
     var raw = await AiWorkflow.CompleteAsync(aiClient, aiReq, aiCtx, logger);
     return Results.Ok(new { response = raw.Trim() });
-});
+}).RequireAi();
 
 // Timesheet: labor hours per tech, derived from StartedAt→CompletedAt on
 // completed jobs in the window. Admin-gated (/api/ops).
@@ -2950,7 +2959,7 @@ app.MapPost("/api/push/send", async (
 // device before broadcasting. Does not create a campaign.
 app.MapPost("/api/push/test", async (
     [FromBody] TestPushDto dto, HttpContext http,
-    DIYHelper2.Api.Integrations.ExpoPushClient expo) =>
+    Sburson.Shared.Push.ExpoPushClient expo) =>
 {
     if (!PushValidation.IsExpoToken(dto.Token))
         return ApiError.BadRequest(http, "A valid Expo push token is required.");
@@ -2963,16 +2972,21 @@ app.MapPost("/api/push/test", async (
     if (validationError != null) return validationError;
 
     object? data = dto.Data.HasValue && dataJson != null ? dto.Data.Value : null;
-    var message = new DIYHelper2.Api.Integrations.ExpoPushMessage(
+    var message = new Sburson.Shared.Push.ExpoPushClient.PushMessage(
         To: dto.Token!,
         Title: dto.Title!.Trim(),
         Body: dto.Body!.Trim(),
-        Subtitle: string.IsNullOrWhiteSpace(dto.Subtitle) ? null : dto.Subtitle!.Trim(),
-        ImageUrl: string.IsNullOrWhiteSpace(dto.ImageUrl) ? null : dto.ImageUrl!.Trim(),
-        Data: data);
+        Data: data)
+    {
+        Subtitle = string.IsNullOrWhiteSpace(dto.Subtitle) ? null : dto.Subtitle!.Trim(),
+        ImageUrl = string.IsNullOrWhiteSpace(dto.ImageUrl) ? null : dto.ImageUrl!.Trim(),
+    };
 
     var tickets = await expo.SendAsync(new[] { message });
     var ticket = tickets.FirstOrDefault();
+    // A failed batch now reads Message="HTTP 500" (shared client) rather than
+    // the old ErrorCode="expo_http_500"; Expo's own rejection still carries
+    // both a message and details.error. Prefer the human message either way.
     if (ticket is null || !ticket.Ok)
         return ApiError.Response(http, 502,
             ticket?.Message ?? ticket?.ErrorCode ?? "Expo rejected the test notification.",
@@ -3197,12 +3211,8 @@ app.MapPost("/api/verify-step", [EnableRateLimiting("ai")] async (
     ILogger<Program> logger,
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
-    DeviceQuotaService quota,
-    FeatureFlags features) =>
+    DeviceQuotaService quota) =>
 {
-    if (features.AiKillSwitch)
-        return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
-
     // Fleet-wide daily spend backstop (last line of defence against runaway
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
@@ -3270,7 +3280,7 @@ Return JSON only:
     var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1500 };
     string raw = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
     return Results.Content(DIYHelper2.Api.AI.JsonExtractor.ExtractObject(raw), "application/json");
-});
+}).RequireAi();
 
 // ── #10 diagnose ───────────────────────────────────────────────────
 app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
@@ -3282,9 +3292,6 @@ app.MapPost("/api/diagnose", [EnableRateLimiting("ai")] async (
     DeviceQuotaService quota,
     FeatureFlags features) =>
 {
-    if (features.AiKillSwitch)
-        return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
-
     // Fleet-wide daily spend backstop (last line of defence against runaway
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
@@ -3353,7 +3360,7 @@ Return JSON only:
     var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1500 };
     string raw = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
     return Results.Content(DIYHelper2.Api.AI.JsonExtractor.ExtractObject(raw), "application/json");
-});
+}).RequireAi();
 
 // ── #11 clarifying questions ───────────────────────────────────────
 app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
@@ -3365,9 +3372,6 @@ app.MapPost("/api/clarify", [EnableRateLimiting("ai")] async (
     DeviceQuotaService quota,
     FeatureFlags features) =>
 {
-    if (features.AiKillSwitch)
-        return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
-
     // Fleet-wide daily spend backstop (last line of defence against runaway
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
@@ -3433,7 +3437,7 @@ If the description is already complete and unambiguous, return {{""questions"": 
     var chatOptions = new ChatCompletionOptions { MaxOutputTokenCount = 1024 };
     string raw = await AiWorkflow.CompleteAsync(client, messages, chatOptions, aiCtx, logger);
     return Results.Content(DIYHelper2.Api.AI.JsonExtractor.ExtractObject(raw), "application/json");
-});
+}).RequireAi();
 
 // ── Live DIY Coach ─────────────────────────────────────────────────
 // Realtime turn-by-turn coaching. Mobile client sends a fresh camera frame on
@@ -3453,12 +3457,8 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
     AiKeyStore aiKeys,
     DIYHelper2.Api.AI.ModerationService moderation,
     PlayIntegrityVerifier integrity,
-    DeviceQuotaService quota,
-    FeatureFlags features) =>
+    DeviceQuotaService quota) =>
 {
-    if (features.AiKillSwitch)
-        return ApiError.Response(context, 503, "AI features are temporarily unavailable.", "ai_kill_switch");
-
     // Fleet-wide daily spend backstop (last line of defence against runaway
     // provider cost when per-device/per-IP limits are evaded at scale).
     if (!aiSpendGuard.TryConsume(out _))
@@ -3558,7 +3558,7 @@ app.MapPost("/api/live-diy/analyze", [EnableRateLimiting("ai")] async (
         rawContent, riskAssessment, sessionId, logger);
 
     return Results.Ok(response);
-});
+}).RequireAi();
 
 // ── #18 community projects (in-memory; replace with DB if persistent) ──
 app.MapPost("/api/community-projects", [EnableRateLimiting("submit")] ([FromBody] CommunityProjectDto dto) =>

@@ -169,7 +169,7 @@ public class ApiFactory : BaseApiFactory<Program>
             services.AddHttpClient<YouTubeClient>().ConfigurePrimaryHttpMessageHandler(() => FakeYouTubeHandler);
             services.AddHttpClient<DIYHelper2.Api.AI.ModerationService>().ConfigurePrimaryHttpMessageHandler(() => FakeModerationHandler);
             services.AddHttpClient<PlayIntegrityVerifier>().ConfigurePrimaryHttpMessageHandler(() => FakePlayIntegrityHandler);
-            services.AddHttpClient<DIYHelper2.Api.Integrations.ExpoPushClient>().ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
+            services.AddHttpClient(Sburson.Shared.Push.ExpoPushClient.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => FakeExpoHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.BrandExtractionClient>().ConfigurePrimaryHttpMessageHandler(() => FakeBrandExtractHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.WebhookCrmSink>().ConfigurePrimaryHttpMessageHandler(() => FakeCrmWebhookHandler);
             services.AddHttpClient<DIYHelper2.Api.Integrations.Crm.JobberTokenService>().ConfigurePrimaryHttpMessageHandler(() => FakeJobberTokenHandler);

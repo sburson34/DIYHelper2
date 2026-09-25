@@ -4,6 +4,7 @@ using DIYHelper2.Api.Integrations;
 using DIYHelper2.Api.Models;
 using DIYHelper2.Api.Validation;
 using Microsoft.EntityFrameworkCore;
+using Sburson.Shared.Push;
 
 namespace DIYHelper2.Api.Services;
 
@@ -81,13 +82,15 @@ public class PushSendService
             }
 
             object? data = ParseData(campaign.DataJson);
-            var messages = tokens.Select(t => new ExpoPushMessage(
+            var messages = tokens.Select(t => new ExpoPushClient.PushMessage(
                 To: t.Token,
                 Title: campaign.Title,
                 Body: campaign.Body,
-                Subtitle: campaign.Subtitle,
-                ImageUrl: campaign.ImageUrl,
-                Data: data)).ToList();
+                Data: data)
+            {
+                Subtitle = campaign.Subtitle,
+                ImageUrl = campaign.ImageUrl,
+            }).ToList();
 
             var tickets = await _expo.SendAsync(messages, ct);
 
@@ -105,7 +108,11 @@ public class PushSendService
                 else
                 {
                     failed++;
-                    if (IsUnregistered(ticket.ErrorCode))
+                    // Only Expo's own DeviceNotRegistered retires a token. A failed
+                    // batch (HTTP error / exception) yields synthetic tickets with a
+                    // Message ("HTTP 500") and no details.error, so it can never
+                    // deactivate a healthy device.
+                    if (ticket.IsDeviceNotRegistered)
                     {
                         token.IsActive = false;
                         token.UpdatedAt = now;
@@ -177,7 +184,7 @@ public class PushSendService
                 else
                 {
                     campaign.FailedCount++;
-                    if (IsUnregistered(receipt.ErrorCode))
+                    if (receipt.IsDeviceNotRegistered)
                         deadTokens.Add(token);
                 }
             }
@@ -196,9 +203,6 @@ public class PushSendService
             }
         }
     }
-
-    private static bool IsUnregistered(string? errorCode) =>
-        string.Equals(errorCode, "DeviceNotRegistered", StringComparison.OrdinalIgnoreCase);
 
     private static object? ParseData(string? dataJson)
     {

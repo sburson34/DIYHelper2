@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using DIYHelper2.Tests.Infrastructure;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace DIYHelper2.Tests.Integration;
 
@@ -187,6 +189,84 @@ public class PushNotificationsTests : IClassFixture<ApiFactory>
         var admin = _factory.CreateBrandClient("bad-a-admin", "pw");
         var resp = await admin.PostAsJsonAsync("/api/push/test", new { token = "not-a-token", title = "x", body = "y" });
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+    }
+
+    // ── Failure paths (shared Sburson.Shared.Push.ExpoPushClient) ─────────
+
+    private async Task<bool> IsActiveAsync(string token)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<DIYHelper2.Api.Data.AppDbContext>();
+        return (await db.PushTokens.AsNoTracking().SingleAsync(t => t.Token == token)).IsActive;
+    }
+
+    [Fact]
+    public async Task Send_ExpoHttpFailure_CountsFailures_ButNeverRetiresTokens()
+    {
+        await _factory.SeedBrandAsync("fail-a", "Fail A", "a@example", "fail-a-admin", "pw");
+        var t1 = await _factory.SeedPushTokenAsync("fail-a", "ios");
+        var t2 = await _factory.SeedPushTokenAsync("fail-a", "android");
+        _factory.FakeExpoHandler.Responder = _ => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") });
+        try
+        {
+            var admin = _factory.CreateBrandClient("fail-a-admin", "pw");
+            var resp = await admin.PostAsJsonAsync("/api/push/send", new { title = "t", body = "b" });
+            Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+            var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+            Assert.Equal("sent", json.GetProperty("status").GetString());
+            Assert.Equal(2, json.GetProperty("failedCount").GetInt32());
+            // A failed batch carries Message="HTTP 500" and no details.error —
+            // it must not be mistaken for DeviceNotRegistered.
+            Assert.True(await IsActiveAsync(t1));
+            Assert.True(await IsActiveAsync(t2));
+        }
+        finally { SetExpoOkResponder(); }
+    }
+
+    [Fact]
+    public async Task Send_DeviceNotRegistered_RetiresOnlyThatToken()
+    {
+        await _factory.SeedBrandAsync("dnr-a", "Dnr A", "a@example", "dnr-a-admin", "pw");
+        var dead = await _factory.SeedPushTokenAsync("dnr-a", "ios");
+        var live = await _factory.SeedPushTokenAsync("dnr-a", "ios");
+        _factory.FakeExpoHandler.Responder = async req =>
+        {
+            var body = await req.Content!.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(body);
+            var tickets = doc.RootElement.EnumerateArray().Select(m => m.GetProperty("to").GetString() == dead
+                ? "{\"status\":\"error\",\"message\":\"gone\",\"details\":{\"error\":\"DeviceNotRegistered\"}}"
+                : $"{{\"status\":\"ok\",\"id\":\"tkt-{Guid.NewGuid():N}\"}}");
+            return Json($"{{\"data\":[{string.Join(",", tickets)}]}}");
+        };
+        try
+        {
+            var admin = _factory.CreateBrandClient("dnr-a-admin", "pw");
+            var resp = await admin.PostAsJsonAsync("/api/push/send", new { title = "t", body = "b" });
+            var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+            Assert.Equal(1, json.GetProperty("failedCount").GetInt32());
+            Assert.False(await IsActiveAsync(dead));
+            Assert.True(await IsActiveAsync(live));
+        }
+        finally { SetExpoOkResponder(); }
+    }
+
+    [Fact]
+    public async Task TestSend_ExpoHttpFailure_Returns502_WithTheHttpStatus()
+    {
+        await _factory.SeedBrandAsync("t502-a", "T502 A", "a@example", "t502-a-admin", "pw");
+        _factory.FakeExpoHandler.Responder = _ => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") });
+        try
+        {
+            var admin = _factory.CreateBrandClient("t502-a-admin", "pw");
+            var resp = await admin.PostAsJsonAsync("/api/push/test", new { token = NewToken(), title = "x", body = "y" });
+            Assert.Equal(HttpStatusCode.BadGateway, resp.StatusCode);
+            var json = JsonDocument.Parse(await resp.Content.ReadAsStringAsync()).RootElement;
+            Assert.Equal("push_test_failed", json.GetProperty("code").GetString());
+            Assert.Equal("HTTP 500", json.GetProperty("error").GetString());
+        }
+        finally { SetExpoOkResponder(); }
     }
 
     [Fact]

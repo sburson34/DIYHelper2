@@ -39,8 +39,9 @@ public class FeatureFlags : FeatureFlagsBase
     public bool EntityExtraction { get; }
     public bool PoseDetection { get; }
 
-    // Emergency kill-switch. When true, all /api/analyze, /api/ask-helper,
-    // /api/diagnose, /api/clarify, and /api/verify-step endpoints return 503.
+    // Emergency kill-switch. When true, every endpoint tagged .RequireAi()
+    // (analyze, ask-helper, diagnose, clarify, verify-step, live-diy, and the
+    // owner AI tools) returns the shared 503 {error:"ai_disabled", code:"ai_kill_switch"}.
     // Flip via the AI_KILL_SWITCH env var for an immediate rollout without a
     // redeploy. Use when an abuse wave or provider outage is draining the
     // OpenAI budget faster than per-device quotas can contain.
@@ -73,6 +74,14 @@ public class FeatureFlags : FeatureFlagsBase
         AiKillSwitch = !string.IsNullOrEmpty(aiKillRaw)
             && (aiKillRaw.Equals("true", StringComparison.OrdinalIgnoreCase) || aiKillRaw == "1");
     }
+
+    /// <summary>
+    /// The shared AI gates (<c>.RequireAi()</c>) read the kill switch through
+    /// <see cref="Sburson.Shared.Gates.IAiKillSwitch"/>; answer with the value
+    /// cached at construction so the documented AI_KILL_SWITCH contract and
+    /// <c>/api/features</c>'s <c>aiKillSwitch</c> can never disagree.
+    /// </summary>
+    protected override bool IsAiKillSwitchEngaged => AiKillSwitch;
 
     public object ToPublicJson() => new
     {
