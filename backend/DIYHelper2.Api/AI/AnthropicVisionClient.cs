@@ -16,7 +16,7 @@ public class AnthropicVisionClient : IAIVisionClient
 
     public string ProviderName => "anthropic";
 
-    public AnthropicVisionClient(HttpClient http, string apiKey, ILogger<AnthropicVisionClient> logger, string model = "claude-haiku-4-5")
+    public AnthropicVisionClient(HttpClient http, string apiKey, ILogger<AnthropicVisionClient> logger, string model = "claude-haiku-5-5")
     {
         _http = http;
         _apiKey = apiKey;
@@ -48,7 +48,10 @@ public class AnthropicVisionClient : IAIVisionClient
         var payload = new
         {
             model = _model,
-            max_tokens = request.MaxOutputTokens ?? 4096,
+            // Haiku 5.5 thinks by default and its thinking counts against max_tokens, so the
+            // default cap leaves room for both the thinking and a full repair-guide JSON.
+            // Only the tokens actually produced are billed.
+            max_tokens = request.MaxOutputTokens ?? 8192,
             system = request.System,
             messages = new object[]
             {
@@ -70,7 +73,10 @@ public class AnthropicVisionClient : IAIVisionClient
         }
 
         using var doc = JsonDocument.Parse(body);
-        // Response shape: { content: [ { type: "text", text: "..." }, ... ] }
+        if (doc.RootElement.TryGetProperty("stop_reason", out var stop) && stop.GetString() == "refusal")
+            _logger.LogWarning("Anthropic declined the request (stop_reason=refusal); returning no text.");
+        // Response shape: { content: [ { type: "thinking", ... }, { type: "text", text: "..." }, ... ] }
+        // Thinking blocks can come first, so the text block is found by type, never by position.
         if (doc.RootElement.TryGetProperty("content", out var contentArr) && contentArr.ValueKind == JsonValueKind.Array)
         {
             foreach (var el in contentArr.EnumerateArray())
