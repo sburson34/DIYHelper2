@@ -8,8 +8,8 @@
 
   <ItemGroup>
     <PackageReference Include="Sburson.Shared.Backend" Version="0.34.1" />
-    <PackageReference Include="AWSSDK.SecretsManager" Version="4.0.4.15" />
-    <PackageReference Include="AWSSDK.SimpleEmail" Version="4.0.2.25" />
+    <PackageReference Include="AWSSDK.SecretsManager" Version="4.0.100.25" />
+    <PackageReference Include="AWSSDK.SimpleEmail" Version="4.0.100.24" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.3" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.5">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
